@@ -1,0 +1,8 @@
+window*
+system32*
+chrome*
+firefox*
+*.tmp
+temp*
+cache*
+~*

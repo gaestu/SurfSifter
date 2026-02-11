@@ -1,0 +1,8 @@
+window*
+system*
+chrome*
+firefox*
+*.dll
+*.exe
+temp*
+cache*

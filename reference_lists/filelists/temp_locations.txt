@@ -1,0 +1,20 @@
+# NAME: Temporary Locations
+# CATEGORY: System
+# DESCRIPTION: Files in temporary directories (often suspicious)
+# UPDATED: 2025-11-06
+# AUTHOR: FBGA Team
+# TYPE: filelist
+# REGEX: false
+
+*\Temp\*
+*\AppData\Local\Temp\*
+*\tmp\*
+*\TMP\*
+*\Windows\Temp\*
+*\WINDOWS\TEMP\*
+*/tmp/*
+*/TMP/*
+*\Recent\*
+*\Downloads\*
+*prefetch*
+*thumbcache*

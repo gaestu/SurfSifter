@@ -1,0 +1,225 @@
+{# Site Engagement Module Template #}
+<div class="module-site-engagement">
+    {% if section_title %}
+    <h3 class="module-title">{{ section_title }}</h3>
+    {% endif %}
+    
+    {% if show_description %}
+    <p class="module-description">{{ t.site_engagement_description | default('Site engagement scores indicate how often and how intensively a user has interacted with a website. Higher scores suggest frequent visits, longer sessions, or media playback on that site.') }}</p>
+    {% endif %}
+    
+    <table class="site-engagement-table">
+        <thead>
+            <tr>
+                <th class="col-origin">{{ t.site_engagement_origin | default('Origin') }}</th>
+                {% if show_type %}
+                <th class="col-type">{{ t.site_engagement_type | default('Type') }}</th>
+                {% endif %}
+                {% if show_score %}
+                <th class="col-score">{{ t.site_engagement_score | default('Score') }}</th>
+                {% endif %}
+                {% if show_visits %}
+                <th class="col-visits">{{ t.site_engagement_visits | default('Visits') }}</th>
+                {% endif %}
+                {% if show_browser %}
+                <th class="col-browser">{{ t.browser | default('Browser') }}</th>
+                {% endif %}
+                {% if show_profile %}
+                <th class="col-profile">{{ t.profile | default('Profile') }}</th>
+                {% endif %}
+                {% if show_last_engagement %}
+                <th class="col-last-engagement">{{ t.site_engagement_last_engagement | default('Last Engagement') }}</th>
+                {% endif %}
+            </tr>
+        </thead>
+        <tbody>
+            {% for engagement in engagements %}
+            <tr>
+                <td class="col-origin">
+                    <span class="engagement-origin">{{ engagement.origin }}</span>
+                </td>
+                {% if show_type %}
+                <td class="col-type">
+                    {% if engagement.engagement_type == 'site_engagement' %}
+                        {{ t.site_engagement_type_site | default('Site') }}
+                    {% elif engagement.engagement_type == 'media_engagement' %}
+                        {{ t.site_engagement_type_media | default('Media') }}
+                    {% else %}
+                        {{ engagement.engagement_type }}
+                    {% endif %}
+                </td>
+                {% endif %}
+                {% if show_score %}
+                <td class="col-score">
+                    <span class="engagement-score">{{ "%.1f"|format(engagement.score) if engagement.score is not none else '-' }}</span>
+                </td>
+                {% endif %}
+                {% if show_visits %}
+                <td class="col-visits">{{ engagement.visits if engagement.visits is not none else '-' }}</td>
+                {% endif %}
+                {% if show_browser %}
+                <td class="col-browser">{{ engagement.browser }}</td>
+                {% endif %}
+                {% if show_profile %}
+                <td class="col-profile">{{ engagement.profile }}</td>
+                {% endif %}
+                {% if show_last_engagement %}
+                <td class="col-last-engagement">{{ engagement.last_engagement }}</td>
+                {% endif %}
+            </tr>
+            {% else %}
+            <tr>
+                <td colspan="{{ 1 + (1 if show_type else 0) + (1 if show_score else 0) + (1 if show_visits else 0) + (1 if show_browser else 0) + (1 if show_profile else 0) + (1 if show_last_engagement else 0) }}" class="empty-message">
+                    {{ t.no_site_engagement_found | default('No site engagement data found matching the filter criteria.') }}
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    
+    {% if is_truncated %}
+    <p class="truncation-info">
+        {{ t.showing_x_of_y | default('showing {shown} of {total}') | replace('{shown}', shown_count|string) | replace('{total}', total_count|string) }} {{ t.site_engagement_entries | default('entries') }}
+    </p>
+    {% endif %}
+    
+    {% if show_filter_info and filter_description %}
+    <p class="filter-info">
+        <strong>{{ t.filter | default('Filter') }}:</strong> {{ filter_description }} 
+        <span class="entry-count">({{ total_count }} {{ t.site_engagement_entries | default('entries') }})</span>
+    </p>
+    {% endif %}
+</div>
+
+<style>
+.module-site-engagement {
+    margin: 1em 0;
+}
+
+.module-site-engagement .module-title {
+    margin: 0 0 0.75em 0;
+    font-size: 1.1em;
+    font-weight: 600;
+    color: #333;
+}
+
+.module-site-engagement .module-description {
+    margin: 0 0 1em 0;
+    color: #555;
+    font-size: 0.9em;
+    line-height: 1.4;
+}
+
+.module-site-engagement .filter-info {
+    margin-bottom: 0.5em;
+    color: #555;
+    font-size: 0.9em;
+}
+
+.module-site-engagement .entry-count {
+    color: #888;
+}
+
+.module-site-engagement .truncation-info {
+    margin-top: 0.75em;
+    margin-bottom: 0.5em;
+    color: #666;
+    font-size: 0.85em;
+    font-style: italic;
+}
+
+.site-engagement-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.85em;
+    table-layout: fixed;
+}
+
+.site-engagement-table th,
+.site-engagement-table td {
+    padding: 0.5em 0.75em;
+    text-align: left;
+    border-bottom: 1px solid #ddd;
+    vertical-align: top;
+}
+
+.site-engagement-table th {
+    background-color: #f5f5f5;
+    font-weight: 600;
+    color: #333;
+}
+
+.site-engagement-table tbody tr:hover {
+    background-color: #fafafa;
+}
+
+/* Column widths */
+.site-engagement-table .col-origin {
+    width: 35%;
+    word-break: break-all;
+}
+
+.site-engagement-table .col-type {
+    width: 10%;
+}
+
+.site-engagement-table .col-score {
+    width: 8%;
+    text-align: right;
+}
+
+.site-engagement-table .col-visits {
+    width: 8%;
+    text-align: right;
+}
+
+.site-engagement-table .col-browser {
+    width: 12%;
+}
+
+.site-engagement-table .col-profile {
+    width: 12%;
+}
+
+.site-engagement-table .col-last-engagement {
+    width: 15%;
+    white-space: nowrap;
+}
+
+/* Origin styling */
+.engagement-origin {
+    display: block;
+    color: #0066cc;
+    word-break: break-all;
+}
+
+/* Score styling */
+.engagement-score {
+    font-weight: 500;
+    font-family: monospace;
+}
+
+/* Empty state */
+.site-engagement-table .empty-message {
+    text-align: center;
+    color: #666;
+    font-style: italic;
+    padding: 2em;
+}
+
+/* Print styles */
+@media print {
+    .site-engagement-table {
+        font-size: 8pt;
+    }
+    
+    .site-engagement-table th,
+    .site-engagement-table td {
+        padding: 0.3em 0.5em;
+    }
+    
+    .engagement-origin {
+        color: #000;
+    }
+}
+</style>

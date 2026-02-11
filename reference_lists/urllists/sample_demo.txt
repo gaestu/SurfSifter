@@ -1,0 +1,22 @@
+# SurfSifter — Sample URL List (Demo)
+#
+# This file demonstrates the URL matching format used by SurfSifter.
+# Each non-empty, non-comment line is treated as a substring match pattern
+# against extracted URLs. Lines starting with '#' are ignored.
+#
+# To create your own list:
+#   1. Copy this file as a template
+#   2. Replace entries below with your target domains/patterns
+#   3. Place the file in ~/.config/surfsifter/reference_lists/urllists/
+#   4. Reload reference lists in SurfSifter Preferences
+#
+# Matching is case-insensitive. Both full domains and partial patterns work.
+
+# --- Example entries (using RFC 2606 reserved domains) ---
+example.com
+demo-site.example.org
+shop.example.net
+test-portal.example.com/login
+mail.example.org
+suspicious-download.example.net/files
+example.com/admin/dashboard

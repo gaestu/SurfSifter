@@ -1,0 +1,150 @@
+{# Tagged File List Module Template #}
+<div class="module-tagged-file-list">
+    {% if show_title %}
+    <h3 class="module-title">{{ t.tagged_file_list_title | default('File List') }}</h3>
+    {% endif %}
+    
+    <table class="file-list-table">
+        <thead>
+            <tr>
+                <th class="col-file">{{ t.file_name | default('Dateiname') }}</th>
+                <th class="col-modified">{{ t.modified | default('Modified') }}</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for file in files %}
+            <tr{% if file.deleted %} class="deleted-file"{% endif %}>
+                <td class="col-file">
+                    <span class="file-name">{{ file.name }}{% if file.deleted %} <span class="deleted-badge">[{{ t.deleted | default('deleted') }}]</span>{% endif %}</span>
+                    <span class="file-path">{{ file.path }}</span>
+                </td>
+                <td class="col-modified">{{ file.modified }}</td>
+            </tr>
+            {% else %}
+            <tr>
+                <td colspan="2" class="empty-message">{{ t.no_files_found | default('No files found matching the filter criteria.') }}</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    
+    {% if is_truncated %}
+    <p class="truncation-info">
+        {{ t.showing_x_of_y | default('showing {shown} of {total}') | replace('{shown}', shown_count|string) | replace('{total}', total_count|string) }} {{ t.files | default('files') }}
+    </p>
+    {% endif %}
+    
+    {% if show_filter_info %}
+    <p class="filter-info">
+        <strong>{{ t.filter | default('Filter') }}:</strong> {{ filter_description }} 
+        <span class="file-count">({{ total_count }} {{ t.files | default('files') }})</span>
+    </p>
+    {% endif %}
+</div>
+
+<style>
+.module-tagged-file-list {
+    margin: 1em 0;
+}
+
+.module-tagged-file-list .module-title {
+    margin: 0 0 0.75em 0;
+    font-size: 1.1em;
+    font-weight: 600;
+    color: #333;
+}
+
+.module-tagged-file-list .filter-info {
+    margin-bottom: 0.5em;
+    color: #555;
+    font-size: 0.9em;
+}
+
+.module-tagged-file-list .file-count {
+    color: #888;
+}
+
+.module-tagged-file-list .truncation-info {
+    margin-top: 0.75em;
+    margin-bottom: 0.5em;
+    color: #666;
+    font-size: 0.85em;
+    font-style: italic;
+}
+
+.file-list-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.85em;
+}
+
+.file-list-table th,
+.file-list-table td {
+    border: 1px solid #ddd;
+    padding: 6px 8px;
+    text-align: left;
+    vertical-align: top;
+}
+
+.file-list-table th {
+    background-color: #f5f5f5;
+    font-weight: 600;
+}
+
+.file-list-table tbody tr:nth-child(even) {
+    background-color: #fafafa;
+}
+
+.file-list-table tbody tr:hover {
+    background-color: #f0f7ff;
+}
+
+.file-list-table .col-file {
+    word-break: break-all;
+}
+
+.file-list-table .col-file .file-name {
+    display: block;
+    font-weight: 500;
+}
+
+.file-list-table .col-file .file-path {
+    display: block;
+    font-size: 0.8em;
+    font-style: italic;
+    color: #666;
+    margin-top: 2px;
+}
+
+.file-list-table .col-modified {
+    white-space: nowrap;
+    width: 120px;
+}
+
+.file-list-table .empty-message {
+    text-align: center;
+    color: #888;
+    font-style: italic;
+    padding: 20px;
+}
+
+.deleted-file {
+    color: #999;
+    text-decoration: line-through;
+}
+
+.deleted-badge {
+    color: #c00;
+    font-size: 0.8em;
+    text-decoration: none;
+    display: inline;
+}
+
+.module-error {
+    color: #c00;
+    padding: 10px;
+    background: #fee;
+    border: 1px solid #c00;
+    border-radius: 4px;
+}
+</style>

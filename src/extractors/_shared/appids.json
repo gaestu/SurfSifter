@@ -1,0 +1,1525 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$comment": "Windows Jump List Application IDs (AppIDs) - CRC64 hashes of application paths",
+  "version": "1.0.0",
+  "source": "Aggregated from forensic research and AppIDs.txt reference",
+  "browsers": {
+    "$comment": "Web browsers - HIGH forensic value for browsing history",
+    "chrome": [
+      "5d696d521de238c3",
+      "28c8b86deab549a1",
+      "c7fa76ea93a08b64",
+      "69639df789022856",
+      "9501e18d7c2ab92e",
+      "6da48f37c95d6e1",
+      "d249d9ddd424b688"
+    ],
+    "edge": [
+      "9d1f905ce5044aee",
+      "de48a32edcbe79e4",
+      "607258d66273ff4d",
+      "4ac866364817f10c",
+      "188f5ec9d11ded56",
+      "ccba5a5986c77e43"
+    ],
+    "firefox": [
+      "5c450709f7ae4396",
+      "74d7f43c1561fc1e",
+      "6824f4a902c78fbd",
+      "1eb796d87c32eff9",
+      "33a00252c0fa56de",
+      "40371339ad31a7e6",
+      "122c907c4dc5911f",
+      "4b8a4727aa452343",
+      "969252ce11249fdd",
+      "1461132e553e2e6c",
+      "5df4765359170e26",
+      "6b8904e2b6864f0f",
+      "399fb4899502f372",
+      "3476342aab319002",
+      "18fa158a64c9508a"
+    ],
+    "internet_explorer": [
+      "5d559f1c6f4d2a56",
+      "28c8b86deab549a1",
+      "5da8f997fd5f9428"
+    ],
+    "opera": [
+      "1bc392b8e104a00e",
+      "9e312f4adee9107",
+      "7ff0b18f1611daa4",
+      "46e77b87767b92",
+      "21982dade69f78d8",
+      "31b6ebfff794ef0d",
+      "f2d2624b34821c85",
+      "ee6d1f704cdeb7f9",
+      "4d202cabc6786cf7",
+      "d992bcc31b3e5727"
+    ],
+    "safari": [
+      "5a12ef6fac3c4536",
+      "8a1c1c7c389a5320",
+      "1da3c90a72bf5527"
+    ],
+    "brave": [
+      "8a1c4c77033ae6",
+      "cdc96e93c9bbb1c8"
+    ],
+    "tor": [
+      "ab3a3e3c1a3c3a3c",
+      "d8671c1ed93c75c8",
+      "a0d6b1b874c6e9d2",
+      "7b4d500e147e4391",
+      "f2a9149d1c88d093"
+    ],
+    "pale_moon": [
+      "b77ef7f3fc946302",
+      "bec10d3aaf939ffa"
+    ],
+    "waterfox": [
+      "5e86fbbffae5937b"
+    ],
+    "seamonkey": [
+      "d3c5cf21e86b28af"
+    ],
+    "torch": [
+      "4e538fde985a3c01"
+    ],
+    "epic": [
+      "d27ff2aece1fd1bf"
+    ],
+    "mozilla_suite": [
+      "cfb56c56fa0f0a54"
+    ]
+  },
+  "email_clients": {
+    "$comment": "Email applications",
+    "outlook": [
+      "5f7b5f1e01b83767",
+      "bc0c37eb687b9c57",
+      "5d6f13ed567aa2da",
+      "be71009ff8bb02a2",
+      "9149d0f5ebf7f710",
+      "6d2bac8f1edf6668"
+    ],
+    "thunderbird": [
+      "9027fe24326910d2",
+      "03d877ec11607fe4",
+      "776beb1fcfc6dfa5",
+      "3d877ec11607fe4",
+      "f8f05350c84c9d76"
+    ],
+    "windows_live_mail": [
+      "d7528034b5bd6f28",
+      "9645f58513b1a821"
+    ],
+    "em_client": [
+      "728008617bc3e34b"
+    ]
+  },
+  "instant_messaging": {
+    "$comment": "Chat and messaging applications",
+    "skype": [
+      "521a29e5d22c13b4",
+      "74ea779831912e30",
+      "78f0afb5bd4bb278",
+      "b916037c1e115fe0",
+      "43929ae4535c8dea",
+      "905c98e216107aa1",
+      "b868d9201b866d96"
+    ],
+    "teams": [
+      "a55ed4fbb973aefb"
+    ],
+    "slack": [
+      "447e6aa2bbdfbc8a",
+      "8bce06a9e923e1f9"
+    ],
+    "discord": [],
+    "telegram": [],
+    "whatsapp": [],
+    "icq": [
+      "b0236d03c0627ac4",
+      "a5db18f617e28a51",
+      "2417caa1f2a881d4"
+    ],
+    "aim": [
+      "1b29f0dc90366bb",
+      "01b29f0dc90366bb",
+      "6f647f9488d7a",
+      "0006f647f9488d7a",
+      "27ececd8d89b6767",
+      "b3965c840bf28ef4"
+    ],
+    "yahoo_messenger": [
+      "62dba7fb39bb0adc",
+      "da7e8de5b8273a0f",
+      "fb230a9fe81e71a8"
+    ],
+    "msn_messenger": [
+      "8c816c711d66a6b5",
+      "b06a975b62567622",
+      "bd249197a6faeff2"
+    ],
+    "google_talk": [
+      "73c6a317412687c2"
+    ],
+    "pidgin": [
+      "aedd2de3901a77f4"
+    ],
+    "miranda": [
+      "86b804f7a28a3c17"
+    ],
+    "trillian": [
+      "c8aa3eaee3d4343d"
+    ],
+    "line": [
+      "9a464053cd82de6d"
+    ],
+    "zoom": [
+      "352fd027c0e8f0e5"
+    ],
+    "oovoo": [
+      "fb7ca8059b8f2123"
+    ],
+    "viber": [],
+    "signal": [],
+    "wickr": [
+      "ecdd9154e84d5544"
+    ],
+    "xfire": [
+      "4e0ac37db19cba15"
+    ],
+    "paltalk": [
+      "efb08d4e11e21ece"
+    ],
+    "gadu_gadu": [
+      "cca6383a507bac64"
+    ],
+    "qq": [
+      "e0532b20aa26a0c9"
+    ],
+    "nimbuzz": [
+      "bf9ae1f46bd9c491"
+    ],
+    "digsby": [
+      "30d23723bdd5d908"
+    ],
+    "palringo": [
+      "4f24a7b84a7de5a6"
+    ],
+    "camfrog": [
+      "f09b920bfb781142"
+    ],
+    "hexchat": [
+      "b39bc6b590f53961",
+      "9749cea96d411f37"
+    ],
+    "mirc": [
+      "ae069d21df1c57df",
+      "19ccee0274976da8"
+    ],
+    "xchat": [
+      "2a5a615382a84729",
+      "f2cb1c38ab948f58"
+    ]
+  },
+  "p2p_file_sharing": {
+    "$comment": "Peer-to-peer and file sharing - HIGH forensic value",
+    "utorrent": [
+      "cd8cafb0fb6afdab",
+      "56c5204009d2b915",
+      "caea34d2e74f5c8",
+      "ef473fab8120b354"
+    ],
+    "bittorrent": [
+      "2d61cccb4338dfc8"
+    ],
+    "qbittorrent": [
+      "a48aff51c30d699a"
+    ],
+    "vuze_azureus": [
+      "accca100973ef8dc",
+      "ccb36ff8a8c03b4b",
+      "ac3a63b839ac9d3a"
+    ],
+    "deluge": [
+      "2db8e25112ab4453"
+    ],
+    "bitcomet": [
+      "a31ec95fdd5f350f"
+    ],
+    "bitlord": [
+      "bcd7ba75303acbcf",
+      "1434d6d62d64857d"
+    ],
+    "bitspirit": [
+      "e73d9f534ed5618a"
+    ],
+    "bittornado": [
+      "c9374251edb4c1a8"
+    ],
+    "emule": [
+      "b3016b8da2077262"
+    ],
+    "amule": [
+      "76f6f1bd18c19698"
+    ],
+    "limewire": [
+      "c5ef839d8d1c76f4"
+    ],
+    "frostwire": [
+      "f214ca2dd40c59c1",
+      "73ce3745a843c0a4"
+    ],
+    "bearshare": [
+      "558c5bd9f906860a",
+      "e1d47cb031dafb9f"
+    ],
+    "shareaza": [
+      "2a64b26bd99f0d16",
+      "5d7b4175afdcc260",
+      "0b48ce76eda60b97",
+      "b48ce76eda60b97"
+    ],
+    "kazaa": [
+      "784182360de0c5b6"
+    ],
+    "imesh": [
+      "c8e4c10e5460b00c",
+      "f61b65550a84027e"
+    ],
+    "ares": [
+      "bfc1d76f16fa778f",
+      "bba8a4896f0d26f"
+    ],
+    "winmx": [
+      "a75b276f6e72cf2a",
+      "490c000889535727"
+    ],
+    "dc_plus_plus": [
+      "560d789a6a42ad5a",
+      "3cf13d83b0bd3867",
+      "9ad1ec169bf2da7f",
+      "cb5250eaef7e3213",
+      "2437d4d14b056114"
+    ],
+    "soulseek": [
+      "135df2a440abe9bb"
+    ],
+    "gnutella": [
+      "cc4b36fbfb69a757",
+      "e6ea77a1d4553872"
+    ],
+    "gnunet": [
+      "ed49e1e6ccdba2f5"
+    ],
+    "i2p": [
+      "2ff9dc8fb7e11f39",
+      "223bf0f360c6fea5"
+    ],
+    "morpheus": [
+      "ff224628f0e8103c"
+    ],
+    "lphant": [
+      "977a5d147aa093f4",
+      "96252daff039437a"
+    ],
+    "piolet": [
+      "792699a1373f1386"
+    ],
+    "cabos": [
+      "f001ea668c0aa916"
+    ],
+    "exodus": [
+      "454ef7dca3bb16b2"
+    ],
+    "stealthnet": [
+      "ecd21b58c2f65a2f"
+    ],
+    "mldonkey": [
+      "99c15cf3e6d52b61"
+    ],
+    "retroshare": [
+      "ca1eb46544793057"
+    ],
+    "trustyfiles": [
+      "5ea2a50c7979fbdc"
+    ],
+    "blubster": [
+      "ba3a45f7fd2583e1"
+    ],
+    "neebly": [
+      "e30bbea3e1642660"
+    ],
+    "scour": [
+      "5e01ecaf82f7d8e",
+      "05e01ecaf82f7d8e"
+    ],
+    "manolito": [
+      "e76a4ef13fbf2bb1"
+    ]
+  },
+  "ftp_clients": {
+    "$comment": "FTP and file transfer clients",
+    "filezilla": [
+      "a1d19afe5a80f80",
+      "0a1d19afe5a80f80",
+      "e107946bb682ce47",
+      "226400522157fe8b"
+    ],
+    "winscp": [
+      "6bb54d82fa42128d",
+      "9a3bdae86d5576ee",
+      "6a8b377d0f5cb666"
+    ],
+    "cyberduck": [
+      "f82607a219af2999"
+    ],
+    "cuteftp": [
+      "a79a7ce3c45d781",
+      "0a79a7ce3c45d781",
+      "c04f69101c131440",
+      "d8081f151f4bd8a5",
+      "59e86071b87ac1c3",
+      "3198e37206f28dc7"
+    ],
+    "flashfxp": [
+      "b7cb1d1c1991accf"
+    ],
+    "ftprush": [
+      "f64de962764b9b0f"
+    ],
+    "smartftp": [
+      "435a2f986b404eb7"
+    ],
+    "wiseftp": [
+      "a581b8002a6eb671",
+      "b6267f3fcb700b60",
+      "2544ff74641b639d",
+      "c54b96f328bdc28d"
+    ],
+    "bulletproof_ftp": [
+      "4cdf7858c6673f4b",
+      "714b179e552596df",
+      "20ef367747c22564"
+    ],
+    "coreftp": [
+      "6a316aa67a46820b"
+    ],
+    "ftp_voyager": [
+      "10f5a20c21466e85"
+    ],
+    "ftp_explorer": [
+      "7937df3c65790919"
+    ],
+    "crossftp": [
+      "be4875bb3e0c158f"
+    ],
+    "classic_ftp": [
+      "44a50e6c87bc012",
+      "044a50e6c87bc012"
+    ],
+    "roboftp": [
+      "4b632cf2ceceac35",
+      "c99ddde925d26df3",
+      "fc999f29bc5c3560"
+    ],
+    "leechftp": [
+      "9560577fd87cf573"
+    ],
+    "coffeecup_ftp": [
+      "8deb27dfa31c5c2a",
+      "4fceec8e021ac978"
+    ],
+    "alftp": [
+      "e6ef42224b845020"
+    ],
+    "3d_ftp": [
+      "d28ee773b2cea9b2"
+    ],
+    "titan_ftp": [
+      "b8c13a5dd8c455a2"
+    ],
+    "sysax_ftp": [
+      "e42a8e0f4d9b8dcf"
+    ],
+    "fling_ftp": [
+      "8628e76fd9020e81"
+    ],
+    "bitkinex": [
+      "9e0b3f677a26bbc4"
+    ],
+    "pbftpclient": [
+      "27da120d7e75cf1f"
+    ],
+    "uploadftp": [
+      "79370f660ab51725"
+    ],
+    "expandrive": [
+      "f91fd0c57c4fe449"
+    ]
+  },
+  "usenet_newsreaders": {
+    "$comment": "Usenet and newsgroup clients - forensically relevant",
+    "grabit": [
+      "f920768fe275f7f4"
+    ],
+    "newsbin": [
+      "8211531a7918b389"
+    ],
+    "newsleecher": [
+      "92f1d5db021cd876"
+    ],
+    "newsgrabber": [
+      "186b5ccada1d986b"
+    ],
+    "newsrover": [
+      "cb984e3bc7faf234"
+    ],
+    "newz_crawler": [
+      "cb1d97aca3fb7e6b"
+    ],
+    "forte_agent": [
+      "7526de4a8b5914d9"
+    ],
+    "xnews": [
+      "d7db75db9cdd7c5d"
+    ],
+    "altbinz": [
+      "36f6bc3efe1d99e0"
+    ],
+    "bintube": [
+      "6224453d9701a612"
+    ],
+    "unzbin": [
+      "aa11f575087b3bdc"
+    ],
+    "binary_boy": [
+      "baea31eacd87186b"
+    ],
+    "binary_vortex": [
+      "bf483b423ebbd327"
+    ],
+    "binary_news_reaper": [
+      "eab25958dbddbaa4"
+    ],
+    "newswolf": [
+      "dba909a61476ccec"
+    ],
+    "newsshark": [
+      "c98ab5ccf25dda79"
+    ],
+    "newsman_pro": [
+      "d7666c416cba240c"
+    ],
+    "tifny": [
+      "7192f2de78fd9e96"
+    ],
+    "spotnet": [
+      "7a7c60efd66817a2"
+    ],
+    "niouzefire": [
+      "3be7b307dfccb58f"
+    ],
+    "nntpgrab": [
+      "cd40ead0b1eb15ab",
+      "d5c02fc7afbb3fd4"
+    ],
+    "gravity": [
+      "3ed70ef3495535f7"
+    ],
+    "news_file_grabber": [
+      "d0261ed6e16b200b"
+    ],
+    "digibin": [
+      "cf6379a9a987366e"
+    ],
+    "binjet": [
+      "13eb0e5d9a49eaef"
+    ],
+    "binbot": [
+      "36801066f71b73c5"
+    ],
+    "binreader": [
+      "8172865a9d5185cb"
+    ],
+    "android_newsgroup_downloader": [
+      "d53b52fb65bde78c"
+    ],
+    "newsgroup_image_collector": [
+      "4d72cfa1d0a67418"
+    ],
+    "newsgroup_commander": [
+      "d1fc019238236806"
+    ],
+    "express_newspictures": [
+      "0cfab0ec14b6f953",
+      "cfab0ec14b6f953"
+    ],
+    "nomad_news": [
+      "a4def57ee99d77e9"
+    ],
+    "quadsucker_news": [
+      "bfe841f4d35c92b1"
+    ],
+    "tlnews": [
+      "9dacebaa9ac8ca4e"
+    ],
+    "news_reactor": [
+      "7b2b4f995b54387d"
+    ],
+    "ozum": [
+      "3f97341a65bac63a"
+    ],
+    "slypheed": [
+      "3168cc975b354a01"
+    ],
+    "easy_post": [
+      "43886ba3395acdcc"
+    ],
+    "ultraleacher": [
+      "7fd04185af357bd5"
+    ],
+    "somud": [
+      "23f08dab0f6aaf30"
+    ]
+  },
+  "remote_desktop": {
+    "$comment": "Remote access tools",
+    "rdp": [
+      "1bc392b8e104a00e",
+      "bac8a6b507360131",
+      "14354e216395983a"
+    ],
+    "teamviewer": [
+      "3df22b7648cec4c1"
+    ],
+    "anydesk": [
+      "75fdacd8330bac18"
+    ],
+    "realvnc": [
+      "fe9e0f7260000a12",
+      "a2c73c383525f1bb",
+      "5b72f67adcce9045",
+      "387d72eb9c9aa960",
+      "28493d9d08e13aa6",
+      "2b5841989b3857da",
+      "2ca2a1a69dc5465f"
+    ],
+    "putty": [
+      "9390ee5b658e96e",
+      "5fd959f6fe6b8ae7"
+    ],
+    "logmein": [
+      "49db7ed4f2703c22"
+    ],
+    "vmware_player": [
+      "50620fe75ee0093"
+    ],
+    "vmware_workstation": [
+      "8eafbd04ec8631ce"
+    ],
+    "virtualbox": [
+      "23ef200ca6364eff"
+    ],
+    "virtual_pc": [
+      "b0459de4674aab56"
+    ],
+    "cisco_anyconnect": [
+      "9fdb10e18cdd0101"
+    ],
+    "absolutetelnet": [
+      "cd2acd4089508507"
+    ]
+  },
+  "vpn": {
+    "$comment": "VPN clients",
+    "nordvpn": [
+      "b8a48bfb1f2f0c8d",
+      "2bcef060ace5a6db",
+      "1ab724316049531"
+    ]
+  },
+  "office_productivity": {
+    "$comment": "Office and productivity applications",
+    "word": [
+      "adecfb853d77462a",
+      "a4a5324453625195",
+      "a7bd71699cd38d1c",
+      "44a3621b32122d64",
+      "a8c43ef36da523b1",
+      "fb3b0dbfee58fac8",
+      "a18df73203b0340e",
+      "1f1f846f76251ea8",
+      "b50f4a1d866b4b05"
+    ],
+    "excel": [
+      "b8ab77100df80ab2",
+      "a7bd71699cd38d1c",
+      "6e855c85de07bc6a",
+      "9839aec31243a928",
+      "f0275e8685d95486",
+      "cdf30b95c55fd785",
+      "50c5e019818564e3",
+      "69bacc0499d41c4"
+    ],
+    "powerpoint": [
+      "d00655d2aa12ff6d",
+      "9c7cc110ff56d1bd",
+      "f5ac5390b9115fdb",
+      "5f6e7bc0fb699772",
+      "8fdb062f1e486cac",
+      "c45108aa42339506"
+    ],
+    "access": [
+      "f01b4d95cf55d32a",
+      "271e609288e1210a",
+      "319f01bf9fe00f2d",
+      "34b9a7ad69ff9c1b",
+      "4b5f45de9912de53",
+      "c343543d4ee31de7"
+    ],
+    "onenote": [
+      "1cf97c38a5881255",
+      "1bc9bbbe61f14501",
+      "d38adec6953449ba",
+      "3094cdb43bf5e9c2"
+    ],
+    "infopath": [
+      "d64d36b238c843a3",
+      "b8c29862d9f95832"
+    ],
+    "publisher": [
+      "9c08ad74ad8708df"
+    ],
+    "visio": [
+      "436eb6eb1bd9f03f"
+    ],
+    "project": [
+      "d4a589cab4f573f7"
+    ],
+    "libreoffice": [
+      "7dca40fd2a5a971f",
+      "f6fd5d99e2b6e178",
+      "83dd64e7fa560bd5",
+      "26753c97ea000ecd",
+      "d38a3acd395b622e",
+      "7c2916afd6f116a6",
+      "ecd1a5e2c3af9c46",
+      "e7f34dee82980c52",
+      "4d939776340f1d18"
+    ],
+    "adobe_reader": [
+      "de48a32edcbe79e4",
+      "ff103e2cc310d0d",
+      "c2d349a0e756411b",
+      "f0468ce1ae57883d",
+      "ee462c3b81abb6f6",
+      "23646679aaccfae0",
+      "f065ac336abcaa3e"
+    ],
+    "adobe_acrobat": [
+      "7010c278903c2b0f",
+      "89b0d939f117f75c",
+      "1a89d1befe8e90e3"
+    ],
+    "foxit_reader": [
+      "bc03160ee1a59fc1",
+      "8a461f82e9eb4102",
+      "31e8ac6b0784ed7d",
+      "3e9850346f375d41"
+    ],
+    "pdf_xchange": [
+      "13d1f3ea8d0e7308",
+      "dfe3790e91d3a22f"
+    ],
+    "pdf_architect": [
+      "cb996a858d7f15c"
+    ],
+    "pdf_creator": [
+      "4700ff5ae80a6713"
+    ],
+    "evernote": [
+      "d78150e0484a4e1d"
+    ],
+    "kindle": [
+      "4c58cf9096ef3efd",
+      "353e9052cccbec5d"
+    ],
+    "calibre": [
+      "8fd1364019dc2115"
+    ],
+    "xmind": [
+      "9eff0b23d51fe003"
+    ],
+    "minitab": [
+      "18434d518c3a61eb",
+      "40f2aca05d8a33f2"
+    ]
+  },
+  "media_players": {
+    "$comment": "Media playback applications",
+    "vlc": [
+      "9fda41b86ddcf1db",
+      "4acae695c73a28c7",
+      "cbeb786f0132005d",
+      "e6ee34ac9913c0a9",
+      "faef7def55a1d4b"
+    ],
+    "windows_media_player": [
+      "74d7f43c1561fc1e"
+    ],
+    "itunes": [
+      "83b03b46dcd30a0e",
+      "6bc3383cb68a3e37",
+      "58bee77c49899591"
+    ],
+    "winamp": [
+      "f674c3a77cfe39d0",
+      "90e5e8b21d7e7924"
+    ],
+    "realplayer": [
+      "7593af37134fd767",
+      "f92e607f9de02413",
+      "37392221756de927"
+    ],
+    "gom_player": [
+      "817bb211c92fd254"
+    ],
+    "mpc_hc": [
+      "43578521d78096c6",
+      "b50ee40805bd280f",
+      "3e4d62cf2c569bdf"
+    ],
+    "mpc_be": [
+      "f1dfe90245a04467"
+    ],
+    "kmplayer": [
+      "4d8bdacf5265a04f"
+    ],
+    "potplayer": [
+      "95597e2f40dbd9aa"
+    ],
+    "sm_player": [
+      "c91d08dcfc39a506"
+    ],
+    "foobar2000": [
+      "5e4713eb935be0b1"
+    ],
+    "musicbee": [
+      "5f218922e0901ebf",
+      "d014c0be50851f63",
+      "8de2636cecd37184"
+    ],
+    "mediamonkey": [
+      "58170c92fa4b91a1"
+    ],
+    "quintessential": [
+      "62bff50b969c2575"
+    ],
+    "jetaudio": [
+      "fe5e840511621941"
+    ],
+    "jetvideo": [
+      "a777ad264b54abab"
+    ],
+    "allplayer": [
+      "d22ad6d9d20e6857"
+    ],
+    "crystal_player": [
+      "7494a606a9eef18e"
+    ],
+    "songbird": [
+      "e40cb5a291ad1a5b"
+    ],
+    "dsplayer": [
+      "1cffbe973a437c74"
+    ],
+    "cdisplay": [
+      "7cb0735d45243070"
+    ],
+    "groove_music": [
+      "ae6df75df512bd06"
+    ],
+    "movies_tv": [
+      "4cb9c5750d51c07f"
+    ],
+    "media_center": [
+      "b91050d8b077a4e8"
+    ],
+    "j_river": [
+      "3c93a049a30e25e6"
+    ],
+    "zune": [
+      "2b53c4ddf69195fc"
+    ],
+    "mediaportal": [
+      "1cf97c38a5881255"
+    ],
+    "dvbviewer": [
+      "a7500ee83f4868ab"
+    ],
+    "powerdvd": [
+      "14a989d191548bbc",
+      "3643905fceab2635",
+      "c08dde8c94c16b10",
+      "6ded8e6daa05cb0c"
+    ],
+    "quicktime": [
+      "ae3f2acd395b622e",
+      "b50ee40805bd280f"
+    ]
+  },
+  "image_viewers": {
+    "$comment": "Image viewing and editing applications",
+    "irfanview": [
+      "c634153e7f5fce9c",
+      "ea83017cdd24374d",
+      "70d9ada92108d731"
+    ],
+    "xnview": [
+      "c5c24a503b1727df",
+      "56bd4efc8f2e1f9c"
+    ],
+    "acdsee": [
+      "8bd5c6433ca967e9",
+      "59f56184c796cfd4",
+      "d838aac097abece7",
+      "b39c5f226977725d"
+    ],
+    "faststone": [
+      "e9a39dfba105ea23"
+    ],
+    "fastpictureviewer": [
+      "169b3be0bc43d592"
+    ],
+    "honeyview": [
+      "edc786643819316c"
+    ],
+    "imagine": [
+      "76689ff502a1fd9e"
+    ],
+    "imgseek": [
+      "1110d9896dceddb3"
+    ],
+    "imatch": [
+      "2519133d6d830f7e"
+    ],
+    "image_axs_pro": [
+      "e31a6a8a7506f733"
+    ],
+    "allpicturez": [
+      "cc76755e0f925ce6"
+    ],
+    "autopix": [
+      "780732558f827a42"
+    ],
+    "picasa": [
+      "d33ecf70f0b74a77",
+      "b17d3d0c9ca7e29",
+      "6274ff22c2061c60"
+    ],
+    "digikam": [
+      "3edf100b207e2199"
+    ],
+    "zoner_photostudio": [
+      "497b42680f564128"
+    ],
+    "photo_viewer": [
+      "3594aab44bca414b"
+    ],
+    "photos_win10": [
+      "6824f4a902c78fbd",
+      "a52b0784bd667468"
+    ],
+    "google_earth": [
+      "fd1ad55e472f20e0"
+    ]
+  },
+  "graphics_editors": {
+    "$comment": "Graphics and photo editing",
+    "photoshop": [
+      "fdbd48d45512dffc",
+      "e26f61afb0824f2e",
+      "84f066768a22cc4f",
+      "177aeb41deb606ae"
+    ],
+    "gimp": [
+      "3c309c17f7e8ffe1"
+    ],
+    "paint_net": [
+      "2fa14c7753239e4c",
+      "3866ff352d7719e1"
+    ],
+    "paint": [
+      "0b3f13480c2785ae",
+      "b3f13480c2785ae",
+      "12dc1ea8e34b5a6",
+      "6f39a16f693777f6"
+    ],
+    "paint_shop_pro": [
+      "c7a4093872176c74",
+      "971cc6ad207f36cb"
+    ],
+    "corel_draw": [
+      "a968adcd5f3991cd",
+      "603eaabe372fb7ee",
+      "6518d6ae55cb5b8e"
+    ],
+    "corel_photo_paint": [
+      "25cfc5224e58d5d9",
+      "68a0dbfb7d0781d5"
+    ],
+    "illustrator": [
+      "c765823d986857ba"
+    ],
+    "dreamweaver": [
+      "26717493b25aa6e1"
+    ],
+    "premiere": [
+      "44a398496acc926d"
+    ],
+    "flash": [
+      "e2a593822e01aed3"
+    ],
+    "soundbooth": [
+      "d5c3931caad5f793"
+    ],
+    "snagit": [
+      "1d12f965b876dc87",
+      "e57cfc995bdc1d98",
+      "16d71406474462b5",
+      "af0fdd562e3f275b",
+      "8b87640a40ec9fc"
+    ],
+    "infrarecorder": [
+      "f0c7bd3e0584a65a",
+      "174c2c811c286c58"
+    ],
+    "imgburn": [
+      "8f3d7202aa5d4c01"
+    ]
+  },
+  "development_tools": {
+    "$comment": "Development and programming tools",
+    "visual_studio": [
+      "b08971c77377bde3",
+      "c31b3d36438b5e2c",
+      "acb8cd11364e2de8"
+    ],
+    "vscode": [
+      "1ced32d74a95c7bc"
+    ],
+    "vscodium": [
+      "4dde7d7a7dfc5f29"
+    ],
+    "android_studio": [
+      "6dcad003123a22fe"
+    ],
+    "eclipse": [
+      "9edafe4ba4b22ce7"
+    ],
+    "ida_pro": [
+      "cf0c5b2c9773bfa4",
+      "e353de90c46ecf50"
+    ],
+    "python": [
+      "431a5b43435cc60b",
+      "500b8c1d5302fc9c"
+    ],
+    "java": [
+      "d460280b17628695"
+    ],
+    "powershell": [
+      "d93f411851d7c929",
+      "590aee7bdd69b59b",
+      "ea64ce14e5470c33",
+      "3c3871276e149215",
+      "cf02284227526d80",
+      "cb83010e2bf88ad0"
+    ],
+    "powershell_studio": [
+      "b06bc47edd036329",
+      "51dceba79099d8d2"
+    ],
+    "cmd": [
+      "bc0c37e84e063727",
+      "6728dd69a3088f97"
+    ],
+    "wscript": [
+      "9f5c7755804b850a",
+      "954ea5f70258b502"
+    ],
+    "sapien_packager": [
+      "b37a182b9a7a8098",
+      "7c8adb9f2028b7d4",
+      "daa1194a2bd88bd7"
+    ],
+    "sapien_snippet_editor": [
+      "d1cc3f047e70a200",
+      "a6744f520b56975c",
+      "3ebcdfa8943cc8b8"
+    ],
+    "dotpeek": [
+      "5e877db63dec2f8"
+    ],
+    "wireshark": [
+      "fe57f5df17b45fe"
+    ]
+  },
+  "text_editors": {
+    "$comment": "Text and code editors",
+    "notepad": [
+      "918e0ecb43d17e23",
+      "9b9cdc69c1c24e2b",
+      "47592b67dd97a119",
+      "a61657a5e5dfbdc"
+    ],
+    "notepad_plus_plus": [
+      "e70d383b15687e37",
+      "baacb5294867b833",
+      "ea5af8ce5aeb5617"
+    ],
+    "sublime_text": [
+      "959668a81d4f220e"
+    ],
+    "editpad_pro": [
+      "19e6043495a5b4da",
+      "fc98c00f85d4ce77"
+    ],
+    "hex_editor_neo": [
+      "23709f6439b9f03d",
+      "20513cdf29d09c0e"
+    ],
+    "hxd": [
+      "9ce6555426f54b46",
+      "e4ea035065b5789a"
+    ],
+    "winhex": [
+      "8f4ae1df7d39f816"
+    ],
+    "programmer_notepad": [
+      "70a4c8cfd9c64000"
+    ],
+    "far_manager": [
+      "8f852307189803b8"
+    ],
+    "010_editor": [
+      "f039446000b1b829"
+    ],
+    "wordpad": [
+      "469e4a7982cea4d4"
+    ]
+  },
+  "file_managers": {
+    "$comment": "File management utilities",
+    "explorer": [
+      "1b4dd67f29cb1962",
+      "f0275e8685d95486",
+      "7e4dca80246863e3",
+      "f01b4d95cf55d32a"
+    ],
+    "total_commander": [
+      "7904145af324576e",
+      "5b7f3287093c1623"
+    ],
+    "free_commander": [
+      "7a4ba998575ff2a4"
+    ],
+    "directory_opus": [
+      "fa7144034d7d083d"
+    ],
+    "quick_access": [
+      "5f7b5f1e01b83767"
+    ]
+  },
+  "archive_tools": {
+    "$comment": "Compression and archive utilities",
+    "7zip": [
+      "4975d6798a8bdf66",
+      "3dc02b55e44d6697",
+      "5bb830f67194431a",
+      "70ffd305907c983b",
+      "556353beba95157c"
+    ],
+    "winrar": [
+      "290532160612e071",
+      "7fa8bdd163836f0c",
+      "46f433176bc0b3d2",
+      "ad57bd0f4825cce"
+    ],
+    "winzip": [
+      "b74736c2bd8cc8a5",
+      "c9950c443027c765"
+    ],
+    "peazip": [
+      "4d7bdaea55ad352"
+    ],
+    "pkzip": [
+      "d788e8bc973b89e9"
+    ],
+    "isobuster": [
+      "53f58609d680cdbc"
+    ]
+  },
+  "system_utilities": {
+    "$comment": "System utilities and maintenance tools",
+    "ccleaner": [
+      "ed7a5cc3cca8d52a",
+      "ccc0fa1b9f86f7b3"
+    ],
+    "defraggler": [
+      "a028c9db28aa15a3"
+    ],
+    "disk_defrag": [
+      "efbb2bf3c1d06466",
+      "f784591ff7f60f76"
+    ],
+    "disk_cleanup": [
+      "9c32e2313792e6e8"
+    ],
+    "smart_defrag": [
+      "fe8bb4692de7b989"
+    ],
+    "ultradefrag": [
+      "e4bd2558bfab368d"
+    ],
+    "recuva": [
+      "c1eece5026414c64"
+    ],
+    "eraser": [
+      "966fa7c312d9b10"
+    ],
+    "bcwipe": [
+      "c997d2e1a0f0929",
+      "4b6925efc53a3c08"
+    ],
+    "window_washer": [
+      "eb7e629258d326a1"
+    ],
+    "revo_uninstaller": [
+      "409b67100697bcc0"
+    ],
+    "teracopy": [
+      "134620458666ccb0"
+    ],
+    "fastcopy": [
+      "22c4d315e96389e0"
+    ],
+    "task_scheduler": [
+      "fa02aa2c575837a6"
+    ],
+    "event_viewer": [
+      "bc2f88eccd3461b4",
+      "75fdabdc3f4b24fc",
+      "72b0317636c8dbc0"
+    ],
+    "services": [
+      "817e5ad5be351574"
+    ],
+    "computer_management": [
+      "606a33f5a27b57d4"
+    ],
+    "system_restore": [
+      "fac3aa4105c6c466"
+    ],
+    "system_info": [
+      "14a48fbe3d43239a"
+    ],
+    "run_dialog": [
+      "9d78513a8998829c"
+    ],
+    "snipping_tool": [
+      "3353b940c074fd0c",
+      "466d339d8f21cfbf",
+      "1c7a9be1b15a03ba"
+    ],
+    "calculator": [
+      "5f7b5f1e01b83767",
+      "6bb98fb8cdc26d69"
+    ],
+    "sticky_notes": [
+      "337ed59af273c758",
+      "c01827d56ff89056",
+      "bd6f833ece9f9890"
+    ],
+    "stickies": [
+      "939c10c2c101c1b0"
+    ],
+    "print_management": [
+      "d2d0fc95675fb2c8",
+      "ce0e7345de1f1e26"
+    ],
+    "connected_devices": [
+      "f18460fded109990"
+    ],
+    "help_support": [
+      "9d91276b0be3e46b"
+    ],
+    "defender": [
+      "573770283dc3d854",
+      "8fb5ce5e2b049ce"
+    ],
+    "xps_viewer": [
+      "e36bfc8972e5ab1d"
+    ],
+    "dvd_maker": [
+      "411447f7de177c68"
+    ],
+    "movie_maker": [
+      "7a8db574299c8568"
+    ],
+    "photo_gallery": [
+      "a2b95ca27b6c33d9"
+    ],
+    "cortana": [
+      "647853318c96dfa5",
+      "a850d8ed37504c7c"
+    ],
+    "game_bar": [
+      "dd7c3b1adb1c168b"
+    ],
+    "xbox": [
+      "bd050ac447f6cd65"
+    ],
+    "your_phone": [
+      "8e4e81d9adc545b8"
+    ],
+    "windows_terminal": [
+      "16f2f0042ddbe0e8"
+    ],
+    "store": [
+      "9a165f62edbfa161"
+    ],
+    "feedback_hub": [
+      "dfc4675a96730ede"
+    ],
+    "maps": [
+      "24728462b60c215d"
+    ],
+    "people": [
+      "b2a0df3f22cec7e0"
+    ],
+    "get_help": [
+      "3c355482cb54f75b"
+    ]
+  },
+  "security_tools": {
+    "$comment": "Security and encryption tools",
+    "truecrypt": [
+      "17d3eb086439f0d7"
+    ],
+    "veracrypt": [
+      "550abc1cb58eb92c"
+    ],
+    "pgp_desktop": [
+      "c71ef2c372d322d7"
+    ],
+    "keepass": [
+      "d1d9b843a81139c6",
+      "d97efdf3888fe7eb",
+      "9077b9c9cf187cc2"
+    ],
+    "1password": [
+      "9ad84c52efeae190"
+    ],
+    "roboform": [
+      "315e29a36e961336"
+    ],
+    "malwarebytes": [
+      "a712c324879904b1"
+    ],
+    "emsisoft": [
+      "95962cd8e90977ca",
+      "6f4d358e50595ac1"
+    ],
+    "stunnel": [
+      "cdb6f0c373f2da0f"
+    ],
+    "bcarchive": [
+      "70202c58f1bc64fe"
+    ],
+    "zenmap": [
+      "1c30573bdfce4155"
+    ]
+  },
+  "database_tools": {
+    "$comment": "Database management tools",
+    "db_browser_sqlite": [
+      "930cf1dd2266e2cb"
+    ],
+    "sqlite_expert": [
+      "fbb3e7490ba71a30"
+    ],
+    "sqlite_spy": [
+      "292a746334889a7e"
+    ],
+    "registry_explorer": [
+      "92a0e470eecc63d3",
+      "d57380f96fcfde2f",
+      "58a5af636f485ff2"
+    ],
+    "json_viewer": [
+      "67730e20cf5d43f7",
+      "5e852f5f576f812c"
+    ],
+    "json_buddy": [
+      "6b81d0477f64e02f",
+      "3fcb7925be48c6d4"
+    ],
+    "pst_walker": [
+      "a10b45adb36c1d27"
+    ],
+    "bplister": [
+      "254995f62cc3531a"
+    ],
+    "plist_editor": [
+      "9303de56d0685af1"
+    ],
+    "event_log_explorer": [
+      "72b0317636c8dbc0"
+    ],
+    "log_viewer": [
+      "c8112ac53c5ed250"
+    ],
+    "xml_notepad": [
+      "60536f49b49e4689",
+      "7b8d39bd536c7feb"
+    ],
+    "modern_csv": [
+      "624c8eb4922c2308"
+    ],
+    "winmerge": [
+      "db37f98b03e7cdde"
+    ]
+  },
+  "disc_burning": {
+    "$comment": "CD/DVD burning tools",
+    "cdburnerxp": [
+      "4fd44f9938892caa",
+      "8dcca8b24a5e822e"
+    ],
+    "nero": [],
+    "imgburn": [
+      "8f3d7202aa5d4c01"
+    ],
+    "dvdfab": [
+      "265142389b98fcb1"
+    ]
+  },
+  "gaming": {
+    "$comment": "Gaming platforms and clients",
+    "steam": [
+      "d356105fac5527ef",
+      "ec3e36af0cdcb3e1"
+    ],
+    "origin": [
+      "28efb5b6d2e28389",
+      "59fe1486d27aa9d0"
+    ],
+    "gog_galaxy": [
+      "3b94415067dd2c5d"
+    ],
+    "battlenet": [
+      "7111c0ce965b7246"
+    ],
+    "gaming_app": [
+      "497f749b9f1a5d16"
+    ]
+  },
+  "cloud_storage": {
+    "$comment": "Cloud storage clients",
+    "dropbox": [
+      "7b7f65aaeca20a8c"
+    ],
+    "google_drive": [
+      "5fb817cd5a8cad21"
+    ],
+    "onedrive": [
+      "5a2098e080cf7ac4"
+    ]
+  },
+  "social_media": {
+    "$comment": "Social media applications",
+    "twitter": [
+      "888f2fa044591eda"
+    ],
+    "imvu": [
+      "989d7545c2b2e7b2"
+    ]
+  },
+  "other": {
+    "$comment": "Miscellaneous applications",
+    "nokia_pc_suite": [
+      "6e9a79992da9ea2"
+    ],
+    "manycam": [
+      "ee0c103672a7a2b9"
+    ],
+    "beyond_compare": [
+      "b7173093b23b9a6a"
+    ],
+    "free_download_manager": [
+      "4dd48f858b1a6ba7"
+    ],
+    "freefile_sync": [
+      "db3b8d985f0668e"
+    ],
+    "mozbackup": [
+      "fdbaca0a1fce6055"
+    ],
+    "konvertor": [
+      "3917dd550d7df9a8"
+    ],
+    "freda": [
+      "3fe28476179ff940"
+    ],
+    "dwg_trueview": [
+      "be2fd48be71f4560"
+    ],
+    "photo_director": [
+      "d4e1769e47ffde26"
+    ],
+    "office_hub": [
+      "a7ba40025dac9a67"
+    ],
+    "communications": [
+      "69d97cdc8d4d5043",
+      "a97085ebdc30067f"
+    ],
+    "shell_experience": [
+      "6dc04f5ccc522861"
+    ],
+    "cloud_experience": [
+      "770ecebb12dff1ca"
+    ],
+    "diagnostic_viewer": [
+      "98aaea517363a6fa"
+    ],
+    "health_ui": [
+      "f7699cf2eed599ac"
+    ],
+    "app_installer": [
+      "82de7b745170a7a7"
+    ],
+    "update_installer": [
+      "ace2e449a5dfce37"
+    ],
+    "support_diagnostic": [
+      "42f16a31d9a2ec4"
+    ],
+    "font_viewer": [
+      "6fac1b1908485d3"
+    ],
+    "orca": [
+      "31db872855923268"
+    ],
+    "message_analyzer": [
+      "f5e4e50707bcd215"
+    ],
+    "razer_central": [
+      "f203793bf9d14ff"
+    ]
+  }
+}

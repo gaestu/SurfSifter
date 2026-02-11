@@ -1,0 +1,16 @@
+tool_paths: {}
+
+# Extraction configuration (optional - these are defaults)
+extraction:
+  auto_generate_file_list: true  # Auto-run fls on E01 evidence addition (requires SleuthKit)
+
+# Logging configuration (optional - these are defaults)
+# Set level to DEBUG for verbose logging (use with caution, impacts performance)
+logging:
+  level: INFO                     # DEBUG, INFO, WARNING, ERROR
+  app_log_max_mb: 50              # Application log max size before rotation
+  app_log_backup_count: 10        # Number of backup files to keep
+  case_log_max_mb: 50             # Case audit log max size
+  case_log_backup_count: 5        # Case log backups
+  evidence_log_max_mb: 100        # Evidence log max size (larger for bulk_extractor)
+  evidence_log_backup_count: 5    # Evidence log backups

@@ -1,0 +1,18 @@
+# NAME: DeepFreeze Artifacts
+# CATEGORY: System
+# DESCRIPTION: Detects DeepFreeze system restore software
+# UPDATED: 2025-11-06
+# AUTHOR: FBGA Team
+# TYPE: filelist
+# REGEX: false
+
+*freeze*.exe
+*freeze*.sys
+FrzState*.exe
+DF*.dll
+Frz*.exe
+*deepfreeze*
+*deepfrz*
+DeepFrz*
+frozen.exe
+thawing.exe

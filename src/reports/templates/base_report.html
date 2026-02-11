@@ -1,0 +1,527 @@
+<!DOCTYPE html>
+<html lang="{{ locale | default('en') }}">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{ report_title }}</title>
+    <style>
+        /* ===== CSS Reset & Base ===== */
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: Arial, 'Helvetica Neue', Helvetica, sans-serif;
+            font-size: 11pt;
+            line-height: 1.6;
+            color: #333;
+            background: #fff;
+            text-align: left;
+        }
+
+        /* ===== Page Setup for PDF ===== */
+        @page {
+            size: A4;
+            margin: 2.5cm 2cm;
+
+            @top-left {
+                content: "{{ report_title }}";
+                font-family: Arial, 'Helvetica Neue', Helvetica, sans-serif;
+                font-size: 9pt;
+                color: #666;
+            }
+
+            @bottom-center {
+                content: "{{ t.page | default('Page') }} " counter(page) " {{ t.of | default('of') }} " counter(pages);
+                font-family: Arial, 'Helvetica Neue', Helvetica, sans-serif;
+                font-size: 9pt;
+                color: #666;
+            }
+
+            @bottom-right {
+                content: "{{ t.generated | default('Generated') }}: {{ author_date_formatted | default('') }}";
+                font-family: Arial, 'Helvetica Neue', Helvetica, sans-serif;
+                font-size: 8pt;
+                color: #999;
+            }
+            
+            {% if branding_footer_text %}
+            @bottom-left {
+                content: "{{ branding_footer_text }}";
+                font-family: Arial, 'Helvetica Neue', Helvetica, sans-serif;
+                font-size: 8pt;
+                color: #666;
+            }
+            {% endif %}
+        }
+
+        /* First page (title page) - no header */
+        @page :first {
+            @top-left {
+                content: none;
+            }
+        }
+
+        /* ===== Title Page ===== */
+        .title-page {
+            page-break-after: always;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            min-height: 80vh;
+            text-align: center;
+            padding: 2cm;
+        }
+
+        .title-page .branding-logo {
+            max-width: 200px;
+            max-height: 100px;
+            margin-bottom: 1cm;
+        }
+
+        .title-page .branding-org-name {
+            font-size: 14pt;
+            color: #555;
+            margin-bottom: 1cm;
+        }
+
+        .title-page h1 {
+            font-size: 30pt;
+            font-weight: 800;
+            color: #1a1a1a;
+            margin-bottom: 1cm;
+            border-bottom: 2px solid #333;
+            padding-bottom: 0.4cm;
+            letter-spacing: 0.2pt;
+        }
+
+        .title-page .metadata {
+            margin-top: 2cm;
+            font-size: 12pt;
+            color: #555;
+        }
+
+        .title-page .metadata p {
+            margin: 0.3cm 0;
+        }
+
+        .title-page .metadata strong {
+            color: #333;
+        }
+
+        /* ===== Table of Contents ===== */
+        .toc-page {
+            page-break-after: always;
+            text-align: left;
+        }
+
+        .toc-page h2 {
+            font-size: 18pt;
+            color: #1a1a2e;
+            border-bottom: 2px solid #4a4a6a;
+            padding-bottom: 0.3cm;
+            margin-bottom: 1cm;
+        }
+
+        /* TOC uses table layout for PDF compatibility */
+        .toc-table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+
+        .toc-table td {
+            padding: 0.3cm 0;
+            vertical-align: bottom;
+            border: none;
+        }
+
+        .toc-table td.toc-title {
+            text-align: left;
+            white-space: nowrap;
+        }
+
+        .toc-table td.toc-dots {
+            width: 100%;
+            border-bottom: 1px dotted #ccc;
+            padding-bottom: 0.4cm;
+        }
+
+        .toc-table td.toc-page-num {
+            text-align: right;
+            white-space: nowrap;
+            padding-left: 0.3cm;
+        }
+
+        .toc-table a {
+            color: #333;
+            text-decoration: none;
+        }
+
+        .toc-table a:hover {
+            color: #4a4a6a;
+        }
+
+        /* For PDF - use target-counter for page numbers */
+        .toc-table .toc-page-num::after {
+            content: target-counter(attr(href), page);
+        }
+
+        /* ===== Content Sections ===== */
+        .report-section {
+            page-break-before: always;
+            margin-bottom: 1cm;
+        }
+
+        .report-section:first-of-type {
+            page-break-before: avoid;
+        }
+
+        .report-section.appendix-section {
+            page-break-before: always;
+        }
+
+        .section-header {
+            background: none;
+            color: #1a1a1a;
+            padding: 0 0 0.3cm 0;
+            margin-bottom: 0.7cm;
+            border-bottom: 2px solid #ddd;
+        }
+
+        .section-header h2 {
+            font-size: 16pt;
+            font-weight: 700;
+            margin: 0;
+        }
+
+        .section-content {
+            margin-bottom: 0.7cm;
+        }
+
+        .section-content p {
+            margin-bottom: 0.4cm;
+            text-align: left;
+        }
+
+        .section-content ul, .section-content ol {
+            margin: 0.4cm 0 0.4cm 0.8cm;
+            padding-left: 0.6cm;
+            list-style-position: outside;
+        }
+
+        .section-content li {
+            margin: 0.2cm 0;
+        }
+
+        /* ===== Module Content Styling ===== */
+        .module-content {
+            margin: 0.5cm 0;
+            padding: 0.3cm 0;
+            border-top: 1px solid #eee;
+        }
+
+        .module-content:first-child {
+            border-top: none;
+            padding-top: 0;
+        }
+
+        /* Tables from modules */
+        .module-content table {
+            width: 100%;
+            border-collapse: collapse;
+            margin: 0.5cm 0;
+            font-size: 10pt;
+        }
+
+        .module-content table th {
+            background: #f5f5f7;
+            color: #333;
+            font-weight: 600;
+            padding: 0.10cm 0.3cm;
+            text-align: left;
+            border-bottom: 2px solid #ddd;
+        }
+
+        .module-content table td {
+            padding: 0.10cm 0.3cm;
+            border-bottom: 1px solid #eee;
+            vertical-align: top;
+        }
+
+        .module-content table tr:nth-child(even) {
+            background: #fafafa;
+        }
+
+        .module-content table tr:hover {
+            background: #f0f0f5;
+        }
+
+        /* Lists from modules */
+        .module-content ul, .module-content ol {
+            margin: 0.4cm 0 0.4cm 1.4cm;
+            padding-left: 0.2cm;
+            list-style-position: outside;
+        }
+
+        .module-content li {
+            margin: 0.2cm 0;
+        }
+
+        /* Images from modules */
+        .module-content img {
+            max-width: 100%;
+            height: auto;
+            margin: 0.5cm 0;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+        }
+
+        /* Code blocks from modules */
+        .module-content pre, .module-content code {
+            font-family: 'Consolas', 'Monaco', monospace;
+            font-size: 9pt;
+            background: #f5f5f7;
+            border-radius: 3px;
+        }
+
+        .module-content pre {
+            padding: 0.4cm;
+            overflow-x: auto;
+            border: 1px solid #ddd;
+        }
+
+        .module-content code {
+            padding: 0.1cm 0.2cm;
+        }
+
+        /* Appendix-specific styling */
+        .appendix-module-title {
+            font-size: 12pt;
+            font-weight: 600;
+            margin: 0.6cm 0 0.2cm;
+        }
+
+        /* ===== Utility Classes ===== */
+        .text-muted {
+            color: #666;
+        }
+
+        .text-small {
+            font-size: 9pt;
+        }
+
+        .no-break {
+            page-break-inside: avoid;
+        }
+
+        .page-break {
+            page-break-after: always;
+        }
+
+        /* ===== Author Signature Section ===== */
+        .author-section {
+            margin-top: 2cm;
+            padding-top: 1cm;
+            border-top: 1px solid #ddd;
+            page-break-inside: avoid;
+        }
+
+        .author-section h3 {
+            font-size: 12pt;
+            font-weight: 600;
+            color: #333;
+            margin-bottom: 0.5cm;
+        }
+
+        .author-table {
+            width: auto;
+            border-collapse: collapse;
+        }
+
+        .author-table td {
+            padding: 0.2cm 0.5cm 0.2cm 0;
+            vertical-align: top;
+        }
+
+        .author-table td:first-child {
+            font-weight: 600;
+            color: #555;
+            white-space: nowrap;
+        }
+
+        .author-table td:last-child {
+            min-width: 200px;
+        }
+
+        /* ===== Print-specific adjustments ===== */
+        @media print {
+            body {
+                -webkit-print-color-adjust: exact;
+                print-color-adjust: exact;
+            }
+        }
+
+        /* ===== Preview-specific (browser) ===== */
+        @media screen {
+            body {
+                max-width: 210mm;
+                margin: 0 auto;
+                padding: 1cm;
+                background: #f0f0f0;
+            }
+
+            .title-page,
+            .toc-page,
+            .report-section {
+                background: white;
+                padding: 2cm;
+                margin-bottom: 1cm;
+                box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+                border-radius: 4px;
+            }
+
+            .title-page {
+                min-height: auto;
+            }
+        }
+    </style>
+</head>
+<body>
+    <!-- ===== Title Page ===== -->
+    <div class="title-page">
+        {% if branding_logo_path %}
+        <img src="{{ branding_logo_path }}" class="branding-logo" alt="Logo">
+        {% endif %}
+        
+        {% if branding_org_name %}
+        <p class="branding-org-name">{{ branding_org_name }}</p>
+        {% endif %}
+        
+        <h1>{{ report_title }}</h1>
+        
+        <div class="metadata">
+            {% if case_number %}
+            <p><strong>{{ t.case_number | default('Case Number') }}:</strong> {{ case_number }}</p>
+            {% endif %}
+            
+            {% if evidence_label %}
+            <p><strong>{{ t.evidence | default('Evidence') }}:</strong> {{ evidence_label }}</p>
+            {% endif %}
+            
+            {% if investigator %}
+            <p><strong>{{ t.investigator | default('Investigator') }}:</strong> {{ investigator }}</p>
+            {% endif %}
+            
+            {% if author_date_formatted %}
+            <p><strong>{{ t.date | default('Date') }}:</strong> {{ author_date_formatted }}</p>
+            {% endif %}
+            
+            {% if notes %}
+            <p><strong>{{ t.notes | default('Notes') }}:</strong> {{ notes }}</p>
+            {% endif %}
+        </div>
+    </div>
+
+    <!-- ===== Table of Contents ===== -->
+    {% if sections or appendix_modules %}
+    <div class="toc-page">
+        <h2>{{ t.toc_title | default('Table of Contents') }}</h2>
+        <table class="toc-table">
+            {% for section in sections %}
+            <tr>
+                <td class="toc-title"><a href="#section-{{ loop.index }}">{{ loop.index }}. {{ section.title }}</a></td>
+                <td class="toc-dots"></td>
+                <td class="toc-page-num" href="#section-{{ loop.index }}"></td>
+            </tr>
+            {% endfor %}
+            {% if appendix_modules %}
+            <tr>
+                <td class="toc-title"><a href="#appendix">{{ (sections | length) + 1 }}. {{ t.appendix | default('Appendix') }}</a></td>
+                <td class="toc-dots"></td>
+                <td class="toc-page-num" href="#appendix"></td>
+            </tr>
+            {% endif %}
+        </table>
+    </div>
+    {% endif %}
+
+    <!-- ===== Report Sections ===== -->
+    {% for section in sections %}
+    <div class="report-section" id="section-{{ loop.index }}">
+        <div class="section-header">
+            <h2>{{ loop.index }}. {{ section.title }}</h2>
+        </div>
+        
+        {% if section.content %}
+        <div class="section-content">
+            {{ section.content | safe }}
+        </div>
+        {% endif %}
+        
+        {% for module in section.modules %}
+        <div class="module-content">
+            {{ module.rendered_html | safe }}
+        </div>
+        {% endfor %}
+    </div>
+    {% endfor %}
+
+    {% if not sections and not appendix_modules %}
+    <div class="report-section">
+        <div class="section-header">
+            <h2>{{ t.no_content | default('No Content') }}</h2>
+        </div>
+        <div class="section-content">
+            <p class="text-muted">{{ t.no_sections_message | default('No sections have been added to this report. Use the Reports tab to add custom sections and modules.') }}</p>
+        </div>
+    </div>
+    {% endif %}
+
+    {% if author_function or author_name or author_date %}
+    <!-- ===== Report Created By Section ===== -->
+    <div class="author-section">
+        <h3>{{ t.report_created_by | default('Report Created By') }}</h3>
+        <table class="author-table">
+            {% if author_function %}
+            <tr>
+                <td>{{ t.function | default('Function') }}:</td>
+                <td>{{ author_function }}</td>
+            </tr>
+            {% endif %}
+            {% if author_name %}
+            <tr>
+                <td>{{ t.name | default('Name') }}:</td>
+                <td>{{ author_name }}</td>
+            </tr>
+            {% endif %}
+            {% if author_date %}
+            <tr>
+                <td>{{ t.date | default('Date') }}:</td>
+                <td>{{ author_date }}</td>
+            </tr>
+            {% endif %}
+        </table>
+    </div>
+    {% endif %}
+
+    {% if appendix_modules %}
+    <!-- ===== Appendix Section ===== -->
+    <div class="report-section appendix-section" id="appendix">
+        <div class="section-header">
+            <h2>{{ (sections | length) + 1 }}. {{ t.appendix | default('Appendix') }}</h2>
+        </div>
+        {% for module in appendix_modules %}
+        <div class="appendix-module">
+            <h3 class="appendix-module-title">{{ module.title }}</h3>
+            <div class="module-content">
+                {{ module.rendered_html | safe }}
+            </div>
+        </div>
+        {% endfor %}
+    </div>
+    {% endif %}
+
+</body>
+</html>

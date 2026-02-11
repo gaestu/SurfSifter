@@ -1,0 +1,22 @@
+# NAME: Browser Artifacts
+# CATEGORY: Browser
+# DESCRIPTION: Common browser database and cache files
+# UPDATED: 2025-11-06
+# AUTHOR: FBGA Team
+# TYPE: filelist
+# REGEX: false
+
+*History
+*Cookies
+*Cache*
+*LocalStorage*
+*SessionStorage*
+places.sqlite
+favicons.sqlite
+*bookmarks*
+*downloads*
+*preferences*
+*login*data*
+*web*data*
+*index.dat*
+*visited*links*

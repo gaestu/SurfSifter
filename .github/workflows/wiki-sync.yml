@@ -1,0 +1,106 @@
+name: Sync Wiki
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - docs/wiki/**
+      - .github/workflows/wiki-sync.yml
+
+permissions:
+  contents: write
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Flatten and sync wiki
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          # Clone the wiki repository
+          WIKI_REPO="https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.wiki.git"
+          git clone "$WIKI_REPO" wiki
+
+          # Remove old wiki content (except .git)
+          find wiki -mindepth 1 -maxdepth 1 ! -name '.git' -exec rm -rf {} +
+
+          # Flatten wiki structure: docs/wiki/path/to/file.md → wiki/path-to-file.md
+          # Use *_github.md files for Home and _Sidebar (pre-built with correct GitHub Wiki syntax)
+          python3 << 'PYTHON_SCRIPT'
+          import os
+          import re
+          import shutil
+          from pathlib import Path
+
+          src_dir = Path("docs/wiki")
+          dst_dir = Path("wiki")
+
+          # GitHub-specific files that replace the normal ones
+          GITHUB_OVERRIDES = {
+              "Home_github.md": "Home.md",
+              "_Sidebar_github.md": "_Sidebar.md",
+          }
+
+          # Files to skip (will be replaced by _github versions)
+          SKIP_FILES = {"Home.md", "_Sidebar.md", "Home_github.md", "_Sidebar_github.md"}
+
+          # Copy GitHub-specific Home and Sidebar files
+          for src_name, dst_name in GITHUB_OVERRIDES.items():
+              src_file = src_dir / src_name
+              if src_file.exists():
+                  dst_file = dst_dir / dst_name
+                  shutil.copy2(src_file, dst_file)
+                  print(f"  {src_name} → {dst_name} (GitHub override)")
+
+          # Flatten and copy all other .md files
+          for md_file in src_dir.rglob("*.md"):
+              if md_file.name in SKIP_FILES:
+                  continue
+
+              rel_path = md_file.relative_to(src_dir)
+
+              # Flatten: replace / with -
+              flat_name = str(rel_path).replace("/", "-")
+              dst_file = dst_dir / flat_name
+
+              # Copy file as-is (no link transformation needed for content pages)
+              shutil.copy2(md_file, dst_file)
+              print(f"  {rel_path} → {dst_file.name}")
+
+          # Copy non-md files (images, etc.) - flatten them too
+          for other_file in src_dir.rglob("*"):
+              if other_file.is_file() and other_file.suffix != ".md":
+                  rel_path = other_file.relative_to(src_dir)
+                  flat_name = str(rel_path).replace("/", "-")
+                  dst_file = dst_dir / flat_name
+                  shutil.copy2(other_file, dst_file)
+                  print(f"  {rel_path} → {dst_file.name} (asset)")
+
+          print("Wiki flattening complete!")
+          PYTHON_SCRIPT
+
+          # Commit and push changes
+          cd wiki
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          if [ -n "$(git status --porcelain)" ]; then
+            git add .
+            git commit -m "Sync wiki from main (flattened)"
+            git push
+            echo "Wiki updated successfully!"
+          else
+            echo "Wiki already up to date."
+          fi

@@ -1,0 +1,347 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://surfsifter.local/schemas/image_carving_manifest.schema.json",
+  "title": "Image Carving Manifest",
+  "description": "Normalized manifest emitted by carving extractors (foremost, scalpel, bulk_extractor image mode).",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "run_id",
+    "tool",
+    "started_at",
+    "completed_at",
+    "input",
+    "carved_files",
+    "stats"
+  ],
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "pattern": "^1\\.\\d+\\.\\d+$"
+    },
+    "run_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "extractor": {
+      "type": "string",
+      "minLength": 1
+    },
+    "tool": {
+      "type": "object",
+      "required": [
+        "name"
+      ],
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "version": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "path": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "arguments": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "started_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "completed_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "input": {
+      "type": "object",
+      "required": [
+        "source"
+      ],
+      "properties": {
+        "source": {
+          "type": "string"
+        },
+        "source_type": {
+          "type": "string",
+          "enum": [
+            "mount",
+            "ewf",
+            "ewf_mount",
+            "path",
+            "unknown"
+          ]
+        },
+        "evidence_id": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "config_file": {
+          "type": "string",
+          "description": "Path to the carving configuration file used for this extraction."
+        },
+        "context": {
+          "type": "object",
+          "description": "Tool-specific or evidence-specific metadata (e.g., ewf segment list, mount point).",
+          "additionalProperties": true
+        }
+      },
+      "additionalProperties": false
+    },
+    "output": {
+      "type": "object",
+      "properties": {
+        "root": {
+          "type": "string"
+        },
+        "carved_dir": {
+          "type": "string"
+        },
+        "manifest_path": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "file_types": {
+      "description": "Carving configuration used for this run.",
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": {
+            "type": "object"
+          }
+        },
+        {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "stats": {
+      "type": "object",
+      "required": [
+        "carved_total"
+      ],
+      "properties": {
+        "carved_total": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "zero_byte": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "failed_validation": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "by_type": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "integer",
+            "minimum": 0
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "warnings": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "process": {
+      "type": "object",
+      "properties": {
+        "command": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "returncode": {
+          "type": "integer"
+        },
+        "stdout": {
+          "type": "string"
+        },
+        "stderr": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "notes": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "ingestion": {
+      "type": "object",
+      "description": "Ingestion statistics for carved images.",
+      "properties": {
+        "inserted": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Number of images successfully inserted into database."
+        },
+        "errors": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Number of images that failed to insert."
+        },
+        "enriched": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Number of existing images that were enriched with new metadata."
+        },
+        "skipped_duplicates": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Number of duplicate images skipped."
+        }
+      },
+      "additionalProperties": false
+    },
+    "audit": {
+      "type": "object",
+      "properties": {
+        "tool": {
+          "type": "string"
+        },
+        "entries": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "name",
+              "offset"
+            ],
+            "properties": {
+              "name": {
+                "type": "string"
+              },
+              "offset": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "size": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "minimum": 0
+              },
+              "comment": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "additionalProperties": false
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "carved_files": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "rel_path",
+          "size"
+        ],
+        "properties": {
+          "rel_path": {
+            "type": "string",
+            "minLength": 1
+          },
+          "size": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "md5": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "pattern": "^[A-Fa-f0-9]{32}$"
+          },
+          "sha256": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "pattern": "^[A-Fa-f0-9]{64}$"
+          },
+          "file_type": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "offset": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 0
+          },
+          "warnings": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "errors": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "validated": {
+            "type": "object",
+            "properties": {
+              "pillow_ok": {
+                "type": "boolean"
+              },
+              "zero_byte": {
+                "type": "boolean"
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "additionalProperties": false
+      }
+    }
+  },
+  "additionalProperties": false
+}

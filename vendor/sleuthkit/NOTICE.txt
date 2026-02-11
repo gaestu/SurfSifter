@@ -1,0 +1,8 @@
+The Sleuth Kit
+Copyright (c) 2003-2024 Brian Carrier and contributors
+https://www.sleuthkit.org/
+
+Licensed under the Common Public License 1.0 (CPL-1.0).
+Source code available at: https://github.com/sleuthkit/sleuthkit
+
+This software is provided "as-is" without warranty.

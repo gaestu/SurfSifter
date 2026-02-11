@@ -1,0 +1,189 @@
+{# Bookmarks Module Template #}
+<div class="module-bookmarks">
+    {% if section_title %}
+    <h3 class="module-title">{{ section_title }}</h3>
+    {% endif %}
+    
+    <table class="bookmarks-table">
+        <thead>
+            <tr>
+                <th class="col-title">{{ t.bookmark_title | default('Title') }}</th>
+                {% if show_folder %}
+                <th class="col-folder">{{ t.bookmark_folder | default('Folder') }}</th>
+                {% endif %}
+                {% if show_browser %}
+                <th class="col-browser">{{ t.bookmark_browser | default('Browser') }}</th>
+                {% endif %}
+                {% if show_date_added %}
+                <th class="col-date-added">{{ t.bookmark_date_added | default('Date Added') }}</th>
+                {% endif %}
+            </tr>
+        </thead>
+        <tbody>
+            {% for bookmark in bookmarks %}
+            <tr>
+                <td class="col-title">
+                    <span class="bookmark-title">{{ bookmark.title }}</span>
+                    <span class="bookmark-url">{{ bookmark.url }}</span>
+                </td>
+                {% if show_folder %}
+                <td class="col-folder">{{ bookmark.folder }}</td>
+                {% endif %}
+                {% if show_browser %}
+                <td class="col-browser">{{ bookmark.browser }}</td>
+                {% endif %}
+                {% if show_date_added %}
+                <td class="col-date-added">{{ bookmark.date_added }}</td>
+                {% endif %}
+            </tr>
+            {% else %}
+            <tr>
+                <td colspan="{{ 1 + (1 if show_folder else 0) + (1 if show_browser else 0) + (1 if show_date_added else 0) }}" class="empty-message">
+                    {{ t.no_bookmarks_found | default('No bookmarks found matching the filter criteria.') }}
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    
+    {% if is_truncated %}
+    <p class="truncation-info">
+        {{ t.showing_x_of_y | default('showing {shown} of {total}') | replace('{shown}', shown_count|string) | replace('{total}', total_count|string) }} {{ t.bookmarks | default('bookmarks') }}
+    </p>
+    {% endif %}
+    
+    {% if show_filter_info %}
+    <p class="filter-info">
+        <strong>{{ t.filter | default('Filter') }}:</strong> {{ filter_description }} 
+        <span class="bookmark-count">({{ total_count }} {{ t.bookmarks | default('bookmarks') }})</span>
+    </p>
+    {% endif %}
+</div>
+
+<style>
+.module-bookmarks {
+    margin: 1em 0;
+}
+
+.module-bookmarks .module-title {
+    margin: 0 0 0.75em 0;
+    font-size: 1.1em;
+    font-weight: 600;
+    color: #333;
+}
+
+.module-bookmarks .filter-info {
+    margin-bottom: 0.5em;
+    color: #555;
+    font-size: 0.9em;
+}
+
+.module-bookmarks .bookmark-count {
+    color: #888;
+}
+
+.module-bookmarks .truncation-info {
+    margin-top: 0.75em;
+    margin-bottom: 0.5em;
+    color: #666;
+    font-size: 0.85em;
+    font-style: italic;
+}
+
+.bookmarks-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.85em;
+    table-layout: fixed;
+}
+
+.bookmarks-table th,
+.bookmarks-table td {
+    border: 1px solid #ddd;
+    padding: 6px 8px;
+    text-align: left;
+    vertical-align: top;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.bookmarks-table th {
+    background-color: #f5f5f5;
+    font-weight: 600;
+}
+
+.bookmarks-table tbody tr:nth-child(even) {
+    background-color: #fafafa;
+}
+
+.bookmarks-table tbody tr:hover {
+    background-color: #f0f7ff;
+}
+
+/* Column widths */
+.bookmarks-table .col-title {
+    width: 45%;
+}
+
+.bookmarks-table .col-folder {
+    width: 20%;
+}
+
+.bookmarks-table .col-browser {
+    width: 10%;
+}
+
+.bookmarks-table .col-date-added {
+    width: 15%;
+    white-space: nowrap;
+}
+
+/* Title cell styling */
+.bookmarks-table .col-title .bookmark-title {
+    display: block;
+    font-weight: 500;
+    color: #333;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.bookmarks-table .col-title .bookmark-url {
+    display: block;
+    font-size: 0.9em;
+    color: #666;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+/* Folder styling */
+.bookmarks-table .col-folder {
+    color: #555;
+    font-size: 0.9em;
+}
+
+/* Browser styling */
+.bookmarks-table .col-browser {
+    text-transform: capitalize;
+}
+
+/* Empty message */
+.bookmarks-table .empty-message {
+    text-align: center;
+    color: #888;
+    font-style: italic;
+    padding: 2em;
+}
+
+/* Print styles */
+@media print {
+    .bookmarks-table {
+        font-size: 0.8em;
+    }
+    
+    .bookmarks-table .col-title .bookmark-url {
+        font-size: 0.85em;
+    }
+}
+</style>

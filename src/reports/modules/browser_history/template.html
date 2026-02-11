@@ -1,0 +1,213 @@
+{# Browser History Module Template #}
+<div class="module-browser-history">
+    {% if section_title %}
+    <h3 class="module-title">{{ section_title }}</h3>
+    {% endif %}
+    
+    {% if section_description %}
+    <p class="module-description">{{ section_description }}</p>
+    {% elif show_default_description %}
+    <p class="module-description">{{ t.browser_history_description | default('Browser history records websites visited by the user, including page titles, visit times, and how the pages were accessed. This data provides insight into browsing patterns and user activity.') }}</p>
+    {% endif %}
+    
+    <table class="browser-history-table">
+        <thead>
+            <tr>
+                <th class="col-title">{{ t.browser_history_title | default('Title') }}</th>
+                <th class="col-visit-time">{{ t.browser_history_visit_time | default('Visit Time') }}</th>
+                {% if show_browser %}
+                <th class="col-browser">{{ t.browser | default('Browser') }}</th>
+                {% endif %}
+                {% if show_profile %}
+                <th class="col-profile">{{ t.profile | default('Profile') }}</th>
+                {% endif %}
+                {% if show_visit_count %}
+                <th class="col-visit-count">{{ t.browser_history_visit_count | default('Visits') }}</th>
+                {% endif %}
+                {% if show_transition_type %}
+                <th class="col-transition">{{ t.browser_history_transition_type | default('Access Type') }}</th>
+                {% endif %}
+            </tr>
+        </thead>
+        <tbody>
+            {% for entry in history_entries %}
+            <tr>
+                <td class="col-title">
+                    <span class="history-title">{{ entry.title }}</span>
+                    <span class="history-url">{{ entry.url }}</span>
+                </td>
+                <td class="col-visit-time">{{ entry.visit_time }}</td>
+                {% if show_browser %}
+                <td class="col-browser">{{ entry.browser }}</td>
+                {% endif %}
+                {% if show_profile %}
+                <td class="col-profile">{{ entry.profile }}</td>
+                {% endif %}
+                {% if show_visit_count %}
+                <td class="col-visit-count">{{ entry.visit_count }}</td>
+                {% endif %}
+                {% if show_transition_type %}
+                <td class="col-transition">{{ entry.transition_type }}</td>
+                {% endif %}
+            </tr>
+            {% else %}
+            <tr>
+                <td colspan="{{ 2 + (1 if show_browser else 0) + (1 if show_profile else 0) + (1 if show_visit_count else 0) + (1 if show_transition_type else 0) }}" class="empty-message">
+                    {{ t.no_browser_history_found | default('No browser history entries found matching the filter criteria.') }}
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    
+    {% if is_truncated %}
+    <p class="truncation-info">
+        {{ t.showing_x_of_y | default('showing {shown} of {total}') | replace('{shown}', shown_count|string) | replace('{total}', total_count|string) }} {{ t.browser_history_entries | default('entries') }}
+    </p>
+    {% endif %}
+    
+    {% if show_filter_info %}
+    <p class="filter-info">
+        <strong>{{ t.filter | default('Filter') }}:</strong> {{ filter_description }} 
+        <span class="entry-count">({{ total_count }} {{ t.browser_history_entries | default('entries') }})</span>
+    </p>
+    {% endif %}
+</div>
+
+<style>
+.module-browser-history {
+    margin: 1em 0;
+}
+
+.module-browser-history .module-title {
+    margin: 0 0 0.5em 0;
+    font-size: 1.1em;
+    font-weight: 600;
+    color: #333;
+}
+
+.module-browser-history .module-description {
+    margin: 0 0 0.75em 0;
+    color: #555;
+    font-size: 0.9em;
+    line-height: 1.4;
+}
+
+.module-browser-history .filter-info {
+    margin-bottom: 0.5em;
+    color: #555;
+    font-size: 0.9em;
+}
+
+.module-browser-history .entry-count {
+    color: #888;
+}
+
+.module-browser-history .truncation-info {
+    margin-top: 0.75em;
+    margin-bottom: 0.5em;
+    color: #666;
+    font-size: 0.85em;
+    font-style: italic;
+}
+
+.browser-history-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.85em;
+    table-layout: fixed;
+}
+
+.browser-history-table th,
+.browser-history-table td {
+    border: 1px solid #ddd;
+    padding: 6px 8px;
+    text-align: left;
+    vertical-align: top;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.browser-history-table th {
+    background-color: #f5f5f5;
+    font-weight: 600;
+}
+
+.browser-history-table tbody tr:nth-child(even) {
+    background-color: #fafafa;
+}
+
+.browser-history-table tbody tr:hover {
+    background-color: #f0f7ff;
+}
+
+/* Column widths */
+.browser-history-table .col-title {
+    width: 45%;
+}
+
+.browser-history-table .col-visit-time {
+    width: 15%;
+    white-space: nowrap;
+}
+
+.browser-history-table .col-browser {
+    width: 10%;
+}
+
+.browser-history-table .col-profile {
+    width: 10%;
+}
+
+.browser-history-table .col-visit-count {
+    width: 8%;
+    text-align: center;
+}
+
+.browser-history-table .col-transition {
+    width: 12%;
+}
+
+/* Title cell styling */
+.browser-history-table .col-title .history-title {
+    display: block;
+    font-weight: 500;
+    color: #333;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.browser-history-table .col-title .history-url {
+    display: block;
+    font-size: 0.9em;
+    color: #666;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+/* Browser styling */
+.browser-history-table .col-browser {
+    text-transform: capitalize;
+}
+
+/* Empty message */
+.browser-history-table .empty-message {
+    text-align: center;
+    color: #888;
+    font-style: italic;
+    padding: 2em;
+}
+
+/* Print styles */
+@media print {
+    .browser-history-table {
+        font-size: 0.8em;
+    }
+    
+    .browser-history-table .col-title .history-url {
+        font-size: 0.85em;
+    }
+}
+</style>

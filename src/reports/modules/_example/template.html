@@ -1,0 +1,38 @@
+<!-- Example module template -->
+<div class="report-module example-module">
+    <h4>{{ title }}</h4>
+    
+    {% if sample_text %}
+    <p>Sample text: {{ sample_text }}</p>
+    {% endif %}
+    
+    {% if include_details %}
+    <div class="details">
+        <p><em>Additional details would appear here...</em></p>
+    </div>
+    {% endif %}
+    
+    <p class="meta">Showing up to {{ limit }} items.</p>
+</div>
+
+<style>
+.example-module {
+    border: 1px solid #ddd;
+    border-radius: 4px;
+    padding: 12px;
+    margin: 8px 0;
+}
+.example-module h4 {
+    margin-top: 0;
+    color: #333;
+}
+.example-module .details {
+    background: #f9f9f9;
+    padding: 8px;
+    border-radius: 4px;
+}
+.example-module .meta {
+    color: #666;
+    font-size: 0.9em;
+}
+</style>

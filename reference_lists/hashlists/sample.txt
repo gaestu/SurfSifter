@@ -1,0 +1,13 @@
+# NAME: Sample Hash List
+# CATEGORY: Test
+# DESCRIPTION: Sample hash list for testing purposes
+# UPDATED: 2025-11-06
+# AUTHOR: FBGA Team
+# TYPE: hashlist
+# REGEX: false
+
+# Sample MD5 hashes (these are test hashes, not real malware)
+d41d8cd98f00b204e9800998ecf8427e
+5d41402abc4b2a76b9719d911017c592
+098f6bcd4621d373cade4e832627b4f6
+e99a18c428cb38d5f260853678922e03

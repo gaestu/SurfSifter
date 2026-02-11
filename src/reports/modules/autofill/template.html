@@ -1,0 +1,157 @@
+{# Autofill Report Module Template #}
+<div class="module-autofill">
+    <table class="autofill-table">
+        <thead>
+            <tr>
+                <th class="col-name">{{ t.field_name | default('Field Name') }}</th>
+                <th class="col-value">{{ t.value | default('Value') }}</th>
+                <th class="col-browser">{{ t.browser | default('Browser') }}</th>
+                {% if show_profile %}
+                <th class="col-profile">{{ t.profile | default('Profile') }}</th>
+                {% endif %}
+                {% if show_count %}
+                <th class="col-count"><abbr title="{{ t.use_count | default('Use Count') }}">{{ t.use_count | default('Use Count') }}</abbr></th>
+                {% endif %}
+                {% if show_dates %}
+                <th class="col-first-used"><abbr title="{{ t.first_used | default('First Used') }}">{{ t.first_used | default('First Used') }}</abbr></th>
+                <th class="col-last-used"><abbr title="{{ t.last_used | default('Last Used') }}">{{ t.last_used | default('Last Used') }}</abbr></th>
+                {% endif %}
+            </tr>
+        </thead>
+        <tbody>
+            {% for entry in entries %}
+            <tr>
+                <td class="col-name">{{ entry.name }}</td>
+                <td class="col-value">
+                    <span class="value-text" title="{{ entry.value }}">
+                        {%- if entry.value|length > 50 -%}
+                            {{ entry.value[:47] }}...
+                        {%- else -%}
+                            {{ entry.value }}
+                        {%- endif -%}
+                    </span>
+                </td>
+                <td class="col-browser">{{ entry.browser }}</td>
+                {% if show_profile %}
+                <td class="col-profile">{{ entry.profile }}</td>
+                {% endif %}
+                {% if show_count %}
+                <td class="col-count">{{ entry.count }}</td>
+                {% endif %}
+                {% if show_dates %}
+                <td class="col-first-used">{{ entry.date_created }}</td>
+                <td class="col-last-used">{{ entry.date_last_used }}</td>
+                {% endif %}
+            </tr>
+            {% else %}
+            <tr>
+                <td colspan="{{ 3 + (1 if show_profile else 0) + (1 if show_count else 0) + (2 if show_dates else 0) }}" class="empty-message">
+                    {{ t.no_autofill_found | default('No autofill entries found matching the filter criteria.') }}
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    
+    {% if show_filter_info %}
+    <p class="filter-info">
+        <strong>{{ t.filter | default('Filter') }}:</strong> {{ filter_description }} 
+        <span class="count">({{ total_count }} {{ t.entries | default('entries') }})</span>
+    </p>
+    {% endif %}
+</div>
+
+<style>
+.module-autofill {
+    margin: 1em 0;
+}
+
+.module-autofill .filter-info {
+    margin-top: 0.5em;
+    color: #555;
+    font-size: 0.9em;
+}
+
+.module-autofill .count {
+    color: #888;
+}
+
+.autofill-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.85em;
+    table-layout: fixed;
+}
+
+.autofill-table th,
+.autofill-table td {
+    border: 1px solid #ddd;
+    padding: 5px 8px;
+    text-align: left;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    vertical-align: top;
+}
+
+.autofill-table th {
+    background-color: #f5f5f5;
+    font-weight: 600;
+    white-space: nowrap;
+}
+
+.autofill-table tbody tr:nth-child(even) {
+    background-color: #fafafa;
+}
+
+.autofill-table tbody tr:hover {
+    background-color: #f0f7ff;
+}
+
+.autofill-table .col-name {
+    width: 18%;
+    word-break: break-word;
+    font-weight: 500;
+}
+
+.autofill-table .col-value {
+    width: 30%;
+    word-break: break-word;
+}
+
+.autofill-table .col-value .value-text {
+    display: block;
+}
+
+.autofill-table .col-browser {
+    width: 10%;
+    text-align: center;
+}
+
+.autofill-table .col-profile {
+    width: 10%;
+}
+
+.autofill-table .col-count {
+    width: 8%;
+    text-align: center;
+}
+
+.autofill-table .col-first-used,
+.autofill-table .col-last-used {
+    width: 12%;
+    white-space: nowrap;
+    text-align: center;
+}
+
+.autofill-table th abbr {
+    text-decoration: none;
+    border-bottom: none;
+}
+
+.autofill-table .empty-message {
+    text-align: center;
+    color: #666;
+    font-style: italic;
+    padding: 1em;
+}
+</style>

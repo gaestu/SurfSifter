@@ -1,0 +1,235 @@
+{# URL Activity Timeline Module Template #}
+<div class="module-url-activity-timeline">
+    
+    {# ===== SUMMARY STATISTICS ===== #}
+    <div class="summary-section">
+        <h4 class="section-title">{{ t.url_activity_summary | default('URL Activity Summary') }}</h4>
+        
+        {% if summary.total_events > 0 %}
+        <table class="data-table summary-table">
+            <tbody>
+                <tr>
+                    <th>{{ t.activity_period | default('Activity Period') }}</th>
+                    <td>{{ summary.earliest }} &rarr; {{ summary.latest }}</td>
+                </tr>
+                <tr>
+                    <th>{{ t.total_url_events | default('Total URL Events') }}</th>
+                    <td>{{ "{:,}".format(summary.total_events) }}</td>
+                </tr>
+                <tr>
+                    <th>{{ t.unique_urls | default('Unique URLs') }}</th>
+                    <td>{{ "{:,}".format(summary.unique_urls) }}</td>
+                </tr>
+                <tr>
+                    <th>{{ t.domains | default('Domains') }}</th>
+                    <td>
+                        {{ "{:,}".format(shown_domains) }}
+                        {% if shown_domains < total_domains %}
+                        {{ t.of | default('of') }} {{ "{:,}".format(total_domains) }}
+                        {% endif %}
+                    </td>
+                </tr>
+                <tr>
+                    <th>{{ t.filter | default('Filter') }}</th>
+                    <td>{{ filter_description }}</td>
+                </tr>
+            </tbody>
+        </table>
+        {% else %}
+        <p class="empty-message">{{ t.no_url_events_found | default('No URL events found matching the filter criteria.') }}</p>
+        {% endif %}
+    </div>
+
+    {# ===== DOMAIN TABLE ===== #}
+    {% if domains %}
+    <div class="domains-section">
+        <h4 class="section-title">{{ t.domain_activity | default('Domain Activity') }}</h4>
+        
+        <table class="domains-table">
+            <thead>
+                <tr>
+                    <th class="col-domain">{{ t.domain | default('Domain') }}</th>
+                    <th class="col-count">{{ t.events | default('Events') }}</th>
+                    <th class="col-first">{{ t.first_seen | default('First Seen') }}</th>
+                    <th class="col-last">{{ t.last_seen | default('Last Seen') }}</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for domain in domains %}
+                {# Domain row #}
+                <tr class="domain-row">
+                    <td class="col-domain">{{ domain.domain }}</td>
+                    <td class="col-count">{{ "{:,}".format(domain.count) }}</td>
+                    <td class="col-first">{{ domain.first_seen }}</td>
+                    <td class="col-last">{{ domain.last_seen }}</td>
+                </tr>
+                
+                {# URL detail rows (if enabled) #}
+                {% if show_urls and domain.url_details %}
+                {% for url_item in domain.url_details %}
+                <tr class="url-detail-row">
+                    <td class="col-url" colspan="3">
+                        <span class="url-indent">↳</span>
+                        <span class="url-text">{{ url_item.url }}</span>
+                    </td>
+                    <td class="col-url-count">{{ url_item.count }}×</td>
+                </tr>
+                {% endfor %}
+                {% if domain.hidden_url_count > 0 %}
+                <tr class="url-detail-row more-row">
+                    <td colspan="4" class="more-urls">
+                        <span class="url-indent">↳</span>
+                        <em>... {{ t.and_more | default('and') }} {{ domain.hidden_url_count }} {{ t.more_urls | default('more URLs') }}</em>
+                    </td>
+                </tr>
+                {% endif %}
+                {% endif %}
+                {% endfor %}
+            </tbody>
+        </table>
+        
+        {% if shown_domains < total_domains %}
+        <p class="truncation-note">
+            {{ t.showing | default('Showing') }} {{ shown_domains }} {{ t.of | default('of') }} {{ total_domains }} {{ t.domains | default('domains') }}
+        </p>
+        {% endif %}
+    </div>
+    {% endif %}
+
+</div>
+
+<style>
+.module-url-activity-timeline {
+    margin: 1em 0;
+}
+
+.module-url-activity-timeline h4 {
+    margin: 0 0 0.5em 0;
+    color: #333;
+    border-bottom: 1px solid #ddd;
+    padding-bottom: 0.3em;
+}
+
+.module-url-activity-timeline .section-title {
+    margin-top: 1.5em;
+}
+
+.module-url-activity-timeline .section-title:first-child {
+    margin-top: 0;
+}
+
+/* Summary section */
+.summary-section {
+    margin-bottom: 1em;
+}
+
+.summary-table {
+    width: 100%;
+    border-collapse: collapse;
+    margin-top: 0.5em;
+}
+
+.summary-table th,
+.summary-table td {
+    padding: 0.4em 0.5em;
+    text-align: left;
+    border-bottom: 1px solid #eee;
+}
+
+.summary-table th {
+    background: #f5f5f5;
+    font-weight: 500;
+    width: 200px;
+}
+
+/* Domains table */
+.domains-table {
+    width: 100%;
+    border-collapse: collapse;
+    margin-top: 0.5em;
+}
+
+.domains-table th,
+.domains-table td {
+    padding: 0.5em;
+    text-align: left;
+    border-bottom: 1px solid #eee;
+}
+
+.domains-table th {
+    background: #f5f5f5;
+    font-weight: 500;
+}
+
+.domains-table .col-domain {
+    max-width: 300px;
+    word-break: break-all;
+}
+
+.domains-table .col-count {
+    width: 80px;
+    text-align: right;
+}
+
+.domains-table .col-first,
+.domains-table .col-last {
+    width: 160px;
+    font-family: monospace;
+    font-size: 0.9em;
+}
+
+/* Domain row highlighting */
+.domain-row {
+    background: #fff;
+}
+
+.domain-row:hover {
+    background: #f8f9fa;
+}
+
+/* URL detail rows */
+.url-detail-row {
+    background: #fafafa;
+    font-size: 0.9em;
+}
+
+.url-detail-row .col-url {
+    padding-left: 1.5em;
+}
+
+.url-indent {
+    color: #999;
+    margin-right: 0.3em;
+}
+
+.url-text {
+    color: #555;
+    word-break: break-all;
+}
+
+.col-url-count {
+    color: #888;
+    text-align: right;
+    width: 60px;
+}
+
+.more-urls {
+    color: #888;
+    font-style: italic;
+    padding-left: 1.5em;
+}
+
+/* Messages */
+.empty-message {
+    color: #666;
+    font-style: italic;
+    margin: 0.5em 0;
+}
+
+.truncation-note {
+    color: #888;
+    font-size: 0.9em;
+    font-style: italic;
+    margin-top: 0.5em;
+}
+</style>

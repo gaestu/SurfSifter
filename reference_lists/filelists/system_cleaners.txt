@@ -1,0 +1,20 @@
+# NAME: System Cleaners
+# CATEGORY: System
+# DESCRIPTION: CCleaner, BleachBit, and similar cleanup tools
+# UPDATED: 2025-11-06
+# AUTHOR: FBGA Team
+# TYPE: filelist
+# REGEX: false
+
+ccleaner*.exe
+bleachbit*
+*cleaner*.exe
+privazer*.exe
+eraser*.exe
+*wiper*.exe
+*shred*.exe
+cleanmgr.exe
+diskcleanup.exe
+*temp*clean*
+*cache*clean*
+*history*clean*

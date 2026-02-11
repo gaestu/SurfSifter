@@ -1,0 +1,289 @@
+name: Build & Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+env:
+  SLEUTHKIT_VERSION: "4.14.0"
+  SLEUTHKIT_TAR_URL: "https://github.com/sleuthkit/sleuthkit/releases/download/sleuthkit-4.14.0/sleuthkit-4.14.0.tar.gz"
+  SLEUTHKIT_WIN_URL: "https://github.com/sleuthkit/sleuthkit/releases/download/sleuthkit-4.14.0/sleuthkit-4.14.0-win32.zip"
+
+jobs:
+  build-linux:
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential \
+            autoconf \
+            automake \
+            libtool \
+            pkg-config \
+            zlib1g-dev \
+            libssl-dev \
+            libsqlite3-dev \
+            libewf-dev \
+            libtsk-dev \
+            sleuthkit \
+            libpango-1.0-0 \
+            libpangocairo-1.0-0 \
+            libcairo2 \
+            libgdk-pixbuf2.0-0 \
+            libffi-dev \
+            shared-mime-info \
+            libxcb-cursor0 \
+            libxkbcommon0 \
+            libegl1 \
+            libgl1
+
+      - name: Build SleuthKit tools (Linux)
+        run: |
+          mkdir -p vendor/sleuthkit/linux-x86_64
+          # Try static build first, then dynamic, then fall back to system binaries
+          if ! ( \
+            curl -L "$SLEUTHKIT_TAR_URL" -o /tmp/sleuthkit.tar.gz && \
+            tar -xzf /tmp/sleuthkit.tar.gz -C /tmp && \
+            cd "/tmp/sleuthkit-$SLEUTHKIT_VERSION" && \
+            (./configure --disable-java --disable-cppunit LDFLAGS="-static" || \
+             ./configure --disable-java --disable-cppunit) && \
+            make -j"$(nproc)" && \
+            cp tools/fstools/fls tools/fstools/mmls tools/fstools/icat "$GITHUB_WORKSPACE/vendor/sleuthkit/linux-x86_64/" \
+          ); then \
+            echo "SleuthKit build failed; falling back to system binaries"; \
+            cp /usr/bin/fls /usr/bin/mmls /usr/bin/icat "$GITHUB_WORKSPACE/vendor/sleuthkit/linux-x86_64/"; \
+          fi
+          strip "$GITHUB_WORKSPACE/vendor/sleuthkit/linux-x86_64/"* || true
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Poetry
+        run: pipx install poetry
+
+      - name: Install dependencies
+        run: poetry install --no-interaction
+
+      - name: Run tests before build
+        run: poetry run pytest -k "not gui and not e01" -q --tb=short
+        env:
+          QT_QPA_PLATFORM: offscreen
+
+      - name: Build wheel
+        run: poetry build --format wheel
+
+      - name: Build Linux executable
+        run: |
+          # Create linux.spec if it doesn't exist (fallback to windows.spec structure)
+          if [ ! -f packaging/linux.spec ]; then
+            cp packaging/windows.spec packaging/linux.spec
+          fi
+          poetry run pyinstaller packaging/linux.spec --clean --noconfirm || \
+          poetry run pyinstaller packaging/windows.spec --clean --noconfirm
+        env:
+          QT_QPA_PLATFORM: offscreen
+
+      - name: Generate SBOM and license report
+        run: bash scripts/gen-sbom.sh
+
+      - name: Prepare and validate Linux artifacts
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+
+          mkdir -p artifacts
+
+          wheels=(dist/*.whl)
+          if [ "${#wheels[@]}" -eq 0 ]; then
+            echo "No wheel generated in dist/"
+            exit 1
+          fi
+          cp "${wheels[@]}" artifacts/
+
+          if [ -f dist/SurfSifter ]; then
+            cp dist/SurfSifter artifacts/surfsifter-linux
+          elif [ -f dist/surfsifter ]; then
+            cp dist/surfsifter artifacts/surfsifter-linux
+          else
+            echo "Linux executable missing (expected dist/SurfSifter or dist/surfsifter)"
+            exit 1
+          fi
+
+          test -s artifacts/surfsifter-linux
+          test -s dist/sbom.json
+          test -s dist/THIRD_PARTY_LICENSES.md
+
+          cp dist/sbom.json artifacts/
+          cp dist/THIRD_PARTY_LICENSES.md artifacts/
+
+          tar -czf artifacts/docs.tar.gz README.md docs/
+
+      - name: Upload Linux artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-build
+          path: artifacts/*
+          retention-days: 5
+
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Poetry
+        run: pip install poetry
+
+      - name: Install dependencies
+        run: poetry install --no-interaction
+
+      - name: Fetch SleuthKit tools (Windows)
+        shell: pwsh
+        run: |
+          $dest = "vendor/sleuthkit/win64"
+          New-Item -ItemType Directory -Force -Path $dest | Out-Null
+          $zipPath = Join-Path $env:TEMP "sleuthkit-win.zip"
+          Invoke-WebRequest -Uri $env:SLEUTHKIT_WIN_URL -OutFile $zipPath
+          $extractRoot = Join-Path $env:TEMP "sleuthkit-win"
+          if (Test-Path $extractRoot) { Remove-Item -Recurse -Force $extractRoot }
+          Expand-Archive -Path $zipPath -DestinationPath $extractRoot
+          $fls = Get-ChildItem $extractRoot -Recurse -Filter fls.exe | Select-Object -First 1
+          if (-not $fls) { throw "fls.exe not found in SleuthKit archive" }
+          $binDir = Split-Path $fls.FullName -Parent
+          Copy-Item "$binDir\\fls.exe" $dest -Force
+          Copy-Item "$binDir\\mmls.exe" $dest -Force
+          Copy-Item "$binDir\\icat.exe" $dest -Force -ErrorAction SilentlyContinue
+          Copy-Item "$binDir\\*.dll" $dest -Force -ErrorAction SilentlyContinue
+
+      - name: Build Windows executable
+        run: poetry run pyinstaller packaging/windows.spec --clean --noconfirm
+
+      - name: Prepare and validate Windows artifacts
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path artifacts | Out-Null
+          $exe = Get-ChildItem -Path dist -Recurse -Filter *.exe | Select-Object -First 1
+          if (-not $exe) {
+            throw "No Windows executable generated in dist/"
+          }
+
+          Copy-Item $exe.FullName artifacts/surfsifter-windows.exe -Force
+
+          if (-not (Test-Path artifacts/surfsifter-windows.exe)) {
+            throw "Expected artifacts/surfsifter-windows.exe to exist"
+          }
+
+      - name: Upload Windows artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-build
+          path: artifacts/*
+          retention-days: 5
+
+  release:
+    needs: [build-linux, build-windows]
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/')
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Download Linux artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: linux-build
+          path: linux-build
+
+      - name: Download Windows artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: windows-build
+          path: windows-build
+
+      - name: Validate required release artifacts
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+
+          linux_wheels=(linux-build/*.whl)
+          if [ "${#linux_wheels[@]}" -eq 0 ]; then
+            echo "Missing Linux wheel artifact"
+            exit 1
+          fi
+
+          required=(
+            linux-build/surfsifter-linux
+            linux-build/sbom.json
+            linux-build/THIRD_PARTY_LICENSES.md
+            windows-build/surfsifter-windows.exe
+          )
+
+          for file in "${required[@]}"; do
+            if [ ! -s "$file" ]; then
+              echo "Missing required artifact: $file"
+              exit 1
+            fi
+          done
+
+      - name: Generate checksums and artifact manifest
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+
+          {
+            echo "# SurfSifter release artifact manifest"
+            echo "generated_at_utc=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            echo ""
+            echo "[required]"
+            echo "linux-build/surfsifter-linux"
+            echo "windows-build/surfsifter-windows.exe"
+            echo "linux-build/sbom.json"
+            echo "linux-build/THIRD_PARTY_LICENSES.md"
+            echo ""
+            echo "[linux_wheels]"
+            for wheel in linux-build/*.whl; do
+              echo "$wheel"
+            done
+          } > RELEASE_MANIFEST.txt
+
+          while IFS= read -r file; do
+            sha256sum "$file"
+          done < <(find linux-build windows-build -maxdepth 1 -type f | sort) > SHA256SUMS.txt
+
+          test -s SHA256SUMS.txt
+
+      - name: Extract version from tag
+        id: version
+        run: echo "VERSION=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: SurfSifter ${{ steps.version.outputs.VERSION }}
+          draft: false
+          prerelease: ${{ contains(github.ref, 'beta') || contains(github.ref, 'alpha') || contains(github.ref, 'rc') }}
+          generate_release_notes: true
+          files: |
+            linux-build/*
+            windows-build/*
+            SHA256SUMS.txt
+            RELEASE_MANIFEST.txt
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -1,0 +1,1 @@
+"""Activity Summary report module."""

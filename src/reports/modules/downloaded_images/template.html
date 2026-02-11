@@ -1,0 +1,208 @@
+{# Downloaded Images Module Template #}
+<div class="module-downloaded-images">
+    {% if images %}
+    <div class="downloaded-images-grid">
+        {% for image in images %}
+        <div class="download-card">
+            <div class="download-thumbnail">
+                {% if image.thumbnail_b64 %}
+                <img src="{{ image.thumbnail_b64 }}" alt="{{ image.filename }}" />
+                {% else %}
+                <div class="no-thumbnail">📥<br/>{{ t.no_preview | default('No Preview') }}</div>
+                {% endif %}
+            </div>
+            <div class="download-info">
+                <div class="download-filename" title="{{ image.filename }}">{{ image.filename }}</div>
+                
+                {% if image.url %}
+                <div class="download-url" title="{{ image.url }}">
+                    <span class="info-label">{{ t.url | default('URL') }}:</span>
+                    <span class="url-value">{{ image.url | truncate(60, True) }}</span>
+                </div>
+                {% endif %}
+                
+                {% if image.domain %}
+                <div class="download-domain">
+                    <span class="info-label">{{ t.domain | default('Domain') }}:</span>
+                    <span class="domain-value">{{ image.domain }}</span>
+                </div>
+                {% endif %}
+                
+                {% if image.md5 %}
+                <div class="download-hash" title="{{ t.md5 | default('MD5') }}: {{ image.md5 }}">
+                    <span class="info-label">{{ t.md5 | default('MD5') }}:</span> 
+                    <span class="hash-value">{{ image.md5 }}</span>
+                </div>
+                {% endif %}
+                
+                {% if image.downloaded_at %}
+                <div class="download-timestamp">
+                    <span class="info-label">{{ t.downloaded | default('Downloaded') }}:</span>
+                    <span class="timestamp-value">{{ image.downloaded_at }}</span>
+                </div>
+                {% endif %}
+                
+                {% if image.size_display %}
+                <div class="download-size">
+                    <span class="info-label">{{ t.size | default('Size') }}:</span>
+                    <span class="size-value">{{ image.size_display }}</span>
+                </div>
+                {% endif %}
+            </div>
+        </div>
+        {% endfor %}
+    </div>
+    {% else %}
+    <p class="empty-message">{{ t.no_downloaded_images | default('No downloaded images found matching the filter criteria.') }}</p>
+    {% endif %}
+    
+    {% if show_filter_info %}
+    <p class="filter-info">
+        <strong>{{ t.filter | default('Filter') }}:</strong> {{ filter_description }} 
+        <span class="image-count">({{ total_count }} {{ t.images | default('images') }})</span>
+    </p>
+    {% endif %}
+</div>
+
+<style>
+.module-downloaded-images {
+    margin: 1em 0;
+}
+
+.module-downloaded-images .filter-info {
+    margin-bottom: 1em;
+    color: #555;
+    font-size: 0.9em;
+}
+
+.module-downloaded-images .image-count {
+    color: #888;
+}
+
+.downloaded-images-grid {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 16px;
+}
+
+@media (min-width: 900px) {
+    .downloaded-images-grid {
+        grid-template-columns: repeat(3, 1fr);
+    }
+}
+
+@media print {
+    .downloaded-images-grid {
+        grid-template-columns: repeat(2, 1fr);
+    }
+}
+
+.download-card {
+    border: 1px solid #ddd;
+    border-radius: 4px;
+    overflow: hidden;
+    background: #fff;
+    page-break-inside: avoid;
+}
+
+.download-thumbnail {
+    width: 100%;
+    height: 200px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: #f5f5f5;
+    overflow: hidden;
+}
+
+.download-thumbnail img {
+    max-width: 100%;
+    max-height: 200px;
+    object-fit: contain;
+}
+
+.no-thumbnail {
+    color: #999;
+    text-align: center;
+    font-size: 2em;
+    line-height: 1.4;
+}
+
+.download-info {
+    padding: 10px;
+    font-size: 0.85em;
+    border-top: 1px solid #eee;
+}
+
+.download-filename {
+    font-weight: 600;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    margin-bottom: 6px;
+    font-size: 1em;
+}
+
+.info-label {
+    color: #666;
+    font-weight: 500;
+}
+
+.download-url {
+    margin-bottom: 4px;
+    word-break: break-all;
+    line-height: 1.3;
+}
+
+.url-value {
+    color: #0066cc;
+    font-size: 0.9em;
+}
+
+.download-domain {
+    margin-bottom: 4px;
+}
+
+.domain-value {
+    color: #333;
+    font-weight: 500;
+}
+
+.download-hash {
+    font-family: monospace;
+    font-size: 0.8em;
+    margin-bottom: 4px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.hash-value {
+    color: #555;
+}
+
+.download-timestamp {
+    margin-bottom: 4px;
+}
+
+.timestamp-value {
+    color: #555;
+}
+
+.download-size {
+    margin-bottom: 2px;
+}
+
+.size-value {
+    color: #555;
+}
+
+.module-downloaded-images .empty-message {
+    text-align: center;
+    color: #888;
+    font-style: italic;
+    padding: 40px 20px;
+    background: #f9f9f9;
+    border-radius: 4px;
+}
+</style>

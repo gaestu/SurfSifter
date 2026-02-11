@@ -1,0 +1,238 @@
+{# Screenshots Module Template #}
+<div class="module-screenshots">
+    {% if sequences or ungrouped %}
+        {% for seq in sequences %}
+        <div class="screenshot-sequence">
+            <h3 class="sequence-title">{{ seq.name }}</h3>
+            <table class="screenshot-table">
+            {% for screenshot in seq.screenshots %}
+                <tr class="screenshot-item">
+                    <td class="screenshot-image-container">
+                        {% if screenshot.thumbnail_b64 %}
+                        <img src="{{ screenshot.thumbnail_b64 }}" alt="{{ screenshot.title }}" class="screenshot-image"/>
+                        {% else %}
+                        <div class="no-thumbnail">📷<br/>{{ t.no_preview | default('No Preview') }}</div>
+                        {% endif %}
+                    </td>
+                    <td class="screenshot-caption">
+                        <strong class="screenshot-title">{{ screenshot.title }}</strong>
+                        <p class="screenshot-description">{{ screenshot.caption }}</p>
+                        {% if include_url and screenshot.url %}
+                        <div class="screenshot-url">
+                            <span class="url-label">{{ t.url | default('URL') }}:</span> 
+                            <span class="url-value">{{ screenshot.url }}</span>
+                        </div>
+                        {% endif %}
+                        {% if include_notes and screenshot.notes %}
+                        <div class="screenshot-notes">
+                            <span class="notes-label">{{ t.notes | default('Notes') }}:</span>
+                            <span class="notes-value">{{ screenshot.notes }}</span>
+                        </div>
+                        {% endif %}
+                        <div class="screenshot-timestamp">
+                            {{ t.screenshot_captured | default('Captured') }}: {{ screenshot.captured_at }}
+                            {% if screenshot.source == 'upload' %}
+                            <span class="source-badge">({{ t.screenshot_uploaded | default('Uploaded') }})</span>
+                            {% endif %}
+                        </div>
+                    </td>
+                </tr>
+            {% endfor %}
+            </table>
+        </div>
+        {% endfor %}
+        
+        {% if ungrouped %}
+        <div class="screenshot-sequence ungrouped">
+            <h3 class="sequence-title">{{ t.screenshot_additional | default('Additional Screenshots') }}</h3>
+            <table class="screenshot-table">
+            {% for screenshot in ungrouped %}
+                <tr class="screenshot-item">
+                    <td class="screenshot-image-container">
+                        {% if screenshot.thumbnail_b64 %}
+                        <img src="{{ screenshot.thumbnail_b64 }}" alt="{{ screenshot.title }}" class="screenshot-image"/>
+                        {% else %}
+                        <div class="no-thumbnail">📷<br/>{{ t.no_preview | default('No Preview') }}</div>
+                        {% endif %}
+                    </td>
+                    <td class="screenshot-caption">
+                        <strong class="screenshot-title">{{ screenshot.title }}</strong>
+                        <p class="screenshot-description">{{ screenshot.caption }}</p>
+                        {% if include_url and screenshot.url %}
+                        <div class="screenshot-url">
+                            <span class="url-label">{{ t.url | default('URL') }}:</span> 
+                            <span class="url-value">{{ screenshot.url }}</span>
+                        </div>
+                        {% endif %}
+                        {% if include_notes and screenshot.notes %}
+                        <div class="screenshot-notes">
+                            <span class="notes-label">{{ t.notes | default('Notes') }}:</span>
+                            <span class="notes-value">{{ screenshot.notes }}</span>
+                        </div>
+                        {% endif %}
+                        <div class="screenshot-timestamp">
+                            {{ t.screenshot_captured | default('Captured') }}: {{ screenshot.captured_at }}
+                            {% if screenshot.source == 'upload' %}
+                            <span class="source-badge">({{ t.screenshot_uploaded | default('Uploaded') }})</span>
+                            {% endif %}
+                        </div>
+                    </td>
+                </tr>
+            {% endfor %}
+            </table>
+        </div>
+        {% endif %}
+        
+        {% if show_total %}
+        <p class="screenshot-count">
+            {{ t.total | default('Total') }}: {{ total_count }} {{ t.screenshots | default('screenshot(s)') }}
+        </p>
+        {% endif %}
+    {% else %}
+    <p class="empty-message">{{ t.no_screenshots_found | default('No screenshots found.') }}</p>
+    {% endif %}
+</div>
+
+<style>
+.module-screenshots {
+    margin: 1em 0;
+}
+
+.screenshot-sequence {
+    margin-bottom: 2em;
+    page-break-inside: avoid;
+}
+
+.sequence-title {
+    font-size: 1.2em;
+    color: #333;
+    padding-bottom: 0.5em;
+    margin-bottom: 1em;
+}
+
+.screenshot-table {
+    width: 100%;
+    border-collapse: separate;
+    border-spacing: 0 1.5em;
+}
+
+.screenshot-item {
+    page-break-inside: avoid;
+}
+
+.screenshot-image-container {
+    width: 300px;
+    vertical-align: top;
+    text-align: center;
+    padding-right: 1.5em;
+}
+
+.screenshot-image {
+    max-width: 100%;
+    max-height: 300px;
+    object-fit: contain;
+}
+
+.no-thumbnail {
+    padding: 2em;
+    text-align: center;
+    color: #888;
+    font-size: 2em;
+    background: #f0f0f0;
+    border-radius: 4px;
+    min-height: 150px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+}
+
+.screenshot-caption {
+    vertical-align: top;
+    padding-left: 1em;
+}
+
+.screenshot-title {
+    font-size: 1.1em;
+    color: #333;
+    display: block;
+    margin-bottom: 0.5em;
+}
+
+.screenshot-description {
+    color: #555;
+    line-height: 1.6;
+    margin: 0.5em 0;
+}
+
+.screenshot-url {
+    font-size: 0.9em;
+    color: #666;
+    margin: 0.5em 0;
+    word-break: break-all;
+}
+
+.url-label {
+    font-weight: bold;
+}
+
+.url-value {
+    color: #0066cc;
+}
+
+.screenshot-notes {
+    font-size: 0.9em;
+    color: #666;
+    margin: 0.5em 0;
+    padding: 0.5em;
+    background: #fff3cd;
+    border-radius: 4px;
+    font-style: italic;
+}
+
+.notes-label {
+    font-weight: bold;
+    font-style: normal;
+}
+
+.screenshot-timestamp {
+    font-size: 0.85em;
+    color: #888;
+    margin-top: 1em;
+}
+
+.source-badge {
+    color: #666;
+    font-style: italic;
+}
+
+.screenshot-count {
+    text-align: right;
+    color: #666;
+    font-size: 0.9em;
+    margin-top: 1em;
+    padding-top: 1em;
+    border-top: 1px solid #e0e0e0;
+}
+
+.empty-message {
+    color: #888;
+    font-style: italic;
+    text-align: center;
+    padding: 2em;
+}
+
+@media print {
+    .screenshot-item {
+        page-break-inside: avoid;
+    }
+    
+    .screenshot-image-container {
+        width: 250px;
+    }
+    
+    .screenshot-table {
+        border-spacing: 0 1em;
+    }
+}
+</style>

@@ -1,0 +1,78 @@
+<style>
+.appendix-table.extracted-files {
+    width: 100%;
+    border-collapse: collapse;
+    table-layout: fixed;
+    font-size: 0.85em;
+}
+.appendix-table.extracted-files th,
+.appendix-table.extracted-files td {
+    border: 1px solid #ddd;
+    padding: 4px 6px;
+    text-align: left;
+    vertical-align: top;
+    word-break: break-word;
+    overflow-wrap: break-word;
+}
+.appendix-table.extracted-files th {
+    background-color: #f5f5f5;
+    font-weight: 600;
+}
+.appendix-table.extracted-files .col-extractor {
+    width: 18%;
+}
+.appendix-table.extracted-files .col-filename {
+    width: 28%;
+}
+.appendix-table.extracted-files .col-hash {
+    width: 34%;
+    font-family: 'Consolas', 'Monaco', monospace;
+    font-size: 0.8em;
+}
+.appendix-table.extracted-files .col-inode {
+    width: 20%;
+    font-family: 'Consolas', 'Monaco', monospace;
+    font-size: 0.8em;
+}
+.appendix-table.extracted-files .path-row td {
+    border: 0;
+    padding-top: 0;
+    font-size: 0.8em;
+    color: #555;
+}
+.appendix-table.extracted-files .path-label {
+    font-weight: 600;
+    color: #666;
+    margin-right: 0.35em;
+}
+</style>
+{% if total_count == 0 %}
+<p class="text-muted">{{ t.no_extracted_files | default('No extracted files found.') }}</p>
+{% else %}
+<table class="appendix-table extracted-files">
+    <thead>
+        <tr>
+            <th class="col-extractor">{{ t.extractor | default('Extractor') }}</th>
+            <th class="col-filename">{{ t.filename | default('Filename') }}</th>
+            <th class="col-hash">{{ t.md5 | default('MD5') }}</th>
+            <th class="col-inode">{{ t.inode | default('Inode') }}</th>
+        </tr>
+    </thead>
+    <tbody>
+        {% for item in files %}
+        <tr class="file-row">
+            <td class="col-extractor">{{ item.extractor }}</td>
+            <td class="col-filename">{{ item.filename }}</td>
+            <td class="col-hash">{{ item.md5 or 'N/A' }}</td>
+            <td class="col-inode">{{ item.inode or 'N/A' }}</td>
+        </tr>
+        <tr class="path-row">
+            <td colspan="4">
+                <span class="path-label">{{ t.source_path | default('Source path') }}:</span>
+                <span>{{ item.source_path or t.source_path_unavailable | default('Source path unavailable') }}</span>
+            </td>
+        </tr>
+        {% endfor %}
+    </tbody>
+</table>
+{% endif %}

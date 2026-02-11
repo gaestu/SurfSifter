@@ -1,0 +1,573 @@
+{# System Summary Module Template #}
+<div class="module-system-summary">
+    
+    {# ===== SYSTEM INFORMATION SECTION ===== #}
+    {% if SECTION_SYSTEM_INFO in sections %}
+    {% set sys_info = section_data[SECTION_SYSTEM_INFO] %}
+    <div class="summary-section system-info">
+        <h4 class="section-title">{{ t.system_info | default('System Information') }}</h4>
+        {% if sys_info.info_items %}
+        <table class="system-table info-table">
+            <thead>
+                <tr>
+                    <th class="col-label">{{ t.property | default('Property') }}</th>
+                    <th class="col-value">{{ t.value | default('Value') }}</th>
+                    {% if show_paths %}<th class="col-path">{{ t.registry_path | default('Registry Path') }}</th>{% endif %}
+                </tr>
+            </thead>
+            <tbody>
+                {% for item in sys_info.info_items %}
+                <tr>
+                    <td class="col-label">{{ item.label }}</td>
+                    <td class="col-value">{{ item.value }}</td>
+                    {% if show_paths %}
+                    <td class="col-path">{{ item.path if item.path else '—' }}</td>
+                    {% endif %}
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        {% else %}
+        <p class="empty-message">{{ t.no_system_info | default('No system information found in registry data.') }}</p>
+        {% endif %}
+    </div>
+    {% endif %}
+
+    {# ===== USER ACCOUNTS SECTION ===== #}
+    {% if SECTION_USERS in sections %}
+    {% set users_data = section_data[SECTION_USERS] %}
+    <div class="summary-section users">
+        <h4 class="section-title">{{ t.user_accounts | default('User Accounts') }} ({{ users_data.count }})</h4>
+        {% if users_data.users %}
+        <table class="system-table">
+            <thead>
+                <tr>
+                    <th>{{ t.username | default('Username') }}</th>
+                    <th>{{ t.profile_path | default('Profile Path') }}</th>
+                    <th>{{ t.account_type | default('Account Type') }}</th>
+                    {% if show_paths %}<th>{{ t.registry_path | default('Registry Path') }}</th>{% endif %}
+                </tr>
+            </thead>
+            <tbody>
+                {% for user in users_data.users %}
+                <tr>
+                    <td class="user-name">{{ user.username }}</td>
+                    <td class="user-path">{{ user.profile_path if user.profile_path else '—' }}</td>
+                    <td class="account-type">
+                        {% if user.is_sam_user %}
+                        <span class="badge badge-local">{{ t.local_account | default('Local Account') }}</span>
+                        {% else %}
+                        <span class="badge badge-profile">{{ t.profile_only | default('Profile Only') }}</span>
+                        {% endif %}
+                    </td>
+                    {% if show_paths %}<td class="col-path">{{ user.path if user.path else '—' }}</td>{% endif %}
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        {% if users_data.sam_user_count %}
+        <p class="info-note">{{ t.local_accounts_found | default('{count} local account(s) found in SAM hive') | replace('{count}', users_data.sam_user_count | string) }}</p>
+        {% endif %}
+        {% else %}
+        <p class="empty-message">{{ t.no_users_found | default('No user accounts found in registry data.') }}</p>
+        {% endif %}
+    </div>
+    {% endif %}
+
+    {# ===== INSTALLED SOFTWARE SECTION ===== #}
+    {% if SECTION_INSTALLED_SOFTWARE in sections %}
+    {% set software_data = section_data[SECTION_INSTALLED_SOFTWARE] %}
+    <div class="summary-section software">
+        <h4 class="section-title">{{ t.installed_software | default('Installed Software') }} 
+            {% if software_data.shown_count < software_data.total_count %}
+            ({{ t.showing_x_of_y | default('showing {shown} of {total}') | replace('{shown}', software_data.shown_count | string) | replace('{total}', software_data.total_count | string) }})
+            {% else %}
+            ({{ software_data.total_count }})
+            {% endif %}
+        </h4>
+        {% if software_data.software %}
+        <table class="system-table software-table">
+            <thead>
+                <tr>
+                    <th class="col-software-name">{{ t.software_name | default('Software Name') }}</th>
+                    <th class="col-version">{{ t.version | default('Version') }}</th>
+                    <th class="col-install-date">{{ t.install_date | default('Install Date') }}</th>
+                    <th class="col-publisher">{{ t.publisher | default('Publisher') }}</th>
+                    {% if show_paths %}<th class="col-path">{{ t.registry_path | default('Registry Path') }}</th>{% endif %}
+                </tr>
+            </thead>
+            <tbody>
+                {% for sw in software_data.software %}
+                <tr{% if sw.forensic_interest %} class="forensic-highlight"{% endif %}>
+                    <td class="col-software-name">{{ sw.name }}{% if sw.forensic_interest %} <span class="forensic-badge">⚠️</span>{% endif %}</td>
+                    <td class="col-version">{{ sw.version if sw.version else '' }}</td>
+                    <td class="col-install-date">{{ sw.install_date if sw.install_date else '' }}</td>
+                    <td class="col-publisher">{{ sw.publisher if sw.publisher else '' }}</td>
+                    {% if show_paths %}<td class="col-path">{{ sw.path if sw.path else '—' }}</td>{% endif %}
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        {% if software_data.shown_count < software_data.total_count %}
+        <p class="truncation-note">
+            {{ t.and_x_more | default('... and {count} more items not shown') | replace('{count}', (software_data.total_count - software_data.shown_count) | string) }}
+        </p>
+        {% endif %}
+        {% else %}
+        <p class="empty-message">{{ t.no_software_found | default('No installed software found in registry data.') }}</p>
+        {% endif %}
+    </div>
+    {% endif %}
+
+    {# ===== AUTOSTART ENTRIES SECTION ===== #}
+    {% if SECTION_AUTOSTART in sections %}
+    {% set autostart_data = section_data[SECTION_AUTOSTART] %}
+    <div class="summary-section autostart">
+        <h4 class="section-title">{{ t.autostart_entries | default('Autostart Entries') }} ({{ autostart_data.count }})</h4>
+        
+        {# Run Keys (startup programs) #}
+        {% if autostart_data.run_keys %}
+        <h5 class="subsection-title">{{ t.run_keys | default('Run Keys (Startup Programs)') }}</h5>
+        <table class="system-table autostart-table">
+            <thead>
+                <tr>
+                    <th class="col-entry-name">{{ t.entry_name | default('Name') }}</th>
+                    <th class="col-command">{{ t.command_path | default('Command / Path') }}</th>
+                    <th class="col-source">{{ t.source | default('Source') }}</th>
+                    {% if show_paths %}<th class="col-path">{{ t.registry_path | default('Registry Path') }}</th>{% endif %}
+                </tr>
+            </thead>
+            <tbody>
+                {% for entry in autostart_data.run_keys %}
+                <tr>
+                    <td class="col-entry-name">{{ entry.name }}</td>
+                    <td class="col-command">{{ entry.command }}</td>
+                    <td class="col-source">
+                        <span class="badge {% if entry.scope == 'HKLM' %}badge-system{% else %}badge-user{% endif %}">
+                            {{ entry.scope }}
+                        </span>
+                        {% if entry.is_run_once %}<span class="badge badge-once">{{ t.run_once | default('RunOnce') }}</span>{% endif %}
+                    </td>
+                    {% if show_paths %}<td class="col-path">{{ entry.path if entry.path else '—' }}</td>{% endif %}
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        {% endif %}
+        
+        {# Browser Helper Objects #}
+        {% if autostart_data.bhos %}
+        <h5 class="subsection-title">{{ t.browser_helper_objects | default('Browser Helper Objects (BHO)') }}</h5>
+        <table class="system-table autostart-table">
+            <thead>
+                <tr>
+                    <th class="col-clsid">{{ t.clsid | default('CLSID') }}</th>
+                    {% if show_paths %}<th class="col-path">{{ t.registry_path | default('Registry Path') }}</th>{% endif %}
+                </tr>
+            </thead>
+            <tbody>
+                {% for bho in autostart_data.bhos %}
+                <tr>
+                    <td class="col-clsid"><code>{{ bho.clsid }}</code></td>
+                    {% if show_paths %}<td class="col-path">{{ bho.path if bho.path else '—' }}</td>{% endif %}
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        {% endif %}
+        
+        {# Services (if any) #}
+        {% if autostart_data.services %}
+        <h5 class="subsection-title">{{ t.services | default('Services') }}</h5>
+        <table class="system-table autostart-table">
+            <thead>
+                <tr>
+                    <th>{{ t.service_name | default('Service Name') }}</th>
+                    <th>{{ t.command_path | default('Command / Path') }}</th>
+                    {% if show_paths %}<th class="col-path">{{ t.registry_path | default('Registry Path') }}</th>{% endif %}
+                </tr>
+            </thead>
+            <tbody>
+                {% for svc in autostart_data.services %}
+                <tr>
+                    <td>{{ svc.name }}</td>
+                    <td class="col-command">{{ svc.command }}</td>
+                    {% if show_paths %}<td class="col-path">{{ svc.path if svc.path else '—' }}</td>{% endif %}
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        {% endif %}
+        
+        {% if not autostart_data.run_keys and not autostart_data.bhos and not autostart_data.services %}
+        <p class="empty-message">{{ t.no_autostart_found | default('No autostart entries found in registry data.') }}</p>
+        {% endif %}
+    </div>
+    {% endif %}
+
+    {# ===== NETWORK CONFIGURATION SECTION ===== #}
+    {% if SECTION_NETWORK in sections %}
+    {% set network_data = section_data[SECTION_NETWORK] %}
+    <div class="summary-section network">
+        <h4 class="section-title">{{ t.network_config | default('Network Configuration') }}</h4>
+        
+        {# Network interface info items (DHCP, DNS, etc.) #}
+        {% if network_data.info_items %}
+        <h5 class="subsection-title">{{ t.interface_config | default('Interface Configuration') }}</h5>
+        <table class="system-table info-table">
+            <thead>
+                <tr>
+                    <th class="col-label">{{ t.property | default('Property') }}</th>
+                    <th class="col-value">{{ t.value | default('Value') }}</th>
+                    {% if show_paths %}<th class="col-path">{{ t.registry_path | default('Registry Path') }}</th>{% endif %}
+                </tr>
+            </thead>
+            <tbody>
+                {% for item in network_data.info_items %}
+                <tr>
+                    <td class="col-label">{{ item.label }}</td>
+                    <td class="col-value">{{ item.value }}</td>
+                    {% if show_paths %}
+                    <td class="col-path">{{ item.path if item.path else '—' }}</td>
+                    {% endif %}
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        {% endif %}
+        
+        {# Network Profiles (as table with more details) #}
+        {% if network_data.profiles %}
+        <h5 class="subsection-title">{{ t.network_profiles | default('Network Profiles') }} ({{ network_data.profiles | length }})</h5>
+        <table class="system-table">
+            <thead>
+                <tr>
+                    <th class="col-profile-name">{{ t.profile_name | default('Profile Name') }}</th>
+                    <th class="col-network-type">{{ t.network_type | default('Type') }}</th>
+                    <th class="col-category">{{ t.category | default('Category') }}</th>
+                    <th class="col-last-connected">{{ t.last_connected | default('Last Connected') }}</th>
+                    <th class="col-created">{{ t.created | default('Created') }}</th>
+                    {% if show_paths %}<th class="col-path">{{ t.registry_path | default('Registry Path') }}</th>{% endif %}
+                </tr>
+            </thead>
+            <tbody>
+                {% for profile in network_data.profiles %}
+                <tr>
+                    <td class="col-profile-name">{{ profile.name }}</td>
+                    <td class="col-network-type">
+                        {% if profile.network_type == 'wireless' %}
+                        <span class="badge badge-wifi">📶 {{ t.wifi | default('WiFi') }}</span>
+                        {% elif profile.network_type == 'wired' %}
+                        <span class="badge badge-wired">🔌 {{ t.wired | default('Wired') }}</span>
+                        {% elif profile.network_type == 'mobile' %}
+                        <span class="badge badge-mobile">📱 {{ t.mobile | default('Mobile') }}</span>
+                        {% else %}
+                        <span class="badge badge-unknown">{{ profile.network_type | default('—') }}</span>
+                        {% endif %}
+                    </td>
+                    <td class="col-category">
+                        {% if profile.category == 'private' %}
+                        <span class="badge badge-private">🏠 {{ t.private | default('Private') }}</span>
+                        {% elif profile.category == 'public' %}
+                        <span class="badge badge-public">🌐 {{ t.public | default('Public') }}</span>
+                        {% elif profile.category == 'domain' %}
+                        <span class="badge badge-domain">🏢 {{ t.domain | default('Domain') }}</span>
+                        {% else %}
+                        {{ profile.category | default('—') }}
+                        {% endif %}
+                    </td>
+                    <td class="col-last-connected">{{ profile.last_connected if profile.last_connected else '—' }}</td>
+                    <td class="col-created">{{ profile.created if profile.created else '—' }}</td>
+                    {% if show_paths %}<td class="col-path">{{ profile.path if profile.path else '—' }}</td>{% endif %}
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        {% endif %}
+        
+        {# Mapped drives #}
+        {% if network_data.mapped_drives %}
+        <h5 class="subsection-title">{{ t.mapped_drives | default('Mapped Network Drives') }}</h5>
+        <table class="system-table">
+            <thead>
+                <tr>
+                    <th>{{ t.drive_path | default('Network Path') }}</th>
+                    {% if show_paths %}<th class="col-path">{{ t.registry_path | default('Registry Path') }}</th>{% endif %}
+                </tr>
+            </thead>
+            <tbody>
+                {% for drive in network_data.mapped_drives %}
+                <tr>
+                    <td>{{ drive.path }}</td>
+                    {% if show_paths %}<td class="col-path">{{ drive.registry_path if drive.registry_path else '—' }}</td>{% endif %}
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        {% endif %}
+        
+        {% if not network_data.info_items and not network_data.profiles and not network_data.mapped_drives %}
+        <p class="empty-message">{{ t.no_network_found | default('No network configuration found in registry data.') }}</p>
+        {% endif %}
+    </div>
+    {% endif %}
+
+</div>
+
+<style>
+.module-system-summary {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    margin: 1em 0;
+}
+
+.module-system-summary .summary-section {
+    margin-bottom: 1.5em;
+    page-break-inside: avoid;
+}
+
+.module-system-summary .section-title {
+    font-size: 1.1em;
+    font-weight: 600;
+    color: #000000;
+    padding-bottom: 0.3em;
+    margin-bottom: 0.8em;
+}
+
+.module-system-summary .subsection-title {
+    font-size: 0.95em;
+    font-weight: 600;
+    color: #555;
+    margin: 1em 0 0.5em 0;
+}
+
+/* Unified table styling (matching URL module) */
+.module-system-summary .system-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.85em;
+    table-layout: auto;
+    margin-bottom: 0.5em;
+}
+
+.module-system-summary .system-table th,
+.module-system-summary .system-table td {
+    border: 1px solid #ddd;
+    padding: 4px 6px;
+    text-align: left;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.module-system-summary .system-table th {
+    background-color: #f5f5f5;
+    font-weight: 600;
+}
+
+.module-system-summary .system-table tbody tr:hover {
+    background-color: #f0f7ff;
+}
+
+/* Info table columns */
+.module-system-summary .info-table .col-label {
+    width: 180px;
+    font-weight: 500;
+    background-color: #f8f9fa;
+}
+
+.module-system-summary .info-table .col-value {
+    word-break: break-word;
+}
+
+/* Path columns */
+.module-system-summary .col-path {
+    font-size: 0.8em;
+    color: #888;
+    font-family: 'Consolas', 'Monaco', monospace;
+    word-break: break-all;
+    max-width: 250px;
+}
+
+/* Software table columns */
+.module-system-summary .software-table .col-software-name {
+    max-width: 300px;
+    word-break: break-word;
+}
+
+.module-system-summary .software-table .col-version {
+    width: 100px;
+    white-space: nowrap;
+}
+
+.module-system-summary .software-table .col-install-date {
+    width: 100px;
+    white-space: nowrap;
+}
+
+.module-system-summary .software-table .col-publisher {
+    max-width: 200px;
+    word-break: break-word;
+}
+
+.module-system-summary .forensic-highlight {
+    background-color: #fff3cd !important;
+}
+
+.module-system-summary .forensic-badge {
+    margin-left: 4px;
+}
+
+/* Autostart table columns */
+.module-system-summary .autostart-table .col-entry-name {
+    width: 180px;
+    word-break: break-word;
+}
+
+.module-system-summary .autostart-table .col-command {
+    font-family: 'Consolas', 'Monaco', monospace;
+    font-size: 0.9em;
+    word-break: break-all;
+}
+
+.module-system-summary .autostart-table .col-source {
+    width: 120px;
+    white-space: nowrap;
+}
+
+.module-system-summary .autostart-table .col-clsid {
+    font-family: 'Consolas', 'Monaco', monospace;
+    font-size: 0.85em;
+}
+
+/* Network profile table columns */
+.module-system-summary .col-profile-name {
+    max-width: 200px;
+    word-break: break-word;
+}
+
+.module-system-summary .col-network-type,
+.module-system-summary .col-category {
+    width: 100px;
+    white-space: nowrap;
+}
+
+.module-system-summary .col-last-connected,
+.module-system-summary .col-created {
+    width: 140px;
+    font-size: 0.85em;
+    white-space: nowrap;
+/* Badges for various types */
+.module-system-summary .badge {
+    display: inline-block;
+    padding: 0.15em 0.4em;
+    font-size: 0.8em;
+    font-weight: 500;
+    border-radius: 3px;
+    margin-right: 4px;
+}
+
+.module-system-summary .badge-local {
+    background: #d4edda;
+    color: #155724;
+}
+
+.module-system-summary .badge-profile {
+    background: #e2e3e5;
+    color: #383d41;
+}
+
+.module-system-summary .badge-system {
+    background: #cce5ff;
+    color: #004085;
+}
+
+.module-system-summary .badge-user {
+    background: #d4edda;
+    color: #155724;
+}
+
+.module-system-summary .badge-once {
+    background: #fff3cd;
+    color: #856404;
+}
+
+/* Network type badges */
+.module-system-summary .badge-wifi {
+    background: #e7f3ff;
+    color: #0066cc;
+}
+
+.module-system-summary .badge-wired {
+    background: #e8f5e9;
+    color: #2e7d32;
+}
+
+.module-system-summary .badge-mobile {
+    background: #fce4ec;
+    color: #c2185b;
+}
+
+.module-system-summary .badge-unknown {
+    background: #f5f5f5;
+    color: #666;
+}
+
+/* Network category badges */
+.module-system-summary .badge-private {
+    background: #e8f5e9;
+    color: #2e7d32;
+}
+
+.module-system-summary .badge-public {
+    background: #fff3e0;
+    color: #e65100;
+}
+
+.module-system-summary .badge-domain {
+    background: #e3f2fd;
+    color: #1565c0;
+}
+
+.module-system-summary .account-type {
+    white-space: nowrap;
+}
+
+/* Messages */
+.module-system-summary .empty-message {
+    color: #888;
+    font-style: italic;
+    padding: 0.5em;
+    background: #f8f9fa;
+    border-radius: 4px;
+}
+
+.module-system-summary .truncation-note {
+    color: #888;
+    font-size: 0.9em;
+    font-style: italic;
+    margin-top: 0.5em;
+}
+
+.module-system-summary .info-note {
+    color: #666;
+    font-size: 0.85em;
+    margin-top: 0.5em;
+    padding: 0.3em 0.5em;
+    background: #f0f7ff;
+    border-radius: 3px;
+}
+
+/* Print styles */
+@media print {
+    .module-system-summary .summary-section {
+        page-break-inside: avoid;
+    }
+    
+    .module-system-summary .system-table {
+        font-size: 8pt;
+    }
+    
+    .module-system-summary .section-title {
+        font-size: 11pt;
+    }
+}
+</style>

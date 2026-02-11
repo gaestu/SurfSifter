@@ -1,0 +1,174 @@
+{# Web Storage Details Report Module Template #}
+<div class="module-web-storage-details">
+    {% if show_title %}
+    <h3 class="module-title">{{ t.web_storage_title | default('Web Storage Details') }}</h3>
+    {% endif %}
+    
+    {% if show_description %}
+    <p class="module-description">{{ t.web_storage_description | default('Web storage allows websites to store data locally in the browser. This section shows key-value pairs that websites have stored, which may contain user preferences, session data, or tracking information.') }}</p>
+    {% endif %}
+    
+    {% if sites %}
+    {% for site in sites %}
+    <div class="site-block">
+        <h4 class="site-header">{{ stored_site_label }}: <span class="site-origin">{{ site.origin }}</span></h4>
+        
+        {% if site.entries %}
+        <table class="storage-table">
+            <thead>
+                <tr>
+                    <th class="col-key">{{ t.web_storage_key | default('Key') }}</th>
+                    <th class="col-value">{{ t.web_storage_value | default('Value') }}</th>
+                    <th class="col-type">{{ t.web_storage_type | default('Type') }}</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for entry in site.entries %}
+                <tr>
+                    <td class="col-key">{{ entry.key }}</td>
+                    <td class="col-value">{{ entry.value }}</td>
+                    <td class="col-type">{{ entry.type }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        {% else %}
+        <p class="no-entries">{{ t.no_web_storage_entries | default('No storage entries found.') }}</p>
+        {% endif %}
+    </div>
+    {% endfor %}
+    
+    {% if show_filter_info %}
+    <p class="filter-info">
+        <strong>{{ t.filter | default('Filter') }}:</strong> {{ filter_description }}
+        <span class="count">({{ total_sites }} {{ t.web_storage_sites | default('sites') }}, {{ total_entries }} {{ t.web_storage_entries | default('entries') }})</span>
+    </p>
+    {% endif %}
+    
+    {% else %}
+    <p class="empty-message">{{ t.no_web_storage_sites | default('No web storage sites found matching the filter criteria.') }}</p>
+    {% endif %}
+</div>
+
+<style>
+.module-web-storage-details {
+    margin: 1em 0;
+}
+
+.module-web-storage-details .filter-info {
+    margin-top: 1em;
+    color: #555;
+    font-size: 0.9em;
+}
+
+.module-web-storage-details .count {
+    color: #888;
+}
+
+.module-web-storage-details .empty-message {
+    color: #666;
+    font-style: italic;
+    margin: 1em 0;
+}
+
+.module-title {
+    margin: 0 0 0.5em 0;
+    font-size: 1.1em;
+    font-weight: 600;
+    color: #333;
+}
+
+.module-description {
+    margin: 0 0 1em 0;
+    color: #555;
+    font-size: 0.9em;
+    line-height: 1.4;
+}
+
+.site-block {
+    margin-bottom: 1.5em;
+    page-break-inside: avoid;
+}
+
+.site-header {
+    margin: 0 0 0.3em 0;
+    font-size: 0.95em;
+    font-weight: normal;
+    color: #333;
+}
+
+.site-origin {
+    font-weight: 600;
+    word-break: break-all;
+    color: #333;
+}
+
+.storage-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.85em;
+    table-layout: fixed;
+}
+
+.storage-table th,
+.storage-table td {
+    border: 1px solid #ddd;
+    padding: 4px 6px;
+    text-align: left;
+    vertical-align: top;
+}
+
+.storage-table th {
+    background-color: #f5f5f5;
+    font-weight: 600;
+    white-space: nowrap;
+}
+
+.storage-table .col-key {
+    width: 30%;
+    word-break: break-all;
+}
+
+.storage-table .col-value {
+    width: 55%;
+    word-break: break-all;
+    font-family: monospace;
+    font-size: 0.9em;
+}
+
+.storage-table .col-type {
+    width: 15%;
+    text-align: center;
+}
+
+.storage-table tbody tr:nth-child(even) {
+    background-color: #fafafa;
+}
+
+.no-entries {
+    color: #888;
+    font-style: italic;
+    padding: 8px;
+    border: 1px solid #ddd;
+    margin: 0;
+}
+
+/* Print styles */
+@media print {
+    .site-block {
+        page-break-inside: avoid;
+    }
+    
+    .storage-table th {
+        background-color: #f0f0f0 !important;
+        -webkit-print-color-adjust: exact;
+        print-color-adjust: exact;
+    }
+    
+    .storage-table tbody tr:nth-child(even) {
+        background-color: #f8f8f8 !important;
+        -webkit-print-color-adjust: exact;
+        print-color-adjust: exact;
+    }
+}
+</style>

@@ -1,0 +1,90 @@
+[tool.poetry]
+name = "surfsifter"
+version = "v0.3.0-beta"
+description = "SurfSifter — cross-platform, rule-driven forensic triage for browser evidence in EWF images."
+authors = ["gaestu <gaestu@users.noreply.github.com>"]
+maintainers = ["gaestu <gaestu@users.noreply.github.com>"]
+repository = "https://github.com/gaestu/surfsifter"
+license = "Apache-2.0"
+readme = "README.md"
+packages = [{ include = "app", from = "src" }, { include = "core", from = "src" }, { include = "extractors", from = "src" }, { include = "sdk", from = "src" }, { include = "reports", from = "src" }]
+
+[tool.poetry.dependencies]
+python = ">=3.10,<3.14"
+# Install from PyPI (requires libtsk-dev to be installed)
+# Note: Python 3.13 requires building from source (no binary wheels available)
+# System dependencies needed: libewf-dev, libtsk-dev, build-essential, python3.13-dev
+pytsk3 = "^20250801"
+PySide6 = "^6.9.0"
+PyYAML = "^6.0.1"
+jsonschema = "^4.21.0"
+sqlalchemy = "^2.0.25"
+Pillow = "^10.1.0"
+imagehash = "^4.3.1"
+WeasyPrint = "^63.0"
+rich = "^13.7.0"
+libewf-python = ">=20240506"
+attrs = "^23.2.0"
+requests = "^2.31.0"
+typing-extensions = "^4.9.0"
+Jinja2 = "^3.1.2"
+chardet = "^5.2.0"
+regipy = "^5.2.0"
+tldextract = "^5.1.0"
+
+# Optional decompression support for Chromium simple cache
+brotli = { version = "^1.1.0", optional = true }
+zstandard = { version = "^0.23.0", optional = true }
+lz4 = "^4.4.5"
+
+# Optional Jump Lists parsing support (Windows forensics)
+olefile = { version = ">=0.47", optional = true }
+LnkParse3 = { version = ">=1.4.0", optional = true }
+
+# Optional Safari binary cookies parsing (macOS forensics)
+binarycookies = { version = ">=0.1", optional = true }
+
+# Optional LevelDB parsing for browser storage (Local Storage, Session Storage, IndexedDB)
+# MIT License - https://github.com/cclgroupltd/ccl_chromium_reader
+ccl-chromium-reader = { git = "https://github.com/cclgroupltd/ccl_chromium_reader.git", rev = "552516720761397c4d482908b6b8b08130b313a1", optional = true }
+
+# Optional ESE database parsing for Internet Explorer / Legacy Edge WebCache
+# LGPL-3.0 License - https://github.com/libyal/libesedb
+libesedb-python = { version = ">=20240420", optional = true }
+
+[tool.poetry.extras]
+cache-decompression = ["brotli", "zstandard"]
+jump-lists = ["olefile", "LnkParse3"]
+macos = ["binarycookies"]
+leveldb = ["ccl-chromium-reader"]
+ie = ["libesedb-python"]
+all = ["brotli", "zstandard", "olefile", "LnkParse3", "binarycookies", "ccl-chromium-reader", "libesedb-python"]
+
+[tool.poetry.group.dev.dependencies]
+pytest = "^7.4.4"
+pytest-qt = "^4.4.0"
+pytest-mock = "^3.12.0"
+pytest-cov = "^4.1.0"
+mypy = "^1.8.0"
+types-PyYAML = "^6.0.12.12"
+types-requests = "^2.31.0.10"
+pytest-xdist = "^3.8.0"
+pyinstaller = "^6.16.0"
+brotli = "^1.1.0"
+cyclonedx-bom = "^4.1.6"
+pip-audit = "^2.9.0"
+pip-licenses = "^5.0.0"
+
+[tool.poetry.scripts]
+surfsifter = "app.main:main"
+
+[build-system]
+requires = ["poetry-core>=1.6.0"]
+build-backend = "poetry.core.masonry.api"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+markers = [
+    "gui_offscreen: tests requiring Qt in offscreen mode",
+]

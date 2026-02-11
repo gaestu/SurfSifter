@@ -1,0 +1,57 @@
+<style>
+.appendix-table.compact {
+    width: 100%;
+    table-layout: fixed;
+}
+.appendix-table.compact td,
+.appendix-table.compact th {
+    padding: 2px 4px;
+    font-size: 0.85em;
+    line-height: 1.2;
+    word-break: break-all;
+    overflow-wrap: break-word;
+}
+.appendix-table.compact .url-cell {
+    max-width: 100%;
+}
+</style>
+{% if total_count == 0 %}
+<p class="text-muted">{{ t.no_urls_for_filters | default('No URLs found for the selected filters.') }}</p>
+{% else %}
+    {% if group_by_domain and grouped %}
+        {% for group in grouped %}
+            <h4 class="appendix-subheader">{{ group.domain }} ({{ group.urls | length }})</h4>
+            <table class="appendix-table compact">
+                <thead>
+                    <tr>
+                        <th>{{ t.url | default('URL') }}</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for item in group.urls %}
+                    <tr>
+                        <td class="url-cell">{{ item.url }}</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        {% endfor %}
+    {% else %}
+        <table class="appendix-table compact">
+            <thead>
+                <tr>
+                    <th style="width: 20%;">{{ t.domain | default('Domain') }}</th>
+                    <th style="width: 80%;">{{ t.url | default('URL') }}</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for item in urls %}
+                <tr>
+                    <td>{{ item.domain }}</td>
+                    <td class="url-cell">{{ item.url }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    {% endif %}
+{% endif %}

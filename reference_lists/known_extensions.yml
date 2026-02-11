@@ -1,0 +1,321 @@
+# Known Forensically Interesting Browser Extensions
+# Used by browser_extensions extractor for automatic categorization
+# 
+# Categories:
+# - vpn: VPN and proxy extensions
+# - wallet: Cryptocurrency wallets
+# - adblock: Ad blockers and content filters
+# - gambling: Gambling-related extensions
+# - privacy: Privacy enhancement tools
+# - developer: Developer tools
+# - security: Security and password managers
+# - automation: Browser automation tools
+# - downloader: Download managers
+# - other: Other notable extensions
+#
+# Version: 1.0.0
+# Last Updated: 2025-12-03
+
+version: "1.0.0"
+description: "Reference list of known forensically interesting browser extensions"
+
+extensions:
+  # ============================================================================
+  # VPN Extensions (HIGH forensic interest - may hide real IP)
+  # ============================================================================
+  - id: "bihmplhobchoageeokmgbdihknkjbknd"
+    name: "NordVPN"
+    category: "vpn"
+    risk_indicator: "high"
+    notes: "May hide user's real IP address and location"
+
+  - id: "bfidboloedlamgdmenmlbipfnccokknp"
+    name: "ExpressVPN"
+    category: "vpn"
+    risk_indicator: "high"
+    notes: "May hide user's real IP address and location"
+
+  - id: "majdfhpaihoncoakbjgbdhglocklcgno"
+    name: "Hola VPN"
+    category: "vpn"
+    risk_indicator: "high"
+    notes: "Peer-based VPN - may hide IP, device acts as exit node"
+
+  - id: "eppiocemhmnlbhjplcgkofciiegomcon"
+    name: "Browsec VPN"
+    category: "vpn"
+    risk_indicator: "high"
+    notes: "Free VPN - may hide browsing activity"
+
+  - id: "gkojfkhlekighikafcpjkiklfbnlmeio"
+    name: "Windscribe VPN"
+    category: "vpn"
+    risk_indicator: "high"
+    notes: "VPN with ad/tracker blocking features"
+
+  - id: "dpplabbmogkhghncfbfdeeokoefdjegm"
+    name: "Hotspot Shield VPN"
+    category: "vpn"
+    risk_indicator: "high"
+    notes: "Popular free VPN service"
+
+  - id: "nlbejmccbhkncgokjcmghpfloaajcffj"
+    name: "TunnelBear VPN"
+    category: "vpn"
+    risk_indicator: "high"
+    notes: "VPN service with cute bear theme"
+
+  - id: "jpngjnlnclbhfljpoemmpnfhmkfjicmk"
+    name: "ZenMate VPN"
+    category: "vpn"
+    risk_indicator: "high"
+    notes: "VPN and proxy service"
+
+  # ============================================================================
+  # Cryptocurrency Wallets (HIGH forensic interest - financial transactions)
+  # ============================================================================
+  - id: "nkbihfbeogaeaoehlefnkodbefgpgknn"
+    name: "MetaMask"
+    category: "wallet"
+    risk_indicator: "high"
+    notes: "Ethereum wallet - check extension storage for transaction history"
+
+  - id: "bfnaelmomeimhlpmgjnjophhpkkoljpa"
+    name: "Phantom"
+    category: "wallet"
+    risk_indicator: "high"
+    notes: "Solana/Ethereum wallet - check for transaction history"
+
+  - id: "aholpfdialjgjfhomihkjbmgjidlcdno"
+    name: "Exodus Web3 Wallet"
+    category: "wallet"
+    risk_indicator: "high"
+    notes: "Multi-chain crypto wallet"
+
+  - id: "hnfanknocfeofbddgcijnmhnfnkdnaad"
+    name: "Coinbase Wallet"
+    category: "wallet"
+    risk_indicator: "high"
+    notes: "Coinbase exchange wallet extension"
+
+  - id: "aiifbnbfobpmeekipheeijimdpnlpgpp"
+    name: "Station Wallet"
+    category: "wallet"
+    risk_indicator: "high"
+    notes: "Terra blockchain wallet"
+
+  - id: "fnjhmkhhmkbjkkabndcnnogagogbneec"
+    name: "Ronin Wallet"
+    category: "wallet"
+    risk_indicator: "high"
+    notes: "Axie Infinity blockchain wallet"
+
+  - id: "egjidjbpglichdcondbcbdnbeeppgdph"
+    name: "Trust Wallet"
+    category: "wallet"
+    risk_indicator: "high"
+    notes: "Multi-chain mobile-first wallet"
+
+  - id: "nanjmdknhkinifnkgdcggcfnhdaammmj"
+    name: "Tronlink"
+    category: "wallet"
+    risk_indicator: "high"
+    notes: "TRON blockchain wallet"
+
+  # ============================================================================
+  # Ad Blockers (MEDIUM forensic interest - may hide gambling ads)
+  # ============================================================================
+  - id: "cjpalhdlnbpafiamejdnhcphjbkeiagm"
+    name: "uBlock Origin"
+    category: "adblock"
+    risk_indicator: "medium"
+    notes: "Efficient ad blocker - may hide gambling advertisements"
+
+  - id: "gighmmpiobklfepjocnamgkkbiglidom"
+    name: "AdBlock"
+    category: "adblock"
+    risk_indicator: "medium"
+    notes: "Popular ad blocker extension"
+
+  - id: "cfhdojbkjhnklbpkdaibdccddilifddb"
+    name: "Adblock Plus"
+    category: "adblock"
+    risk_indicator: "medium"
+    notes: "Ad blocker with acceptable ads program"
+
+  - id: "epcnnfbjfcgphgdmggkamkmgojdagdnn"
+    name: "uBlock"
+    category: "adblock"
+    risk_indicator: "medium"
+    notes: "Older uBlock fork"
+
+  - id: "pkehgijcmpdhfbdbbnkijodmdjhbjlgp"
+    name: "Privacy Badger"
+    category: "adblock"
+    risk_indicator: "medium"
+    notes: "EFF tracker blocker - learns blocking over time"
+
+  # ============================================================================
+  # Privacy Tools (MEDIUM forensic interest - may clear browser data)
+  # ============================================================================
+  - id: "gcbommkclmclpchllfjekcdonpmejbdp"
+    name: "HTTPS Everywhere"
+    category: "privacy"
+    risk_indicator: "low"
+    notes: "Forces HTTPS connections (now largely deprecated)"
+
+  - id: "ldpochfccmkkmhdbclfhpagapcfdljkj"
+    name: "Decentraleyes"
+    category: "privacy"
+    risk_indicator: "low"
+    notes: "Local CDN emulation for privacy"
+
+  - id: "cimiefiiaegbelhefglklhhakcgmhkai"
+    name: "Plasma Integration"
+    category: "privacy"
+    risk_indicator: "low"
+    notes: "KDE integration (Linux)"
+
+  - id: "jinjaccalgkegednnccohejagnlnfdag"
+    name: "Violentmonkey"
+    category: "automation"
+    risk_indicator: "medium"
+    notes: "Userscript manager - can modify page behavior"
+
+  - id: "dhdgffkkebhmkfjojejmpbldmpobfkfo"
+    name: "Tampermonkey"
+    category: "automation"
+    risk_indicator: "medium"
+    notes: "Popular userscript manager - can run custom scripts"
+
+  - id: "dbepggeogbaibhgnhhndojpepiihcmeb"
+    name: "Vimium"
+    category: "developer"
+    risk_indicator: "low"
+    notes: "Vim-style keyboard navigation"
+
+  # ============================================================================
+  # Password Managers (MEDIUM forensic interest - account credentials)
+  # ============================================================================
+  - id: "nngceckbapebfimnlniiiahkandclblb"
+    name: "Bitwarden"
+    category: "security"
+    risk_indicator: "medium"
+    notes: "Password manager - may store site credentials"
+
+  - id: "hdokiejnpimakedhajhdlcegeplioahd"
+    name: "LastPass"
+    category: "security"
+    risk_indicator: "medium"
+    notes: "Password manager - may store site credentials"
+
+  - id: "aeblfdkhhhdcdjpifhhbdiojplfjncoa"
+    name: "1Password"
+    category: "security"
+    risk_indicator: "medium"
+    notes: "Password manager extension"
+
+  - id: "pnlccmojcmeohlpggmfnbbiapkmbliob"
+    name: "RoboForm"
+    category: "security"
+    risk_indicator: "medium"
+    notes: "Password manager and form filler"
+
+  - id: "fmhmiaejopepamlcjkncpgpdjichnecm"
+    name: "KeePassXC-Browser"
+    category: "security"
+    risk_indicator: "medium"
+    notes: "KeePassXC integration extension"
+
+  # ============================================================================
+  # Download Managers (MEDIUM forensic interest - file downloads)
+  # ============================================================================
+  - id: "djflhoibgkdhkhhcedjiklpkjnoahfmg"
+    name: "Video DownloadHelper"
+    category: "downloader"
+    risk_indicator: "medium"
+    notes: "Video/media download tool"
+
+  - id: "aapbdbdomjkkjkaonfhkkikfgjllcleb"
+    name: "Google Translate"
+    category: "other"
+    risk_indicator: "low"
+    notes: "Page translation tool"
+
+  - id: "gbkeegbaiigmenfmjfclcdgdpimamgkj"
+    name: "Greasemonkey"
+    category: "automation"
+    risk_indicator: "medium"
+    notes: "Firefox userscript manager"
+
+  # ============================================================================
+  # Firefox Add-ons (use email-style IDs)
+  # ============================================================================
+  - id: "{d10d0bf8-f5b5-c8b4-a8b2-2b9879e08c5d}"
+    name: "Adblock Plus"
+    category: "adblock"
+    risk_indicator: "medium"
+    browser: "firefox"
+    notes: "Firefox Adblock Plus add-on"
+
+  - id: "uBlock0@raymondhill.net"
+    name: "uBlock Origin"
+    category: "adblock"
+    risk_indicator: "medium"
+    browser: "firefox"
+    notes: "Firefox uBlock Origin add-on"
+
+  - id: "jid1-MnnxcxisBPnSXQ@jetpack"
+    name: "Privacy Badger"
+    category: "privacy"
+    risk_indicator: "medium"
+    browser: "firefox"
+    notes: "Firefox Privacy Badger add-on"
+
+  - id: "https-everywhere@eff.org"
+    name: "HTTPS Everywhere"
+    category: "privacy"
+    risk_indicator: "low"
+    browser: "firefox"
+    notes: "Firefox HTTPS Everywhere add-on"
+
+  - id: "{446900e4-71c2-419f-a6a7-df9c091e268b}"
+    name: "Bitwarden"
+    category: "security"
+    risk_indicator: "medium"
+    browser: "firefox"
+    notes: "Firefox Bitwarden add-on"
+
+# ============================================================================
+# Pattern Matching Rules (for unknown extensions)
+# ============================================================================
+patterns:
+  - name_pattern: "(?i)(vpn|proxy|tunnel)"
+    category: "vpn"
+    risk_indicator: "high"
+    notes: "Extension name suggests VPN/proxy functionality"
+
+  - name_pattern: "(?i)(wallet|crypto|bitcoin|ethereum|metamask)"
+    category: "wallet"
+    risk_indicator: "high"
+    notes: "Extension name suggests cryptocurrency functionality"
+
+  - name_pattern: "(?i)(poker|casino|bet|gambl|slots|lottery|bingo)"
+    category: "gambling"
+    risk_indicator: "critical"
+    notes: "Extension name suggests gambling-related functionality"
+
+  - name_pattern: "(?i)(adblock|ad.?block|blocker|ublock)"
+    category: "adblock"
+    risk_indicator: "medium"
+    notes: "Extension name suggests ad blocking functionality"
+
+  - name_pattern: "(?i)(password|lastpass|1password|keeper|dashlane)"
+    category: "security"
+    risk_indicator: "medium"
+    notes: "Extension name suggests password management"
+
+  - name_pattern: "(?i)(download|grabber|saver|ripper)"
+    category: "downloader"
+    risk_indicator: "medium"
+    notes: "Extension name suggests download/capture functionality"
