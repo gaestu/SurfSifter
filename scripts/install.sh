@@ -7,7 +7,7 @@ PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 TMP_DIR="$(mktemp -d)"
 trap 'rm -rf "${TMP_DIR}"' EXIT
 
-APP_REPO_DEFAULT="gaestu/surfsifter"
+APP_REPO_DEFAULT="gaestu/SurfSifter"
 DEFAULT_PREFIX="/usr/local"
 DEFAULT_INSTALL_NAME="surfsifter"
 
