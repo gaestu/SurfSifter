@@ -79,7 +79,7 @@ if not ESE_AVAILABLE:
         pass
 
 if not ESE_AVAILABLE:
-    LOGGER.warning(
+    LOGGER.info(
         "No ESE library available. Install libesedb-python or dissect.esedb "
         "to enable Internet Explorer/Legacy Edge extraction."
     )
@@ -161,7 +161,7 @@ class ESEReader:
         """
         if not ESE_AVAILABLE:
             raise ImportError(
-                "No ESE library available. Install libesedb-python: "
+                "No ESE library available. Install libesedb-python or dissect.esedb: "
                 "pip install libesedb-python"
             )
 
@@ -604,4 +604,4 @@ def check_ese_available() -> tuple[bool, str]:
     if ESE_AVAILABLE:
         return True, ESE_LIBRARY
     else:
-        return False, "No ESE library available. Install: pip install libesedb-python"
+        return False, "No ESE library available. Install: pip install libesedb-python or pip install dissect.esedb"

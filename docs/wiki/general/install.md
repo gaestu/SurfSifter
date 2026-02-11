@@ -8,53 +8,6 @@ No repository clone is required. Run the installer directly as a one-liner:
 wget -qO- https://raw.githubusercontent.com/gaestu/surfsifter/main/scripts/install.sh | bash
 ```
 
-#### Private / pre-release install
-
-**Option A — SSH key** (recommended if you have SSH access to the repo):
-```bash
-d=$(mktemp -d) && git clone --depth 1 git@github.com:gaestu/surfsifter.git "$d/wba" && \
-  bash "$d/wba/scripts/install.sh" ; rm -rf "$d"
-```
-
-**Option B — GitHub CLI** (if [`gh`](https://cli.github.com/) is installed and authenticated):
-```bash
-gh api repos/gaestu/surfsifter/contents/scripts/install.sh?ref=main \
-  -H "Accept: application/vnd.github.raw+json" | bash
-```
-
-**Option C — Personal Access Token** (works in bash **and** zsh):
-```bash
-printf 'GitHub token: ' && IFS= read -rs GH_TOKEN && printf '\n' && \
-curl -fsSL -H "Authorization: token ${GH_TOKEN}" -H "Accept: application/vnd.github.raw+json" \
-  "https://api.github.com/repos/gaestu/surfsifter/contents/scripts/install.sh?ref=main" | \
-  SURFSIFTER_GITHUB_TOKEN="${GH_TOKEN}" bash
-```
-
-Key non-interactive examples:
-```bash
-# Install latest release binary + recommended tools
-wget -qO- https://raw.githubusercontent.com/gaestu/surfsifter/main/scripts/install.sh | \
-  bash -s -- --from-release --with-recommended-tools --non-interactive
-
-# Update existing install to latest release
-wget -qO- https://raw.githubusercontent.com/gaestu/surfsifter/main/scripts/install.sh | \
-  bash -s -- --from-release --release-version latest --non-interactive
-
-# Install pinned release
-wget -qO- https://raw.githubusercontent.com/gaestu/surfsifter/main/scripts/install.sh | \
-  bash -s -- --from-release --release-version v1.2.3 --non-interactive
-
-# Verify only (no install)
-wget -qO- https://raw.githubusercontent.com/gaestu/surfsifter/main/scripts/install.sh | \
-  bash -s -- --verify-only --non-interactive
-```
-
-Pinned installer revision (recommended for reproducible installs):
-```bash
-INSTALLER_REF="v1.2.3"  # or a commit SHA
-wget -qO- "https://raw.githubusercontent.com/gaestu/surfsifter/${INSTALLER_REF}/scripts/install.sh" | bash
-```
-
 ### Upgrade
 Canonical update command:
 ```bash
@@ -124,7 +77,7 @@ Install optional features with Poetry or pip extras:
 - **`jump-lists`** - olefile, LnkParse3 (Windows Jump Lists)
 - **`macos`** - binarycookies (Safari support)
 - **`leveldb`** - ccl-chromium-reader (browser storage databases)
-- **`ie`** - libesedb-python (IE/Edge ESE parsing)
+- **`ie`** - libesedb-python (IE/Edge ESE parsing; fixes "No ESE library available")
 - **`all`** - install all optional features
 
 Examples:

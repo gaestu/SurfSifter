@@ -24,6 +24,62 @@ SurfSifter is a forensic triage workstation that helps investigators:
 
 Designed for Windows evidence on any platform (Linux/macOS/Windows host).
 
+## Quick Start
+
+### Option 1: Linux Installer Script (Recommended)
+No repository clone is required. Run the installer directly as a one-liner:
+```bash
+wget -qO- https://raw.githubusercontent.com/gaestu/surfsifter/main/scripts/install.sh | bash
+```
+
+### Upgrade
+Canonical update command:
+```bash
+wget -qO- https://raw.githubusercontent.com/gaestu/surfsifter/main/scripts/install.sh | \
+  bash -s -- --from-release --release-version latest --non-interactive
+```
+
+Expected summary snippet:
+```text
+Install summary:
+  source: release <resolved-tag> (<asset-name>)
+  previous version: <old-version>
+  installed version: <new-version>
+```
+
+Useful flags:
+- `--verify-only` check tools without installing
+- `--dry-run` print commands without changing system
+- `--prefix /path` install under a custom prefix
+- `--bin-source /path/to/binary` install from local artifact instead of release
+
+### Option 2: Pre-built Releases (Manual)
+Download from the [Releases page](https://github.com/gaestu/surfsifter/releases):
+- **Linux:** Extract and run `./surfsifter`
+- **Windows:** Run `surfsifter.exe`
+
+### Option 3: Install from Source
+```bash
+# Clone repository
+git clone https://github.com/gaestu/surfsifter.git
+cd surfsifter
+
+# Install with Poetry (recommended)
+poetry install --extras all
+poetry run surfsifter
+
+# Or with pip
+pip install -e .[all]
+python -m app.main
+```
+
+### Getting Started
+1. **Create a case** → File menu → "Open/Create Case" → Choose empty directory
+2. **Add evidence** → Evidence tab → Add E01 image (segments auto-detected)
+3. **Run extractors** → Extraction tab → Select desired extractors → Start
+4. **Review results** → Browse tabs (URLs, Images, Browser Inventory, Timeline)
+5. **Tag & report** → Tag findings → Generate PDF report
+
 ## Features
 
 ### Evidence Handling
@@ -126,105 +182,6 @@ For more details check the wiki.
 - Contribution guide: [CONTRIBUTING.md](CONTRIBUTING.md)
 - Code of conduct: [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md)
 
-## Quick Start
-
-### Option 1: Linux Installer Script (Recommended)
-No repository clone is required. Run the installer directly as a one-liner:
-```bash
-wget -qO- https://raw.githubusercontent.com/gaestu/surfsifter/main/scripts/install.sh | bash
-```
-
-#### Private / pre-release install
-
-**Option A — SSH key** (recommended if you have SSH access to the repo):
-```bash
-d=$(mktemp -d) && git clone --depth 1 git@github.com:gaestu/surfsifter.git "$d/wba" && \
-  bash "$d/wba/scripts/install.sh" ; rm -rf "$d"
-```
-
-**Option B — GitHub CLI** (if [`gh`](https://cli.github.com/) is installed and authenticated):
-```bash
-gh api repos/gaestu/surfsifter/contents/scripts/install.sh?ref=main \
-  -H "Accept: application/vnd.github.raw+json" | bash
-```
-
-**Option C — Personal Access Token** (works in bash **and** zsh):
-```bash
-printf 'GitHub token: ' && IFS= read -rs GH_TOKEN && printf '\n' && \
-curl -fsSL -H "Authorization: token ${GH_TOKEN}" -H "Accept: application/vnd.github.raw+json" \
-  "https://api.github.com/repos/gaestu/surfsifter/contents/scripts/install.sh?ref=main" | \
-  SURFSIFTER_GITHUB_TOKEN="${GH_TOKEN}" bash
-```
-
-Non-interactive examples:
-```bash
-# Install latest release binary + recommended tools
-wget -qO- https://raw.githubusercontent.com/gaestu/surfsifter/main/scripts/install.sh | \
-  bash -s -- --from-release --with-recommended-tools --non-interactive
-
-# Update to latest release
-wget -qO- https://raw.githubusercontent.com/gaestu/surfsifter/main/scripts/install.sh | \
-  bash -s -- --from-release --release-version latest --non-interactive
-
-# Pin a specific release
-wget -qO- https://raw.githubusercontent.com/gaestu/surfsifter/main/scripts/install.sh | \
-  bash -s -- --from-release --release-version v1.2.3 --non-interactive
-```
-
-Pinned installer revision (recommended for reproducible installs):
-```bash
-INSTALLER_REF="v1.2.3"  # or a commit SHA
-wget -qO- "https://raw.githubusercontent.com/gaestu/surfsifter/${INSTALLER_REF}/scripts/install.sh" | bash
-```
-
-### Upgrade
-Canonical update command:
-```bash
-wget -qO- https://raw.githubusercontent.com/gaestu/surfsifter/main/scripts/install.sh | \
-  bash -s -- --from-release --release-version latest --non-interactive
-```
-
-Expected summary snippet:
-```text
-Install summary:
-  source: release <resolved-tag> (<asset-name>)
-  previous version: <old-version>
-  installed version: <new-version>
-```
-
-Useful flags:
-- `--verify-only` check tools without installing
-- `--dry-run` print commands without changing system
-- `--prefix /path` install under a custom prefix
-- `--bin-source /path/to/binary` install from local artifact instead of release
-
-### Option 2: Pre-built Releases (Manual)
-Download from the [Releases page](https://github.com/gaestu/surfsifter/releases):
-- **Linux:** Extract and run `./surfsifter`
-- **Windows:** Run `surfsifter.exe`
-
-### Option 3: Install from Source
-```bash
-# Clone repository
-git clone https://github.com/gaestu/surfsifter.git
-cd surfsifter
-
-# Install with Poetry (recommended)
-poetry install --extras all
-poetry run surfsifter
-
-# Or with pip
-pip install -e .[all]
-python -m app.main
-```
-
-### Getting Started
-1. **Create a case** → File menu → "Open/Create Case" → Choose empty directory
-2. **Add evidence** → Evidence tab → Add E01 image (segments auto-detected)
-3. **Run extractors** → Extraction tab → Select desired extractors → Start
-4. **Review results** → Browse tabs (URLs, Images, Browser Inventory, Timeline)
-5. **Tag & report** → Tag findings → Generate PDF report
-
 ## System Requirements
 
 ### Required Dependencies
@@ -250,7 +207,7 @@ Install with `poetry install --extras <feature>`:
 - **`jump-lists`** — olefile, LnkParse3 (Windows Jump Lists)
 - **`macos`** — binarycookies (Safari support)
 - **`leveldb`** — ccl-chromium-reader (browser storage databases)
-- **`ie`** — libesedb-python (IE/Edge ESE parsing)
+- **`ie`** — libesedb-python (IE/Edge ESE parsing; fixes "No ESE library available")
 - **`all`** — Install all optional features
 
 ### External Tools (Optional)
