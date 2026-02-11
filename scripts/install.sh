@@ -51,7 +51,7 @@ Options:
   --bin-source <path>             Install local binary from path
   --from-release                  Download binary from GitHub Releases
   --release-version <tag|latest>  Release tag to install (default: latest)
-  --repo <owner/name>             GitHub repo for releases (default: gaestu/surfsifter)
+  --repo <owner/name>             GitHub repo for releases (default: gaestu/SurfSifter)
   --release-asset <name>          Exact release asset name override
   --github-token <token>          GitHub token for private repos/releases (prefer env var)
   --install-name <name>           Target binary name in <prefix>/bin (default: surfsifter)
@@ -311,7 +311,16 @@ json_path = Path(sys.argv[1])
 arch = sys.argv[2].lower()
 asset_hint = sys.argv[3].strip().lower()
 
-data = json.loads(json_path.read_text(encoding="utf-8"))
+raw = json.loads(json_path.read_text(encoding="utf-8"))
+
+# Handle both single release object and array of releases.
+if isinstance(raw, list):
+    if not raw:
+        sys.exit(2)
+    data = raw[0]
+else:
+    data = raw
+
 tag = data.get("tag_name", "")
 assets = data.get("assets", [])
 
@@ -394,58 +403,85 @@ download_release_binary() {
   local json_file="${TMP_DIR}/release.json"
   local api_fetched=false
   local tried_with_prompt=false
+  local http_code=""
 
   while true; do
     if have_cmd curl; then
+      local -a curl_args=(-sL -H "Accept: application/vnd.github+json" -o "${json_file}" -w "%{http_code}")
       if [[ -n "${GITHUB_TOKEN}" ]]; then
-        if curl -fsSL -H "Accept: application/vnd.github+json" -H "Authorization: Bearer ${GITHUB_TOKEN}" "${api_url}" > "${json_file}"; then
-          api_fetched=true
-          break
-        fi
-      else
-        if curl -fsSL -H "Accept: application/vnd.github+json" "${api_url}" > "${json_file}"; then
-          api_fetched=true
-          break
-        fi
+        curl_args+=(-H "Authorization: Bearer ${GITHUB_TOKEN}")
       fi
+      http_code="$(curl "${curl_args[@]}" "${api_url}" 2>/dev/null || true)"
     elif have_cmd wget; then
+      local -a wget_args=(--server-response -qO "${json_file}" --header="Accept: application/vnd.github+json")
       if [[ -n "${GITHUB_TOKEN}" ]]; then
-        if wget -qO "${json_file}" --header="Accept: application/vnd.github+json" --header="Authorization: Bearer ${GITHUB_TOKEN}" "${api_url}"; then
-          api_fetched=true
-          break
-        fi
+        wget_args+=(--header="Authorization: Bearer ${GITHUB_TOKEN}")
+      fi
+      local wget_stderr
+      if wget_stderr="$(wget "${wget_args[@]}" "${api_url}" 2>&1)"; then
+        http_code="200"
       else
-        if wget -qO "${json_file}" --header="Accept: application/vnd.github+json" "${api_url}"; then
-          api_fetched=true
-          break
-        fi
+        http_code="$(echo "${wget_stderr}" | grep -oP 'HTTP/[0-9.]+ \K[0-9]+' | tail -n 1)"
+        http_code="${http_code:-000}"
       fi
     else
       err "Neither curl nor wget is available for release download."
       exit 1
     fi
 
-    if $tried_with_prompt; then
+    if [[ "${http_code}" == "200" ]]; then
+      api_fetched=true
       break
     fi
-    if [[ -n "${GITHUB_TOKEN}" ]]; then
-      break
-    fi
-    if can_prompt; then
-      warn "GitHub release metadata fetch failed. If repo/releases are private, provide a token."
-      prompt_secret_read GITHUB_TOKEN "GitHub token (leave empty to abort): "
-      if [[ -z "${GITHUB_TOKEN}" ]]; then
-        break
+
+    # 404 on /releases/latest can mean no *full* releases (pre-releases are excluded).
+    # Fall back to the releases list endpoint which includes pre-releases.
+    if [[ "${http_code}" == "404" ]]; then
+      if [[ "${RELEASE_VERSION}" == "latest" && "${api_url}" == *"/releases/latest" ]]; then
+        log "No full release found; checking for pre-releases."
+        api_url="https://api.github.com/repos/${REPO}/releases?per_page=1"
+        continue
       fi
-      tried_with_prompt=true
-      continue
+      if [[ "${RELEASE_VERSION}" == "latest" ]]; then
+        err "No releases (including pre-releases) found for ${REPO}."
+        err "Use --bin-source to install from a local binary, or publish a release first."
+      else
+        err "Release '${RELEASE_VERSION}' not found for ${REPO}."
+        err "Check that the tag exists at https://github.com/${REPO}/releases"
+      fi
+      exit 1
     fi
+
+    # 401/403 — authentication issue, offer to prompt for a token.
+    if [[ "${http_code}" == "401" || "${http_code}" == "403" ]]; then
+      if $tried_with_prompt || [[ -n "${GITHUB_TOKEN}" && ! $tried_with_prompt ]]; then
+        if [[ -n "${GITHUB_TOKEN}" ]]; then
+          err "GitHub token was rejected (HTTP ${http_code}). Check token permissions."
+        fi
+        if $tried_with_prompt; then break; fi
+      fi
+      if [[ -z "${GITHUB_TOKEN}" ]] && can_prompt; then
+        warn "GitHub API returned ${http_code} — authentication required."
+        prompt_secret_read GITHUB_TOKEN "GitHub token (leave empty to abort): "
+        if [[ -z "${GITHUB_TOKEN}" ]]; then
+          break
+        fi
+        tried_with_prompt=true
+        continue
+      fi
+      break
+    fi
+
+    # Any other error.
+    warn "GitHub API returned HTTP ${http_code}."
     break
   done
 
   if ! $api_fetched; then
-    err "Failed to fetch release metadata from ${api_url}."
-    err "For private repos, export SURFSIFTER_GITHUB_TOKEN (or use --github-token)."
+    err "Failed to fetch release metadata from ${api_url} (HTTP ${http_code})."
+    if [[ "${http_code}" == "401" || "${http_code}" == "403" ]]; then
+      err "For private repos, export SURFSIFTER_GITHUB_TOKEN (or use --github-token)."
+    fi
     exit 1
   fi
 
