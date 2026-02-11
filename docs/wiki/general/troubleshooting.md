@@ -12,6 +12,10 @@
 **Symptom:** A feature is missing (e.g., Jump Lists, cache decompression, Safari).
 - Install the corresponding extras (see [[general/install|Installation]]).
 
+**Symptom:** `No ESE library available. Install libesedb-python or dissect.esedb ...`
+- Source install: run `poetry install --extras ie` (or `pip install -e .[ie]`).
+- Prebuilt release binary: update to the latest release/installer build.
+
 ## External tools not detected
 **Symptom:** Carving or metadata features are disabled.
 - Ensure the tool is installed and available on your system `PATH`.

@@ -73,7 +73,7 @@ jobs:
         run: pipx install poetry
 
       - name: Install dependencies
-        run: poetry install --no-interaction
+        run: poetry install --no-interaction --extras all
 
       - name: Run tests before build
         run: poetry run pytest -k "not gui and not e01" -q --tb=short
@@ -151,7 +151,7 @@ jobs:
         run: pip install poetry
 
       - name: Install dependencies
-        run: poetry install --no-interaction
+        run: poetry install --no-interaction --extras all
 
       - name: Fetch SleuthKit tools (Windows)
         shell: pwsh
