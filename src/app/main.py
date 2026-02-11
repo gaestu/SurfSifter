@@ -74,6 +74,10 @@ class MainWindow(QMainWindow):
     def __init__(self, base_dir: Path) -> None:
         super().__init__()
         self.base_dir = base_dir
+        # User-facing browse directory: when running from a frozen PyInstaller
+        # bundle, base_dir points to the ephemeral _MEIPASS temp directory which
+        # is not meaningful to the user.  Use the home directory instead.
+        self.browse_dir: Path = Path.home() if getattr(sys, 'frozen', False) else base_dir
         self.app_config: AppConfig = load_app_config(base_dir)
         self.case_path: Optional[Path] = None
         self.case_db_path: Optional[Path] = None  # Track the actual database file path
@@ -84,7 +88,9 @@ class MainWindow(QMainWindow):
         self._current_counts: Optional[EvidenceCounts] = None
 
         self.setWindowTitle("SurfSifter")
-        self.setWindowIcon(QIcon(str(Path(__file__).resolve().parent.parent.parent / "config" / "branding" / "surfsifter.png")))
+        icon_path = base_dir / "config" / "branding" / "surfsifter.png"
+        if icon_path.exists():
+            self.setWindowIcon(QIcon(str(icon_path)))
         self.resize(1100, 720)
 
         # Apply logging config (level, rotation sizes)
@@ -650,7 +656,7 @@ class MainWindow(QMainWindow):
         db_file, _ = QFileDialog.getOpenFileName(
             self,
             "Select Case Database",
-            str(self.base_dir),
+            str(self.browse_dir),
             "SQLite Database Files (*.sqlite *.db);;All Files (*)"
         )
         if not db_file:
@@ -674,7 +680,7 @@ class MainWindow(QMainWindow):
 
     def _create_case_dialog(self) -> None:
         """Show dialog to create a new case with metadata."""
-        dialog = CreateCaseDialog(self, self.base_dir)
+        dialog = CreateCaseDialog(self, self.browse_dir)
         if dialog.exec() != QDialog.Accepted:
             return
 
@@ -2578,7 +2584,7 @@ class MainWindow(QMainWindow):
         if self.case_path:
             cases_dir = self.case_path.parent
         else:
-            cases_dir = self.base_dir / "images"
+            cases_dir = self.browse_dir
 
         # Show import dialog (dialog now has destination picker)
         dialog = ImportDialog(cases_dir, self)
@@ -2759,8 +2765,14 @@ class MainWindow(QMainWindow):
 
 
 def main() -> int:
+    # Handle --version before starting the GUI
+    if "--version" in sys.argv or "-V" in sys.argv:
+        from core.app_version import get_app_version
+        print(f"SurfSifter {get_app_version()}")
+        return 0
+
     if getattr(sys, 'frozen', False):
-        # Running in a PyInstaller bundle
+        # Running in a PyInstaller bundle — bundled read-only assets live in _MEIPASS
         base_dir = Path(sys._MEIPASS)
     else:
         # Running from source

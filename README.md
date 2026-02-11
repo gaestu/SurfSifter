@@ -10,7 +10,7 @@ A cross-platform forensic workstation for analyzing browser artifacts, cached me
 
 ## Status
 
-**v0.3.0-beta** — Feature-complete core functionality, actively tested. [Download pre-built releases](https://github.com/gaestu/surfsifter/releases) or build from source.
+**v0.3.1-beta** — Feature-complete core functionality, actively tested. [Download pre-built releases](https://github.com/gaestu/surfsifter/releases) or build from source.
 
 ## What It Does
 

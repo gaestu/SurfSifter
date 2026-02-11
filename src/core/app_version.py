@@ -10,7 +10,12 @@ import re
 @lru_cache(maxsize=1)
 def get_app_version() -> str:
     """Return the project version from ``pyproject.toml``."""
-    pyproject_path = Path(__file__).resolve().parents[2] / "pyproject.toml"
+    import sys
+    if getattr(sys, 'frozen', False):
+        # PyInstaller bundle — pyproject.toml is bundled alongside the executable
+        pyproject_path = Path(sys._MEIPASS) / "pyproject.toml"
+    else:
+        pyproject_path = Path(__file__).resolve().parents[2] / "pyproject.toml"
     try:
         content = pyproject_path.read_text(encoding="utf-8")
     except OSError:

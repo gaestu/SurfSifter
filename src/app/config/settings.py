@@ -146,6 +146,12 @@ class AppSettings:
 
 
 def settings_path(base_dir: Path) -> Path:
-    config_dir = base_dir / "config"
+    import sys
+    if getattr(sys, 'frozen', False):
+        # Frozen binary: write settings to a persistent user config directory,
+        # not the ephemeral _MEIPASS temp dir.
+        config_dir = Path.home() / ".config" / "surfsifter"
+    else:
+        config_dir = base_dir / "config"
     config_dir.mkdir(parents=True, exist_ok=True)
     return config_dir / "settings.json"

@@ -25,6 +25,20 @@ _add_if_exists(additional_dirs, project_root / "config", "config")
 _add_if_exists(additional_dirs, project_root / "rules", "rules")
 _add_if_exists(additional_dirs, project_root / "docs", "docs")
 _add_if_exists(additional_dirs, project_root / "src" / "reports", "src/reports")
+_add_if_exists(additional_dirs, project_root / "reference_lists", "reference_lists")
+_add_if_exists(additional_dirs, project_root / "pyproject.toml", ".")
+
+# Database migration SQL files — required for case/evidence DB initialization
+_add_if_exists(
+    additional_dirs,
+    source_dir / "core" / "database" / "migrations",
+    "core/database/migrations",
+)
+_add_if_exists(
+    additional_dirs,
+    source_dir / "core" / "database" / "migrations_evidence",
+    "core/database/migrations_evidence",
+)
 _add_if_exists(
     additional_dirs,
     project_root / "vendor" / "sleuthkit" / "linux-x86_64",

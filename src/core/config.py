@@ -73,7 +73,14 @@ def load_app_config(base_dir: Path) -> AppConfig:
         tool_paths[tool_name] = Path(path_str)
 
     rules_dir = base_dir / "rules"
-    logs_dir = base_dir / "logs"
+
+    # Logs must go to a persistent, writable location — not the ephemeral
+    # _MEIPASS temp directory used by PyInstaller.
+    import sys
+    if getattr(sys, 'frozen', False):
+        logs_dir = Path.home() / ".config" / "surfsifter" / "logs"
+    else:
+        logs_dir = base_dir / "logs"
     # Ensure critical directories exist; they are safe to create because they live under the workspace.
     logs_dir.mkdir(parents=True, exist_ok=True)
 
