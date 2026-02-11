@@ -3,7 +3,6 @@ Extractor registry for auto-discovery and management.
 """
 
 from typing import Dict, List, Optional, Set
-from pathlib import Path
 import importlib
 import pkgutil
 import sys
@@ -104,10 +103,12 @@ class ExtractorRegistry:
             # Cannot find extractors package
             return
 
-        package_path = Path(extractors_package.__file__).parent
+        package_paths = getattr(extractors_package, "__path__", None)
+        if not package_paths:
+            return
 
-        # Iterate over subdirectories
-        for finder, module_name, ispkg in pkgutil.iter_modules([str(package_path)]):
+        # Iterate over top-level extractor packages
+        for finder, module_name, ispkg in pkgutil.iter_modules(package_paths):
             # Skip private modules and non-packages
             if module_name.startswith('_') or not ispkg:
                 continue
@@ -118,7 +119,7 @@ class ExtractorRegistry:
 
             # Check if this is a group directory (contains nested extractors)
             if module_name in GROUP_DIRECTORIES:
-                self._discover_group_modules(package_path / module_name, module_name)
+                self._discover_group_modules(module_name)
                 continue
 
             try:
@@ -127,7 +128,12 @@ class ExtractorRegistry:
                 # Log but don't fail - allow partial registry
                 print(f"Warning: Failed to load extractor module '{module_name}': {e}")
 
-    def _discover_group_modules(self, group_path: Path, group_name: str):
+        # PyInstaller one-file bundles do not expose package directories on disk.
+        # Fall back to explicit package exports when frozen.
+        if getattr(sys, "frozen", False):
+            self._discover_frozen_exports()
+
+    def _discover_group_modules(self, group_name: str):
         """
         Discover extractors within a group directory.
 
@@ -136,41 +142,49 @@ class ExtractorRegistry:
         2. 2-level (system, media, carvers, cache, importers): group/extractor/ (e.g., system/registry)
 
         Args:
-            group_path: Path to the group directory (e.g., .../extractors/browser)
             group_name: Name of the group (e.g., "browser")
         """
-        if not group_path.is_dir():
+        group_package_path = f"{self._package_import_prefix}.{group_name}"
+        try:
+            group_module = importlib.import_module(group_package_path)
+        except ImportError:
+            return
+
+        group_paths = getattr(group_module, "__path__", None)
+        if not group_paths:
             return
 
         # Browser group uses 3-level nesting (family/artifact)
         if group_name == 'browser':
-            self._discover_browser_family_modules(group_path, group_name)
+            self._discover_browser_family_modules(group_paths, group_name)
         else:
             # Other groups use 2-level nesting (direct extractor folders)
-            self._discover_direct_modules(group_path, group_name)
+            self._discover_direct_modules(group_paths, group_name)
 
-    def _discover_browser_family_modules(self, group_path: Path, group_name: str):
+    def _discover_browser_family_modules(self, group_paths, group_name: str):
         """
         Discover browser extractors with 3-level nesting: browser/family/artifact/.
 
         Example: browser/chromium/history/ → ChromiumHistoryExtractor
         """
         # Iterate over family directories (e.g., chromium, firefox, safari)
-        for family_dir in group_path.iterdir():
-            if not family_dir.is_dir() or family_dir.name.startswith('_'):
+        for _, family_name, ispkg in pkgutil.iter_modules(group_paths):
+            if not ispkg or family_name.startswith('_'):
                 continue
 
-            family_name = family_dir.name
+            family_module_path = f"{self._package_import_prefix}.{group_name}.{family_name}"
+            try:
+                family_module = importlib.import_module(family_module_path)
+            except ImportError:
+                continue
+
+            family_paths = getattr(family_module, "__path__", None)
+            if not family_paths:
+                continue
 
             # Iterate over artifact directories (e.g., history, cookies)
-            for artifact_dir in family_dir.iterdir():
-                if not artifact_dir.is_dir() or artifact_dir.name.startswith('_'):
-                    continue
-
-                artifact_name = artifact_dir.name
-
-                # Check if this directory has an __init__.py (is a package)
-                if not (artifact_dir / '__init__.py').exists():
+            for _, artifact_name, artifact_ispkg in pkgutil.iter_modules(family_paths):
+                if not artifact_ispkg or artifact_name.startswith('_'):
                     continue
 
                 # Build the module path: browser.chromium.history
@@ -181,7 +195,7 @@ class ExtractorRegistry:
                 except Exception as e:
                     print(f"Warning: Failed to load extractor '{nested_module_path}': {e}")
 
-    def _discover_direct_modules(self, group_path: Path, group_name: str):
+    def _discover_direct_modules(self, group_paths, group_name: str):
         """
         Discover extractors with 2-level nesting: group/extractor/.
 
@@ -194,18 +208,12 @@ class ExtractorRegistry:
         # Get skip list for this group (implementation modules not meant for discovery)
         skip_modules = SKIP_GROUP_MODULES.get(group_name, set())
 
-        for extractor_dir in group_path.iterdir():
-            if not extractor_dir.is_dir() or extractor_dir.name.startswith('_'):
+        for _, extractor_name, ispkg in pkgutil.iter_modules(group_paths):
+            if not ispkg or extractor_name.startswith('_'):
                 continue
-
-            extractor_name = extractor_dir.name
 
             # Skip implementation modules (used as delegates, not directly discoverable)
             if extractor_name in skip_modules:
-                continue
-
-            # Check if this directory has an __init__.py (is a package)
-            if not (extractor_dir / '__init__.py').exists():
                 continue
 
             # Build the module path: system.registry
@@ -215,6 +223,46 @@ class ExtractorRegistry:
                 self._load_group_module(module_path, group_name, extractor_name)
             except Exception as e:
                 print(f"Warning: Failed to load extractor '{module_path}': {e}")
+
+    def _discover_frozen_exports(self):
+        """
+        Frozen-bundle fallback discovery using package exports.
+
+        PyInstaller one-file bundles may not expose package directories on disk,
+        which breaks filesystem-style package scans.
+        """
+        base_module = importlib.import_module(f'{self._package_import_prefix}.base')
+        RegistryBaseExtractor = base_module.BaseExtractor
+
+        package_candidates = [
+            f"{self._package_import_prefix}.carvers",
+            f"{self._package_import_prefix}.media",
+            f"{self._package_import_prefix}.system",
+            f"{self._package_import_prefix}.system.file_list",
+            f"{self._package_import_prefix}.browser.chromium",
+            f"{self._package_import_prefix}.browser.firefox",
+            f"{self._package_import_prefix}.browser.safari",
+            f"{self._package_import_prefix}.browser.ie_legacy",
+        ]
+
+        for package_path in package_candidates:
+            try:
+                module = importlib.import_module(package_path)
+            except ImportError:
+                continue
+
+            for export_name in getattr(module, "__all__", []):
+                export = getattr(module, export_name, None)
+                if (
+                    isinstance(export, type)
+                    and issubclass(export, RegistryBaseExtractor)
+                    and export is not RegistryBaseExtractor
+                ):
+                    try:
+                        instance = export()
+                        self._modules[instance.metadata.name] = instance
+                    except Exception as e:
+                        print(f"Warning: Failed to instantiate extractor '{export.__name__}': {e}")
 
     def _load_module(self, module_name: str):
         """

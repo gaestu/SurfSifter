@@ -13,7 +13,7 @@ def get_app_version() -> str:
     import sys
     if getattr(sys, 'frozen', False):
         # PyInstaller bundle — pyproject.toml is bundled alongside the executable
-        pyproject_path = Path(sys._MEIPASS) / "pyproject.toml"
+        pyproject_path = Path(getattr(sys, '_MEIPASS', '.')) / "pyproject.toml"
     else:
         pyproject_path = Path(__file__).resolve().parents[2] / "pyproject.toml"
     try:

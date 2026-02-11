@@ -1,8 +1,12 @@
 """Centralized extractor registry discovery tests."""
 from __future__ import annotations
 
+import pkgutil
+import sys
+
 import pytest
 
+from extractors import ExtractorRegistry
 from extractors.browser.chromium.autofill import ChromiumAutofillExtractor
 from extractors.browser.chromium.bookmarks import ChromiumBookmarksExtractor
 from extractors.browser.chromium.cookies import ChromiumCookiesExtractor
@@ -70,6 +74,18 @@ REGISTRY_INSTANCES = [
 def test_registry_discovers_extractors(extractor_registry_all):
     """Registry discovers at least some extractors."""
     assert len(extractor_registry_all) > 0, "Registry should discover extractors"
+
+
+def test_registry_discovery_fallback_in_frozen_mode(monkeypatch):
+    """Frozen-mode fallback still discovers extractors when iter_modules yields nothing."""
+    monkeypatch.setattr(pkgutil, "iter_modules", lambda *args, **kwargs: iter(()))
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+
+    registry = ExtractorRegistry()
+
+    assert registry.count() > 0
+    assert "bulk_extractor" in registry.list_names()
+    assert "file_list" in registry.list_names()
 
 
 def test_registry_minimum_count(extractor_registry_all):

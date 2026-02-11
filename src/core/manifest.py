@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional
@@ -25,7 +26,9 @@ class ManifestValidationError(Exception):
 
 
 def _project_root() -> Path:
-    """Return project root (two levels up from this file)."""
+    """Return project root, handling PyInstaller frozen bundles."""
+    if getattr(sys, "frozen", False):
+        return Path(getattr(sys, "_MEIPASS", "."))
     return Path(__file__).resolve().parents[2]
 
 

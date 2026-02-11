@@ -39,6 +39,23 @@ _add_if_exists(
     source_dir / "core" / "database" / "migrations_evidence",
     "core/database/migrations_evidence",
 )
+# Non-Python data files inside extractor packages — not collected by
+# collect_submodules() which only gathers .py modules.
+_add_if_exists(
+    additional_dirs,
+    source_dir / "extractors" / "_shared" / "appids.json",
+    "extractors/_shared",
+)
+_add_if_exists(
+    additional_dirs,
+    source_dir / "extractors" / "media" / "scalpel" / "default.conf",
+    "extractors/media/scalpel",
+)
+_add_if_exists(
+    additional_dirs,
+    source_dir / "extractors" / "carvers" / "browser_carver" / "browser_artifacts.conf",
+    "extractors/carvers/browser_carver",
+)
 _add_if_exists(
     additional_dirs,
     project_root / "vendor" / "sleuthkit" / "win64",
@@ -72,7 +89,31 @@ if (project_root / "resources").exists() and resources_entry not in _seen:
     _seen.add(resources_entry)
 
 binaries = collect_dynamic_libs("PySide6")
-hiddenimports = collect_submodules("PySide6")
+hiddenimports = (
+    collect_submodules("PySide6")
+    + collect_submodules("extractors")
+    + collect_submodules("reports")
+)
+
+# Include optional C-extension dependencies when installed.
+# These are conditionally imported at runtime (try/except) so PyInstaller
+# cannot trace them automatically.
+for _opt_mod in [
+    "brotli", "zstandard", "olefile", "LnkParse3", "binarycookies",
+    "ccl_chromium_reader", "regipy", "tldextract",
+]:
+    try:
+        __import__(_opt_mod)
+        hiddenimports += collect_submodules(_opt_mod)
+    except ImportError:
+        pass
+
+# tldextract ships a bundled TLD suffix snapshot as package data.
+try:
+    __import__("tldextract")
+    datas += collect_data_files("tldextract")
+except ImportError:
+    pass
 
 excludes = [
     "tests",

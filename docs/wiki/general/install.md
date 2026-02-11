@@ -44,13 +44,13 @@ cd surfsifter
 
 ### Install with Poetry (recommended)
 ```bash
-poetry install --extras all
+poetry install
 poetry run surfsifter
 ```
 
 ### Install with pip
 ```bash
-pip install -e .[all]
+pip install -e .
 python -m app.main
 ```
 
@@ -71,20 +71,13 @@ sudo apt-get install libewf-dev libtsk-dev build-essential python3-dev \
 - Python **>= 3.10, < 3.14**
 - Key packages include PySide6, pytsk3, libewf-python, Pillow, imagehash, WeasyPrint, regipy
 
-## Optional Dependencies (Extras)
-Install optional features with Poetry or pip extras:
-- **`cache-decompression`** - brotli, zstandard (Chromium cache)
-- **`jump-lists`** - olefile, LnkParse3 (Windows Jump Lists)
-- **`macos`** - binarycookies (Safari support)
-- **`leveldb`** - ccl-chromium-reader (browser storage databases)
-- **`ie`** - libesedb-python (IE/Edge ESE parsing; fixes "No ESE library available")
-- **`all`** - install all optional features
-
-Examples:
-```bash
-poetry install --extras jump-lists
-pip install -e .[cache-decompression]
-```
+## Bundled Python Dependencies
+All artifact-parsing libraries are installed automatically with `poetry install`:
+- brotli, zstandard (Chromium cache decompression)
+- olefile, LnkParse3 (Windows Jump Lists)
+- binarycookies (Safari support)
+- ccl-chromium-reader (browser storage databases)
+- libesedb-python (IE/Edge ESE parsing)
 
 ## External Tools (Optional)
 Some features rely on external tools available on your system `PATH`.

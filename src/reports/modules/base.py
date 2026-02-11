@@ -191,11 +191,10 @@ class BaseReportModule(ABC):
         Returns:
             Path to template file, or None if no template
         """
-        module_file = Path(__file__).parent
-        # Get the actual module's directory (subclass location)
+        from ..paths import get_module_template_dir
         import inspect
         subclass_file = inspect.getfile(self.__class__)
-        module_dir = Path(subclass_file).parent
+        module_dir = get_module_template_dir(subclass_file)
         template_path = module_dir / "template.html"
 
         if template_path.exists():

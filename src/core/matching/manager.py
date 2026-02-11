@@ -570,8 +570,12 @@ def install_predefined_lists(dest_base_path: Optional[Path] = None) -> List[str]
         List of installed list names
     """
     # Determine source directory (repository reference_lists/)
-    # Assume this file is in src/core/matching/, so go up to repo root
-    repo_root = Path(__file__).resolve().parent.parent.parent.parent
+    import sys
+    if getattr(sys, "frozen", False):
+        repo_root = Path(getattr(sys, "_MEIPASS", "."))
+    else:
+        # src/core/matching/manager.py -> 4 parents -> repo root
+        repo_root = Path(__file__).resolve().parent.parent.parent.parent
     source_dir = repo_root / "reference_lists"
 
     if not source_dir.exists():

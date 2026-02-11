@@ -32,33 +32,25 @@ chardet = "^5.2.0"
 regipy = "^5.2.0"
 tldextract = "^5.1.0"
 
-# Optional decompression support for Chromium simple cache
-brotli = { version = "^1.1.0", optional = true }
-zstandard = { version = "^0.23.0", optional = true }
+# Decompression support for Chromium simple cache
+brotli = "^1.1.0"
+zstandard = "^0.23.0"
 lz4 = "^4.4.5"
 
-# Optional Jump Lists parsing support (Windows forensics)
-olefile = { version = ">=0.47", optional = true }
-LnkParse3 = { version = ">=1.4.0", optional = true }
+# Jump Lists parsing support (Windows forensics)
+olefile = ">=0.47"
+LnkParse3 = ">=1.4.0"
 
-# Optional Safari binary cookies parsing (macOS forensics)
-binarycookies = { version = ">=0.1", optional = true }
+# Safari binary cookies parsing (macOS forensics)
+binarycookies = ">=0.1"
 
-# Optional LevelDB parsing for browser storage (Local Storage, Session Storage, IndexedDB)
+# LevelDB parsing for browser storage (Local Storage, Session Storage, IndexedDB)
 # MIT License - https://github.com/cclgroupltd/ccl_chromium_reader
-ccl-chromium-reader = { git = "https://github.com/cclgroupltd/ccl_chromium_reader.git", rev = "552516720761397c4d482908b6b8b08130b313a1", optional = true }
+ccl-chromium-reader = { git = "https://github.com/cclgroupltd/ccl_chromium_reader.git", rev = "552516720761397c4d482908b6b8b08130b313a1" }
 
-# Optional ESE database parsing for Internet Explorer / Legacy Edge WebCache
+# ESE database parsing for Internet Explorer / Legacy Edge WebCache
 # LGPL-3.0 License - https://github.com/libyal/libesedb
-libesedb-python = { version = ">=20240420", optional = true }
-
-[tool.poetry.extras]
-cache-decompression = ["brotli", "zstandard"]
-jump-lists = ["olefile", "LnkParse3"]
-macos = ["binarycookies"]
-leveldb = ["ccl-chromium-reader"]
-ie = ["libesedb-python"]
-all = ["brotli", "zstandard", "olefile", "LnkParse3", "binarycookies", "ccl-chromium-reader", "libesedb-python"]
+libesedb-python = ">=20240420"
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^7.4.4"
