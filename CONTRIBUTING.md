@@ -5,7 +5,7 @@
 1. Fork and clone the repository.
 2. Install dependencies:
    ```bash
-   poetry install --extras all
+   poetry install
    ```
 3. Run the app:
    ```bash
