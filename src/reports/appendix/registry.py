@@ -2,11 +2,13 @@
 Appendix module registry for auto-discovering appendix modules.
 
 Scans src/reports/appendix/ for subfolders containing module.py files
-and registers them automatically.
+and registers them automatically.  Falls back to package-level exports
+when running inside a PyInstaller frozen bundle.
 """
 
 from __future__ import annotations
 
+import importlib
 import importlib.util
 import logging
 from pathlib import Path
@@ -36,24 +38,52 @@ class AppendixRegistry:
     def _discover_modules(self) -> None:
         modules_dir = get_appendix_dir()
 
-        if not modules_dir.exists():
+        if modules_dir.exists():
+            for item in modules_dir.iterdir():
+                if not item.is_dir():
+                    continue
+                if item.name.startswith("_"):
+                    continue
+
+                module_file = item / "module.py"
+                if not module_file.exists():
+                    continue
+
+                try:
+                    self._load_module(item.name, module_file)
+                except Exception as exc:
+                    logger.warning("Failed to load appendix module from %s: %s", item.name, exc)
+        else:
             logger.warning("Appendix modules directory not found: %s", modules_dir)
+
+        # Frozen-bundle fallback: filesystem scans may find nothing inside
+        # a PyInstaller one-file archive.  Use package-level exports instead.
+        if not self._modules:
+            self._discover_from_package_exports()
+
+    def _discover_from_package_exports(self) -> None:
+        """Fallback discovery using package-level ``__all__`` exports."""
+        try:
+            pkg = importlib.import_module(__package__ or "reports.appendix")
+        except ImportError:
             return
 
-        for item in modules_dir.iterdir():
-            if not item.is_dir():
-                continue
-            if item.name.startswith("_"):
-                continue
-
-            module_file = item / "module.py"
-            if not module_file.exists():
-                continue
-
-            try:
-                self._load_module(item.name, module_file)
-            except Exception as exc:
-                logger.warning("Failed to load appendix module from %s: %s", item.name, exc)
+        for name in getattr(pkg, "__all__", []):
+            cls = getattr(pkg, name, None)
+            if (
+                isinstance(cls, type)
+                and issubclass(cls, BaseAppendixModule)
+                and cls is not BaseAppendixModule
+            ):
+                try:
+                    instance = cls()
+                    module_id = instance.metadata.module_id
+                    if module_id not in self._modules:
+                        self._modules[module_id] = cls
+                        self._instances[module_id] = instance
+                        logger.debug("Registered appendix module (export fallback): %s", module_id)
+                except Exception as e:
+                    logger.warning("Failed to register appendix module %s: %s", name, e)
 
     def _load_module(self, folder_name: str, module_file: Path) -> None:
         module_prefix = __package__ or "reports.appendix"

@@ -10,7 +10,9 @@ A cross-platform forensic workstation for analyzing browser artifacts, cached me
 
 ## Status
 
-**v0.3.1-beta** — Feature-complete core functionality, actively tested. [Download pre-built releases](https://github.com/gaestu/surfsifter/releases) or build from source.
+**v0.3.2-beta** — Feature-complete core functionality, actively tested. [Download pre-built releases](https://github.com/gaestu/surfsifter/releases) or build from source.
+
+Mostly tested on fedora and ubuntu - running on windows is still abigious :-) I recommend to use wsl on windows for running the app.
 
 ## What It Does
 
@@ -65,11 +67,11 @@ git clone https://github.com/gaestu/surfsifter.git
 cd surfsifter
 
 # Install with Poetry (recommended)
-poetry install --extras all
+poetry install
 poetry run surfsifter
 
 # Or with pip
-pip install -e .[all]
+pip install -e .
 python -m app.main
 ```
 
@@ -201,14 +203,13 @@ The installer handles distro package mapping and tool verification.
 - Python ≥3.10, <3.14
 - PySide6, pytsk3, libewf-python, Pillow, imagehash, WeasyPrint, regipy
 
-### Optional Dependencies
-Install with `poetry install --extras <feature>`:
-- **`cache-decompression`** — brotli, zstandard (Chromium cache)
-- **`jump-lists`** — olefile, LnkParse3 (Windows Jump Lists)
-- **`macos`** — binarycookies (Safari support)
-- **`leveldb`** — ccl-chromium-reader (browser storage databases)
-- **`ie`** — libesedb-python (IE/Edge ESE parsing; fixes "No ESE library available")
-- **`all`** — Install all optional features
+### Bundled Python Dependencies
+All artifact-parsing libraries are installed automatically:
+- brotli, zstandard (Chromium cache decompression)
+- olefile, LnkParse3 (Windows Jump Lists)
+- binarycookies (Safari support)
+- ccl-chromium-reader (browser storage databases)
+- libesedb-python (IE/Edge ESE parsing)
 
 ### External Tools (Optional)
 Discovered automatically on `PATH`:

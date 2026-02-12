@@ -2,7 +2,8 @@
 Module registry for auto-discovering and managing report modules.
 
 Scans src/reports/modules/ for subfolders containing module.py files
-and registers them automatically.
+and registers them automatically.  Falls back to package-level exports
+when running inside a PyInstaller frozen bundle.
 """
 
 from __future__ import annotations
@@ -10,6 +11,7 @@ from __future__ import annotations
 import importlib
 import importlib.util
 import logging
+import sys
 from pathlib import Path
 from typing import Dict, List, Optional, Type
 
@@ -54,26 +56,59 @@ class ModuleRegistry:
         """Scan for modules in subdirectories."""
         modules_dir = get_modules_dir()
 
-        if not modules_dir.exists():
+        if modules_dir.exists():
+            for item in modules_dir.iterdir():
+                if not item.is_dir():
+                    continue
+
+                # Skip __pycache__ and other non-module directories
+                if item.name.startswith("_"):
+                    continue
+
+                module_file = item / "module.py"
+                if not module_file.exists():
+                    continue
+
+                try:
+                    self._load_module(item.name, module_file)
+                except Exception as e:
+                    logger.warning(f"Failed to load module from {item.name}: {e}")
+        else:
             logger.warning("Report modules directory not found: %s", modules_dir)
+
+        # Frozen-bundle fallback: filesystem scans may find nothing inside
+        # a PyInstaller one-file archive.  Use package-level exports instead.
+        if not self._modules:
+            self._discover_from_package_exports()
+
+    def _discover_from_package_exports(self) -> None:
+        """Fallback discovery using package-level ``__all__`` exports.
+
+        The parent ``reports.modules`` package already imports every built-in
+        module class.  Iterating over ``__all__`` is reliable regardless of
+        whether the filesystem is actually present (PyInstaller one-file mode).
+        """
+        try:
+            pkg = importlib.import_module(__package__ or "reports.modules")
+        except ImportError:
             return
 
-        for item in modules_dir.iterdir():
-            if not item.is_dir():
-                continue
-
-            # Skip __pycache__ and other non-module directories
-            if item.name.startswith("_"):
-                continue
-
-            module_file = item / "module.py"
-            if not module_file.exists():
-                continue
-
-            try:
-                self._load_module(item.name, module_file)
-            except Exception as e:
-                logger.warning(f"Failed to load module from {item.name}: {e}")
+        for name in getattr(pkg, "__all__", []):
+            cls = getattr(pkg, name, None)
+            if (
+                isinstance(cls, type)
+                and issubclass(cls, BaseReportModule)
+                and cls is not BaseReportModule
+            ):
+                try:
+                    instance = cls()
+                    module_id = instance.metadata.module_id
+                    if module_id not in self._modules:
+                        self._modules[module_id] = cls
+                        self._instances[module_id] = instance
+                        logger.debug("Registered module (export fallback): %s", module_id)
+                except Exception as e:
+                    logger.warning("Failed to register module %s: %s", name, e)
 
     def _load_module(self, folder_name: str, module_file: Path) -> None:
         """Load a module from its module.py file.

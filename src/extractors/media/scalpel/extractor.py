@@ -40,7 +40,9 @@ LOGGER = get_logger("extractors.scalpel")
 class ScalpelExtractor(BaseExtractor):
     """Scalpel image carving extractor."""
 
-    # Default config file path (in extractor directory)
+    # Default config file path (in extractor directory).
+    # In frozen builds __file__ resolves inside _MEIPASS which is correct
+    # as long as the .conf is bundled as a data file.
     DEFAULT_CONFIG_PATH = Path(__file__).parent / "default.conf"
     VERSION = "1.6.0"
 
@@ -143,8 +145,12 @@ class ScalpelExtractor(BaseExtractor):
             config_file = Path(config_file)
 
         if not config_file.is_absolute():
-            # Assume relative to project root (5 levels up: extractor.py -> scalpel -> media -> extractors -> src -> root)
-            project_root = Path(__file__).parent.parent.parent.parent.parent
+            # Resolve relative to project root
+            import sys as _sys
+            if getattr(_sys, "frozen", False):
+                project_root = Path(getattr(_sys, "_MEIPASS", "."))
+            else:
+                project_root = Path(__file__).parent.parent.parent.parent.parent
             config_file = project_root / config_file
 
         if not config_file.exists():

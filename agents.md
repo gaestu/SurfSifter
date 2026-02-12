@@ -165,12 +165,12 @@ extractors/→ core/ (never app/)
 - Pillow, imagehash, WeasyPrint, regipy, tldextract
 - PyYAML, jsonschema, SQLAlchemy, Jinja2, requests
 
-**Optional Extras:**
-- `cache-decompression`: brotli, zstandard
-- `jump-lists`: olefile, LnkParse3
-- `macos`: binarycookies
-- `leveldb`: ccl-chromium-reader (LevelDB parsing)
-- `ie`: libesedb-python (ESE database parsing)
+**Bundled (all installed by default):**
+- brotli, zstandard (Chromium cache decompression)
+- olefile, LnkParse3 (Windows Jump Lists)
+- binarycookies (Safari support)
+- ccl-chromium-reader (LevelDB parsing)
+- libesedb-python (ESE database parsing)
 
 **External Tools (discovered via PATH):**
 - bulk_extractor, foremost, scalpel, exiftool, firejail

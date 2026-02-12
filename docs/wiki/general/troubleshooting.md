@@ -10,7 +10,11 @@
 
 ## Optional features not available
 **Symptom:** A feature is missing (e.g., Jump Lists, cache decompression, Safari).
-- Install the corresponding extras (see [[general/install|Installation]]).
+- All artifact-parsing libraries are now installed by default. Re-run `poetry install` to ensure they are present.
+
+**Symptom:** `No ESE library available. Install libesedb-python or dissect.esedb ...`
+- Source install: re-run `poetry install` (libesedb-python is now a standard dependency).
+- Prebuilt release binary: update to the latest release/installer build.
 
 **Symptom:** `No ESE library available. Install libesedb-python or dissect.esedb ...`
 - Source install: run `poetry install --extras ie` (or `pip install -e .[ie]`).

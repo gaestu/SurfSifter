@@ -8,6 +8,7 @@ Supports both exact ID matching and pattern-based name matching.
 from __future__ import annotations
 
 import re
+import sys
 from pathlib import Path
 from typing import Dict, Any, List, Optional
 
@@ -18,9 +19,21 @@ from core.logging import get_logger
 LOGGER = get_logger("extractors.browser_extensions.known")
 
 
+def _resolve_known_extensions_path() -> Path:
+    """Resolve the default path to known_extensions.yml.
+
+    Handles both development (source tree) and PyInstaller frozen environments.
+    """
+    if getattr(sys, "frozen", False):
+        meipass = getattr(sys, "_MEIPASS", None)
+        if meipass:
+            return Path(meipass) / "reference_lists" / "known_extensions.yml"
+    # 4 levels up: known_extensions.py -> _shared -> extractors -> src -> root
+    return Path(__file__).parent.parent.parent.parent / "reference_lists" / "known_extensions.yml"
+
+
 # Default path to known extensions file
-# 4 levels up: known_extensions.py -> _shared -> extractors -> src -> root
-DEFAULT_KNOWN_EXTENSIONS_PATH = Path(__file__).parent.parent.parent.parent / "reference_lists" / "known_extensions.yml"
+DEFAULT_KNOWN_EXTENSIONS_PATH = _resolve_known_extensions_path()
 
 
 def load_known_extensions(path: Optional[Path] = None) -> Dict[str, Any]:

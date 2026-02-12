@@ -885,16 +885,24 @@ class CacheIngestionHandler:
         # Build a lookup of extracted entry hashes → source type
         # by scanning the manifest for regular + doomed + trash entries
         entry_file_lookup: Dict[str, str] = {}  # hash -> source
+        # Also build a hash→file_entry map for O(1) URL resolution
+        # (replaces per-entry full manifest scan that was O(n*m))
+        _hash_to_file_entry: Dict[str, Dict[str, Any]] = {}
+        _CACHE_ARTIFACT_TYPES = {"cache_firefox", "cache_doomed", "cache_trash"}
+        _ARTIFACT_SOURCE_MAP = {
+            "cache_firefox": "entries",
+            "cache_doomed": "doomed",
+            "cache_trash": "trash",
+        }
         for fe in manifest.get("files", []):
             if not fe.get("success", True) or not fe.get("extracted_path"):
                 continue
             at = fe.get("artifact_type", "cache_firefox")
-            if at == "cache_firefox":
-                entry_file_lookup[Path(fe.get("source_path", "")).name.upper()] = "entries"
-            elif at == "cache_doomed":
-                entry_file_lookup[Path(fe.get("source_path", "")).name.upper()] = "doomed"
-            elif at == "cache_trash":
-                entry_file_lookup[Path(fe.get("source_path", "")).name.upper()] = "trash"
+            source_name = Path(fe.get("source_path", "")).name.upper()
+            if at in _ARTIFACT_SOURCE_MAP:
+                entry_file_lookup[source_name] = _ARTIFACT_SOURCE_MAP[at]
+            if at in _CACHE_ARTIFACT_TYPES:
+                _hash_to_file_entry[source_name] = fe
 
         # Process each index file
         all_db_rows: List[Dict[str, Any]] = []
@@ -925,11 +933,25 @@ class CacheIngestionHandler:
             profile_path = idx_entry.get("profile")
             partition_index = idx_entry.get("partition_index", 0)
 
-            for entry in index_result.entries:
+            total_entries = len(index_result.entries)
+            for entry_idx, entry in enumerate(index_result.entries):
+                # --- Cancellation check (every 200 entries) ---
+                if entry_idx % 200 == 0:
+                    if callbacks.is_cancelled():
+                        callbacks.on_log(
+                            "Index processing cancelled by user"
+                        )
+                        break
+                    if entry_idx > 0:
+                        callbacks.on_progress(
+                            entry_idx, total_entries,
+                            f"Correlating index entries ({entry_idx}/{total_entries})",
+                        )
+
                 file_source = entry_file_lookup.get(entry.hash)
-                # Try to find URL from the already-parsed cache entries
-                url = self._find_url_for_hash(
-                    entry.hash, manifest, run_dir,
+                # O(1) URL lookup via pre-built hash map
+                url = self._find_url_for_hash_fast(
+                    entry.hash, _hash_to_file_entry, run_dir,
                 )
                 all_db_rows.append({
                     "run_id": run_id,
@@ -958,6 +980,13 @@ class CacheIngestionHandler:
                     "browser": "firefox",
                     "profile_path": profile_path,
                 })
+            else:
+                # Only emit completion if loop wasn't broken by cancel
+                if total_entries > 0:
+                    callbacks.on_progress(
+                        total_entries, total_entries,
+                        f"Index correlation complete ({total_entries} entries)",
+                    )
 
         # Process journal files
         for jnl_entry in journal_files:
@@ -977,7 +1006,15 @@ class CacheIngestionHandler:
                 profile_path = jnl_entry.get("profile")
                 partition_index = jnl_entry.get("partition_index", 0)
 
-                for entry in journal_entries:
+                total_jnl = len(journal_entries)
+                for jnl_idx, entry in enumerate(journal_entries):
+                    # --- Cancellation check (every 200 entries) ---
+                    if jnl_idx % 200 == 0 and callbacks.is_cancelled():
+                        callbacks.on_log(
+                            "Journal processing cancelled by user"
+                        )
+                        break
+
                     file_source = entry_file_lookup.get(entry.hash)
                     all_db_rows.append({
                         "run_id": run_id,
@@ -1007,7 +1044,7 @@ class CacheIngestionHandler:
                         "profile_path": profile_path,
                     })
 
-                stats["journal_entries"] = len(journal_entries)
+                stats["journal_entries"] += len(journal_entries)
 
         # Batch insert all index records
         if all_db_rows:
@@ -1023,44 +1060,36 @@ class CacheIngestionHandler:
 
         return stats
 
-    def _find_url_for_hash(
-        self,
+    @staticmethod
+    def _find_url_for_hash_fast(
         entry_hash: str,
-        manifest: Dict[str, Any],
+        hash_to_file_entry: Dict[str, Dict[str, Any]],
         run_dir: Path,
     ) -> Optional[str]:
-        """Look up the URL for a cache entry by hash.
+        """Look up the URL for a cache entry by hash (O(1) via pre-built map).
 
-        Checks the manifest for a matching cache entry file and, if found,
-        parses it to extract the URL.  This is best-effort — returns
-        ``None`` if the entry file doesn't exist or can't be parsed.
+        Uses the ``hash_to_file_entry`` dict built once during
+        ``_process_cache_index`` to avoid scanning the full manifest
+        for every index record.
 
         Args:
             entry_hash: Uppercase hex SHA1 hash of the entry.
-            manifest: Manifest dict with files list.
+            hash_to_file_entry: Pre-built mapping of uppercase hash →
+                manifest file entry dict.
             run_dir: Run directory containing extracted files.
 
         Returns:
             URL string or ``None``.
         """
-        for fe in manifest.get("files", []):
-            if not fe.get("success", True) or not fe.get("extracted_path"):
-                continue
-            at = fe.get("artifact_type", "cache_firefox")
-            if at not in ("cache_firefox", "cache_doomed", "cache_trash"):
-                continue
-            # Match by filename (the hash)
-            source_name = Path(fe.get("source_path", "")).name.upper()
-            if source_name != entry_hash:
-                continue
+        fe = hash_to_file_entry.get(entry_hash)
+        if fe is None:
+            return None
 
-            extracted_path = run_dir / fe["extracted_path"]
-            if not extracted_path.exists():
-                return None
-            try:
-                result = parse_cache2_entry(extracted_path, fe)
-                return result.url
-            except Exception:
-                return None
-
-        return None
+        extracted_path = run_dir / fe["extracted_path"]
+        if not extracted_path.exists():
+            return None
+        try:
+            result = parse_cache2_entry(extracted_path, fe)
+            return result.url
+        except Exception:
+            return None
