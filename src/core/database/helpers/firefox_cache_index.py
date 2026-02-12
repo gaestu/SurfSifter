@@ -19,6 +19,26 @@ __all__ = [
     "delete_firefox_cache_index_by_run",
 ]
 
+# SQLite INTEGER is signed 64-bit.  Firefox stores origin_attrs_hash as
+# an unsigned uint64 which can exceed 2^63-1.  Re-interpret as signed
+# int64 (preserves the exact bit pattern) so SQLite accepts it.
+_SQLITE_INT64_MAX = (1 << 63) - 1
+
+
+def _uint64_to_sqlite(value: Optional[int]) -> Optional[int]:
+    """Convert an unsigned 64-bit integer to a signed 64-bit integer.
+
+    SQLite stores integers as signed 64-bit values.  Values that exceed
+    ``2**63 - 1`` cause ``OverflowError`` in the Python sqlite3 driver.
+    This helper re-interprets such values as their two's-complement
+    signed equivalent, preserving all 64 bits.
+    """
+    if value is None:
+        return None
+    if value > _SQLITE_INT64_MAX:
+        return value - (1 << 64)
+    return value
+
 
 def insert_firefox_cache_index_entry(
     conn: sqlite3.Connection,
@@ -64,7 +84,7 @@ def insert_firefox_cache_index_entry(
             entry.get("source_path", ""),
             entry["entry_hash"],
             entry.get("frecency"),
-            entry.get("origin_attrs_hash"),
+            _uint64_to_sqlite(entry.get("origin_attrs_hash")),
             entry.get("on_start_time"),
             entry.get("on_stop_time"),
             entry.get("content_type"),
@@ -119,7 +139,7 @@ def insert_firefox_cache_index_entries(
             e.get("source_path", ""),
             e["entry_hash"],
             e.get("frecency"),
-            e.get("origin_attrs_hash"),
+            _uint64_to_sqlite(e.get("origin_attrs_hash")),
             e.get("on_start_time"),
             e.get("on_stop_time"),
             e.get("content_type"),
