@@ -1,6 +1,7 @@
 """Details dialog for a single Firefox cache index entry."""
 from __future__ import annotations
 
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
@@ -30,7 +31,7 @@ class CacheIndexDetailsDialog(QDialog):
         # Entry hash header
         entry_hash = self.row_data.get("entry_hash", "Unknown")
         hash_label = QLabel(f"<b>Entry Hash:</b> <code>{entry_hash}</code>")
-        hash_label.setTextFormat(hash_label.RichText)
+        hash_label.setTextFormat(Qt.TextFormat.RichText)
         hash_label.setWordWrap(True)
         layout.addWidget(hash_label)
 
