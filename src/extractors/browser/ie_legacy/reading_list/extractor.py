@@ -152,7 +152,6 @@ class EdgeReadingListExtractor(BaseExtractor):
         evidence_id = config.get("evidence_id", 1)
         evidence_label = config.get("evidence_label", "")
         evidence_conn = config.get("evidence_conn")
-        scan_all_partitions = config.get("scan_all_partitions", True)
 
         collector = self._get_statistics_collector()
         if collector:
@@ -189,41 +188,55 @@ class EdgeReadingListExtractor(BaseExtractor):
         LOGGER.debug("Patterns to search: %s", patterns)
         callbacks.on_step(f"Searching {len(patterns)} Reading List patterns")
 
-        # Discover files
-        discovered_files = []
-
-        # Check if file_list is available for fast discovery
-        if evidence_conn is not None:
-            available, count = check_file_list_available(evidence_conn, evidence_id)
-            LOGGER.debug("file_list available=%s, count=%d", available, count)
-        else:
-            available, count = False, 0
-            LOGGER.debug("No evidence_conn provided - file_list unavailable")
-
-        if available:
-            callbacks.on_step(f"Using file_list index for discovery ({count:,} files indexed)")
-            LOGGER.info("Using file_list discovery with %d indexed files", count)
-            partition_filter = None if scan_all_partitions else {0}
-            result = discover_from_file_list(
-                evidence_conn, evidence_id,
-                path_patterns=patterns,
-                partition_filter=partition_filter,
+        # Discover files via file_list only (fail-fast when unavailable).
+        if evidence_conn is None:
+            error_msg = (
+                "file_list discovery requires evidence_conn; cannot run Reading List "
+                "extraction without file_list data"
             )
-            # Convert FileListMatch objects to expected dict format
-            discovered_files = [
-                {
-                    "logical_path": m.file_path,
-                    "filename": m.file_name,
-                    "partition_index": m.partition_index,
-                }
-                for m in result.get_all_matches()
-            ]
-            LOGGER.info("file_list discovery found %d matches", len(discovered_files))
-        else:
-            callbacks.on_step("Searching for Reading List files by pattern")
-            callbacks.on_log("No file_list index available - using pattern-based search", "info")
-            LOGGER.info("Using pattern-based discovery (file_list unavailable)")
-            discovered_files = self._discover_files_by_pattern(evidence_fs, patterns, callbacks)
+            LOGGER.error(error_msg)
+            callbacks.on_error(error_msg, "")
+            manifest_data["status"] = "error"
+            manifest_data["notes"].append(error_msg)
+            if collector:
+                collector.finish_run(evidence_id, self.metadata.name, status="error")
+            callbacks.on_step("Writing manifest")
+            (output_dir / "manifest.json").write_text(json.dumps(manifest_data, indent=2))
+            return False
+
+        available, count = check_file_list_available(evidence_conn, evidence_id)
+        LOGGER.debug("file_list available=%s, count=%d", available, count)
+        if not available:
+            error_msg = (
+                "file_list is empty/unavailable for this evidence; cannot run Reading List "
+                "extraction without file_list data. Run file_list extraction first."
+            )
+            LOGGER.error(error_msg)
+            callbacks.on_error(error_msg, "")
+            manifest_data["status"] = "error"
+            manifest_data["notes"].append(error_msg)
+            if collector:
+                collector.finish_run(evidence_id, self.metadata.name, status="error")
+            callbacks.on_step("Writing manifest")
+            (output_dir / "manifest.json").write_text(json.dumps(manifest_data, indent=2))
+            return False
+
+        callbacks.on_step(f"Using file_list index for discovery ({count:,} files indexed)")
+        LOGGER.info("Using file_list discovery with %d indexed files", count)
+        result = discover_from_file_list(
+            evidence_conn, evidence_id,
+            path_patterns=patterns,
+        )
+        # Convert FileListMatch objects to expected dict format
+        discovered_files = [
+            {
+                "logical_path": m.file_path,
+                "filename": m.file_name,
+                "partition_index": m.partition_index,
+            }
+            for m in result.get_all_matches()
+        ]
+        LOGGER.info("file_list discovery found %d matches", len(discovered_files))
 
         if not discovered_files:
             manifest_data["notes"].append("No Reading List files found")
@@ -501,124 +514,6 @@ class EdgeReadingListExtractor(BaseExtractor):
     def _get_tool_version(self) -> str:
         """Build extraction tool version string."""
         return f"{self.metadata.name}:{self.metadata.version}"
-
-    def _discover_files_by_pattern(
-        self,
-        evidence_fs,
-        patterns: List[str],
-        callbacks: ExtractorCallbacks
-    ) -> List[Dict[str, Any]]:
-        """
-        Discover files using pattern-based search (preferred method).
-
-        Uses evidence_fs.iter_paths() for efficient pattern matching
-        instead of walking the entire filesystem.
-
-        This is MUCH faster than _walk_for_files_fallback for large images.
-        """
-        results = []
-        seen_paths = set()  # Deduplicate across patterns
-
-        for pattern in patterns:
-            if callbacks.is_cancelled():
-                break
-
-            try:
-                callbacks.on_step(f"Scanning pattern: {pattern}")
-                LOGGER.debug("Scanning pattern: %s", pattern)
-                pattern_matches = 0
-
-                # Use iter_paths if available (preferred - fast)
-                if hasattr(evidence_fs, 'iter_paths'):
-                    for path in evidence_fs.iter_paths(pattern):
-                        if callbacks.is_cancelled():
-                            break
-
-                        # Skip NTFS alternate data stream artifacts
-                        if "($FILE_NAME)" in path or "($DATA)" in path:
-                            continue
-
-                        if path in seen_paths:
-                            continue
-                        seen_paths.add(path)
-
-                        results.append({
-                            "logical_path": path,
-                            "filename": Path(path).name,
-                            "partition_index": 0,
-                        })
-                        pattern_matches += 1
-                        LOGGER.debug("Match found: %s", path)
-                else:
-                    # Fallback to glob if iter_paths not available
-                    LOGGER.warning("iter_paths not available, using slow fallback")
-                    results.extend(self._walk_for_files_fallback(evidence_fs, [pattern], callbacks))
-
-                if pattern_matches > 0:
-                    LOGGER.info("Pattern %s matched %d file(s)", pattern, pattern_matches)
-                    callbacks.on_log(f"Found {pattern_matches} file(s) matching {pattern}", "info")
-
-            except Exception as e:
-                LOGGER.warning("Error scanning pattern %s: %s", pattern, e)
-                callbacks.on_log(f"Error scanning pattern {pattern}: {e}", "warning")
-
-        LOGGER.info("Pattern discovery complete: %d matches from %d patterns", len(results), len(patterns))
-        return results
-
-    def _walk_for_files_fallback(
-        self,
-        evidence_fs,
-        patterns: List[str],
-        callbacks: ExtractorCallbacks
-    ) -> List[Dict[str, Any]]:
-        """
-        Walk filesystem to find matching files (SLOW FALLBACK).
-
-        This iterates through ALL files in the filesystem and fnmatches
-        against patterns. Only used when:
-        1. file_list is unavailable
-        2. evidence_fs.iter_paths() is unavailable
-
-        WARNING: This can take many minutes on large E01 images.
-        """
-        import fnmatch
-
-        results = []
-        files_scanned = 0
-        last_progress = 0
-
-        callbacks.on_log("Using slow filesystem walk - this may take a while", "warning")
-
-        try:
-            for path in evidence_fs.iter_all_files():
-                if callbacks.is_cancelled():
-                    LOGGER.info("Filesystem walk cancelled after %d files", files_scanned)
-                    break
-
-                files_scanned += 1
-
-                # Report progress every 10000 files
-                if files_scanned - last_progress >= 10000:
-                    callbacks.on_step(f"Scanning filesystem... {files_scanned:,} files checked, {len(results)} matches")
-                    LOGGER.debug("Walk progress: %d files scanned, %d matches", files_scanned, len(results))
-                    last_progress = files_scanned
-
-                normalized = path.replace("\\", "/")
-                for pattern in patterns:
-                    if fnmatch.fnmatch(normalized.lower(), pattern.lower()):
-                        results.append({
-                            "logical_path": path,
-                            "filename": Path(path).name,
-                            "partition_index": 0,
-                        })
-                        LOGGER.debug("Match found: %s (pattern: %s)", path, pattern)
-                        break
-
-        except Exception as e:
-            LOGGER.error("Error walking filesystem after %d files: %s", files_scanned, e)
-
-        LOGGER.info("Filesystem walk complete: %d files scanned, %d matches", files_scanned, len(results))
-        return results
 
     def _parse_reading_list_file(
         self,

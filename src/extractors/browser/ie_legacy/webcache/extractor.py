@@ -40,10 +40,6 @@ from ...._shared.file_list_discovery import (
     open_partition_for_extraction,
 )
 from .._patterns import (
-    IE_BROWSERS,
-    IE_ARTIFACTS,
-    get_patterns,
-    get_all_patterns,
     detect_browser_from_path,
     extract_user_from_path,
 )
@@ -176,7 +172,6 @@ class IEWebCacheExtractor(BaseExtractor):
         evidence_id = config.get("evidence_id", 1)
         evidence_label = config.get("evidence_label", "")
         evidence_conn = config.get("evidence_conn")
-        scan_all_partitions = config.get("scan_all_partitions", True)
 
         # Start statistics tracking
         collector = self._get_statistics_collector()
@@ -193,7 +188,7 @@ class IEWebCacheExtractor(BaseExtractor):
             "extraction_timestamp_utc": datetime.now(timezone.utc).isoformat(),
             "extraction_tool": self._get_tool_version(),
             "e01_context": self._get_e01_context(evidence_fs),
-            "multi_partition_extraction": scan_all_partitions,
+            "multi_partition_extraction": True,
             "partitions_scanned": [],
             "partitions_with_artifacts": [],
             "files": [],
@@ -204,22 +199,41 @@ class IEWebCacheExtractor(BaseExtractor):
         # Scan for WebCache files
         callbacks.on_step("Scanning for WebCache databases")
 
-        files_by_partition: Dict[int, List[Dict]] = {}
-
-        if scan_all_partitions and evidence_conn is not None:
-            files_by_partition = self._discover_files_multi_partition(
-                evidence_fs, evidence_conn, evidence_id, callbacks
+        if evidence_conn is None:
+            error_msg = (
+                "file_list discovery requires evidence_conn; cannot run WebCache "
+                "extraction without file_list data"
             )
-        else:
-            if scan_all_partitions and evidence_conn is None:
-                callbacks.on_log(
-                    "Multi-partition scan requested but no evidence_conn provided, using single partition",
-                    "warning"
-                )
-            webcache_files = self._discover_files(evidence_fs, callbacks)
-            partition_index = getattr(evidence_fs, 'partition_index', 0)
-            if webcache_files:
-                files_by_partition[partition_index] = webcache_files
+            LOGGER.error(error_msg)
+            callbacks.on_error(error_msg, "")
+            manifest_data["status"] = "error"
+            manifest_data["notes"].append(error_msg)
+            if collector:
+                collector.finish_run(evidence_id, self.metadata.name, status="error")
+            callbacks.on_step("Writing manifest")
+            (output_dir / "manifest.json").write_text(json.dumps(manifest_data, indent=2))
+            return False
+
+        available, count = check_file_list_available(evidence_conn, evidence_id)
+        if not available:
+            error_msg = (
+                "file_list is empty/unavailable for this evidence; cannot run WebCache "
+                "extraction without file_list data. Run file_list extraction first."
+            )
+            LOGGER.error(error_msg)
+            callbacks.on_error(error_msg, "")
+            manifest_data["status"] = "error"
+            manifest_data["notes"].append(error_msg)
+            if collector:
+                collector.finish_run(evidence_id, self.metadata.name, status="error")
+            callbacks.on_step("Writing manifest")
+            (output_dir / "manifest.json").write_text(json.dumps(manifest_data, indent=2))
+            return False
+
+        callbacks.on_log(f"Using file_list discovery ({count:,} files indexed)", "info")
+        files_by_partition = self._discover_files_multi_partition(
+            evidence_conn, evidence_id, callbacks
+        )
 
         # Flatten for counting
         all_files = []
@@ -417,50 +431,8 @@ class IEWebCacheExtractor(BaseExtractor):
 
         return ";".join(versions)
 
-    def _discover_files(
-        self,
-        evidence_fs,
-        callbacks: ExtractorCallbacks
-    ) -> List[Dict]:
-        """
-        Scan evidence for WebCache files (single partition).
-        """
-        webcache_files = []
-
-        # Get patterns for all browsers
-        patterns = get_all_patterns("webcache")
-
-        for pattern in patterns:
-            try:
-                for match in evidence_fs.iter_paths(pattern):
-                    # Skip ($FILE_NAME) entries
-                    if "($FILE_NAME)" in match:
-                        continue
-
-                    # Only match WebCacheV01.dat
-                    if not match.lower().endswith("webcachev01.dat"):
-                        continue
-
-                    browser = detect_browser_from_path(match)
-                    user = extract_user_from_path(match)
-
-                    webcache_files.append({
-                        "logical_path": match,
-                        "browser": browser,
-                        "user": user,
-                        "artifact_type": "webcache",
-                    })
-
-                    callbacks.on_log(f"Found WebCache: {match}", "info")
-
-            except Exception as e:
-                LOGGER.warning("Error scanning pattern %s: %s", pattern, e)
-
-        return webcache_files
-
     def _discover_files_multi_partition(
         self,
-        evidence_fs,
         evidence_conn,
         evidence_id: int,
         callbacks: ExtractorCallbacks,
@@ -468,20 +440,6 @@ class IEWebCacheExtractor(BaseExtractor):
         """
         Discover WebCache files across ALL partitions using file_list.
         """
-        # Check if file_list is available
-        available, count = check_file_list_available(evidence_conn, evidence_id) if evidence_conn else (False, 0)
-
-        if not available:
-            callbacks.on_log(
-                "file_list empty, falling back to single-partition discovery",
-                "info"
-            )
-            partition_index = getattr(evidence_fs, 'partition_index', 0)
-            files = self._discover_files(evidence_fs, callbacks)
-            return {partition_index: files} if files else {}
-
-        callbacks.on_log(f"Using file_list discovery ({count:,} files indexed)", "info")
-
         # Query file_list for WebCache files
         result = discover_from_file_list(
             evidence_conn,
@@ -492,12 +450,10 @@ class IEWebCacheExtractor(BaseExtractor):
 
         if result.is_empty:
             callbacks.on_log(
-                "No WebCache files found in file_list, falling back to filesystem scan",
-                "warning"
+                "No WebCache files found in file_list",
+                "info"
             )
-            partition_index = getattr(evidence_fs, 'partition_index', 0)
-            files = self._discover_files(evidence_fs, callbacks)
-            return {partition_index: files} if files else {}
+            return {}
 
         if result.is_multi_partition:
             callbacks.on_log(

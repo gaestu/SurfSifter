@@ -41,13 +41,10 @@ from ...._shared.file_list_discovery import (
     get_ewf_paths_from_evidence_fs,
 )
 from .._patterns import (
-    get_all_patterns,
     get_patterns,
     extract_user_from_path,
-    detect_browser_from_path,
 )
 from .._ese_reader import (
-    ESE_AVAILABLE,
     WebCacheReader,
     check_ese_available,
 )
@@ -166,7 +163,6 @@ class IEDOMStorageExtractor(BaseExtractor):
         evidence_id = config.get("evidence_id", 1)
         evidence_label = config.get("evidence_label", "")
         evidence_conn = config.get("evidence_conn")
-        scan_all_partitions = config.get("scan_all_partitions", True)
 
         collector = self._get_statistics_collector()
         if collector:
@@ -195,30 +191,52 @@ class IEDOMStorageExtractor(BaseExtractor):
 
         callbacks.on_step(f"Searching {len(patterns)} DOM Storage patterns")
 
-        # Discover files
-        discovered_files = []
-
-        available, count = check_file_list_available(evidence_conn, evidence_id) if evidence_conn else (False, 0)
-        if available:
-            callbacks.on_step(f"Using file_list index for discovery ({count:,} files indexed)")
-            partition_filter = None if scan_all_partitions else {0}
-            result = discover_from_file_list(
-                evidence_conn, evidence_id,
-                path_patterns=patterns,
-                partition_filter=partition_filter,
+        # Discover files via file_list only (fail-fast when unavailable).
+        if evidence_conn is None:
+            error_msg = (
+                "file_list discovery requires evidence_conn; cannot run DOM Storage extraction "
+                "without file_list data"
             )
-            # Convert FileListMatch objects to expected dict format
-            discovered_files = [
-                {
-                    "logical_path": m.file_path,
-                    "filename": m.file_name,
-                    "partition_index": m.partition_index,
-                }
-                for m in result.get_all_matches()
-            ]
-        else:
-            callbacks.on_step("Walking filesystem for DOMStore files")
-            discovered_files = self._walk_for_files(evidence_fs, patterns, callbacks)
+            LOGGER.error(error_msg)
+            callbacks.on_error(error_msg, "")
+            manifest_data["status"] = "error"
+            manifest_data["notes"].append(error_msg)
+            if collector:
+                collector.finish_run(evidence_id, self.metadata.name, status="error")
+            callbacks.on_step("Writing manifest")
+            (output_dir / "manifest.json").write_text(json.dumps(manifest_data, indent=2))
+            return False
+
+        available, count = check_file_list_available(evidence_conn, evidence_id)
+        if not available:
+            error_msg = (
+                "file_list is empty/unavailable for this evidence; cannot run DOM Storage "
+                "extraction without file_list data. Run file_list extraction first."
+            )
+            LOGGER.error(error_msg)
+            callbacks.on_error(error_msg, "")
+            manifest_data["status"] = "error"
+            manifest_data["notes"].append(error_msg)
+            if collector:
+                collector.finish_run(evidence_id, self.metadata.name, status="error")
+            callbacks.on_step("Writing manifest")
+            (output_dir / "manifest.json").write_text(json.dumps(manifest_data, indent=2))
+            return False
+
+        callbacks.on_step(f"Using file_list index for discovery ({count:,} files indexed)")
+        result = discover_from_file_list(
+            evidence_conn, evidence_id,
+            path_patterns=patterns,
+        )
+        # Convert FileListMatch objects to expected dict format
+        discovered_files = [
+            {
+                "logical_path": m.file_path,
+                "filename": m.file_name,
+                "partition_index": m.partition_index,
+            }
+            for m in result.get_all_matches()
+        ]
 
         if not discovered_files:
             manifest_data["notes"].append("No Edge Legacy DOMStore files found")
@@ -488,36 +506,6 @@ class IEDOMStorageExtractor(BaseExtractor):
         if ese_ok:
             return f"{self.metadata.name}:{self.metadata.version}+{ese_lib}"
         return f"{self.metadata.name}:{self.metadata.version}"
-
-    def _walk_for_files(
-        self,
-        evidence_fs,
-        patterns: List[str],
-        callbacks: ExtractorCallbacks
-    ) -> List[Dict[str, Any]]:
-        """Walk filesystem to find matching files."""
-        import fnmatch
-
-        results = []
-
-        try:
-            for path in evidence_fs.iter_all_files():
-                if callbacks.is_cancelled():
-                    break
-
-                normalized = path.replace("\\", "/")
-                for pattern in patterns:
-                    if fnmatch.fnmatch(normalized.lower(), pattern.lower()):
-                        results.append({
-                            "logical_path": path,
-                            "filename": Path(path).name,
-                            "partition_index": 0,
-                        })
-                        break
-        except Exception as e:
-            LOGGER.error("Error walking filesystem: %s", e)
-
-        return results
 
     def _parse_edge_domstore_file(
         self,

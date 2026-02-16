@@ -185,7 +185,6 @@ class LegacyEdgeContainerExtractor(BaseExtractor):
         evidence_id = config.get("evidence_id", 1)
         evidence_label = config.get("evidence_label", "")
         evidence_conn = config.get("evidence_conn")
-        scan_all_partitions = config.get("scan_all_partitions", True)
 
         # Start statistics tracking
         collector = self._get_statistics_collector()
@@ -200,7 +199,7 @@ class LegacyEdgeContainerExtractor(BaseExtractor):
             "run_id": run_id,
             "evidence_id": evidence_id,
             "extraction_timestamp_utc": datetime.now(timezone.utc).isoformat(),
-            "multi_partition_extraction": scan_all_partitions,
+            "multi_partition_extraction": True,
             "partitions_scanned": [],
             "partitions_with_artifacts": [],
             "files": [],
@@ -211,18 +210,41 @@ class LegacyEdgeContainerExtractor(BaseExtractor):
         # Scan for container.dat files
         callbacks.on_step("Scanning for Legacy Edge container.dat files")
 
-        files_by_partition: Dict[int, List[Dict]] = {}
-        skipped_zero_size = 0
-
-        if scan_all_partitions and evidence_conn is not None:
-            files_by_partition, skipped_zero_size = self._discover_files_multi_partition(
-                evidence_fs, evidence_conn, evidence_id, callbacks
+        if evidence_conn is None:
+            error_msg = (
+                "file_list discovery requires evidence_conn; cannot run Legacy Edge "
+                "container extraction without file_list data"
             )
-        else:
-            container_files = self._discover_files(evidence_fs, callbacks)
-            partition_index = getattr(evidence_fs, 'partition_index', 0)
-            if container_files:
-                files_by_partition[partition_index] = container_files
+            LOGGER.error(error_msg)
+            callbacks.on_error(error_msg, "")
+            manifest_data["status"] = "error"
+            manifest_data["notes"].append(error_msg)
+            if collector:
+                collector.finish_run(evidence_id, self.metadata.name, status="error")
+            callbacks.on_step("Writing manifest")
+            (output_dir / "manifest.json").write_text(json.dumps(manifest_data, indent=2))
+            return False
+
+        available, count = check_file_list_available(evidence_conn, evidence_id)
+        if not available:
+            error_msg = (
+                "file_list is empty/unavailable for this evidence; cannot run Legacy Edge "
+                "container extraction without file_list data. Run file_list extraction first."
+            )
+            LOGGER.error(error_msg)
+            callbacks.on_error(error_msg, "")
+            manifest_data["status"] = "error"
+            manifest_data["notes"].append(error_msg)
+            if collector:
+                collector.finish_run(evidence_id, self.metadata.name, status="error")
+            callbacks.on_step("Writing manifest")
+            (output_dir / "manifest.json").write_text(json.dumps(manifest_data, indent=2))
+            return False
+
+        callbacks.on_log(f"Using file_list discovery ({count:,} files indexed)", "info")
+        files_by_partition, skipped_zero_size = self._discover_files_multi_partition(
+            evidence_conn, evidence_id, callbacks
+        )
 
         # Flatten for counting
         all_files = []
@@ -579,70 +601,8 @@ class LegacyEdgeContainerExtractor(BaseExtractor):
         except Exception:
             return None
 
-    def _discover_files(
-        self,
-        evidence_fs,
-        callbacks: ExtractorCallbacks
-    ) -> List[Dict]:
-        """Scan evidence for Legacy Edge container.dat files (single partition)."""
-        import time
-
-        container_files = []
-        partition_index = getattr(evidence_fs, "partition_index", 0)
-
-        # Broad patterns to capture all Legacy Edge container.dat variants
-        patterns = [
-            "Users/*/AppData/Local/Packages/Microsoft.MicrosoftEdge_*/AC/MicrosoftEdge/**/container.dat",
-            "Users/*/AppData/Local/Packages/Microsoft.MicrosoftEdge_*/AC/#!*/MicrosoftEdge/**/container.dat",
-            "Windows.old/Users/*/AppData/Local/Packages/Microsoft.MicrosoftEdge_*/AC/MicrosoftEdge/**/container.dat",
-            "Windows.old/Users/*/AppData/Local/Packages/Microsoft.MicrosoftEdge_*/AC/#!*/MicrosoftEdge/**/container.dat",
-        ]
-
-        LOGGER.info(
-            "Starting iter_paths discovery on partition %d with %d patterns",
-            partition_index, len(patterns)
-        )
-
-        for i, pattern in enumerate(patterns, 1):
-            pattern_start = time.monotonic()
-            LOGGER.info("Scanning pattern %d/%d: %s", i, len(patterns), pattern)
-            callbacks.on_log(f"Scanning pattern {i}/{len(patterns)}: {pattern[:60]}...", "info")
-
-            match_count = 0
-            try:
-                for match in evidence_fs.iter_paths(pattern):
-                    if "($FILE_NAME)" in match:
-                        continue
-
-                    match_count += 1
-                    user = extract_user_from_path(match)
-                    container_type = self._detect_container_type(match)
-
-                    container_files.append({
-                        "logical_path": match,
-                        "user": user,
-                        "container_type": container_type,
-                        "partition_index": partition_index,
-                    })
-
-            except Exception as e:
-                LOGGER.warning("Error scanning pattern %s: %s", pattern, e)
-
-            pattern_elapsed = time.monotonic() - pattern_start
-            LOGGER.info(
-                "Pattern %d completed in %.2fs: %d matches",
-                i, pattern_elapsed, match_count
-            )
-
-        LOGGER.info(
-            "iter_paths discovery complete: %d total files found",
-            len(container_files)
-        )
-        return container_files
-
     def _discover_files_multi_partition(
         self,
-        evidence_fs,
         evidence_conn,
         evidence_id: int,
         callbacks: ExtractorCallbacks,
@@ -650,16 +610,6 @@ class LegacyEdgeContainerExtractor(BaseExtractor):
         """Discover container.dat files across ALL partitions using file_list."""
         import time
 
-        available, count = check_file_list_available(evidence_conn, evidence_id) if evidence_conn else (False, 0)
-
-        if not available:
-            callbacks.on_log("file_list empty, falling back to single-partition discovery", "info")
-            LOGGER.info("file_list not available, falling back to iter_paths (may be slow)")
-            partition_index = getattr(evidence_fs, 'partition_index', 0)
-            files = self._discover_files(evidence_fs, callbacks)
-            return ({partition_index: files} if files else {}, 0)
-
-        callbacks.on_log(f"Using file_list discovery ({count:,} files indexed)", "info")
         LOGGER.info("Starting file_list SQL query for container.dat files")
 
         query_start = time.monotonic()

@@ -41,7 +41,6 @@ from ...._shared.file_list_discovery import (
     open_partition_for_extraction,
 )
 from .._patterns import (
-    get_patterns,
     extract_user_from_path,
 )
 from .._timestamps import filetime_to_iso
@@ -186,7 +185,6 @@ class IETypedURLsExtractor(BaseExtractor):
         evidence_id = config.get("evidence_id", 1)
         evidence_label = config.get("evidence_label", "")
         evidence_conn = config.get("evidence_conn")
-        scan_all_partitions = config.get("scan_all_partitions", True)
 
         # Start statistics tracking
         collector = self._get_statistics_collector()
@@ -201,7 +199,7 @@ class IETypedURLsExtractor(BaseExtractor):
             "run_id": run_id,
             "evidence_id": evidence_id,
             "extraction_timestamp_utc": datetime.now(timezone.utc).isoformat(),
-            "multi_partition_extraction": scan_all_partitions,
+            "multi_partition_extraction": True,
             "partitions_scanned": [],
             "partitions_with_artifacts": [],
             "files": [],
@@ -212,17 +210,41 @@ class IETypedURLsExtractor(BaseExtractor):
         # Scan for NTUSER.DAT files
         callbacks.on_step("Scanning for NTUSER.DAT files")
 
-        files_by_partition: Dict[int, List[Dict]] = {}
-
-        if scan_all_partitions and evidence_conn is not None:
-            files_by_partition = self._discover_files_multi_partition(
-                evidence_fs, evidence_conn, evidence_id, callbacks
+        if evidence_conn is None:
+            error_msg = (
+                "file_list discovery requires evidence_conn; cannot run Typed URLs "
+                "extraction without file_list data"
             )
-        else:
-            ntuser_files = self._discover_files(evidence_fs, callbacks)
-            partition_index = getattr(evidence_fs, 'partition_index', 0)
-            if ntuser_files:
-                files_by_partition[partition_index] = ntuser_files
+            LOGGER.error(error_msg)
+            callbacks.on_error(error_msg, "")
+            manifest_data["status"] = "error"
+            manifest_data["notes"].append(error_msg)
+            if collector:
+                collector.finish_run(evidence_id, self.metadata.name, status="error")
+            callbacks.on_step("Writing manifest")
+            (output_dir / "manifest.json").write_text(json.dumps(manifest_data, indent=2))
+            return False
+
+        available, count = check_file_list_available(evidence_conn, evidence_id)
+        if not available:
+            error_msg = (
+                "file_list is empty/unavailable for this evidence; cannot run Typed URLs "
+                "extraction without file_list data. Run file_list extraction first."
+            )
+            LOGGER.error(error_msg)
+            callbacks.on_error(error_msg, "")
+            manifest_data["status"] = "error"
+            manifest_data["notes"].append(error_msg)
+            if collector:
+                collector.finish_run(evidence_id, self.metadata.name, status="error")
+            callbacks.on_step("Writing manifest")
+            (output_dir / "manifest.json").write_text(json.dumps(manifest_data, indent=2))
+            return False
+
+        callbacks.on_log(f"Using file_list discovery ({count:,} files indexed)", "info")
+        files_by_partition = self._discover_files_multi_partition(
+            evidence_conn, evidence_id, callbacks
+        )
 
         # Flatten for counting
         all_files = []
@@ -262,6 +284,10 @@ class IETypedURLsExtractor(BaseExtractor):
 
                 try:
                     with fs_ctx as fs_to_use:
+                        if fs_to_use is None:
+                            callbacks.on_log(f"Failed to open partition {partition_index}", "warning")
+                            continue
+
                         for file_info in partition_files:
                             if callbacks.is_cancelled():
                                 manifest_data["status"] = "cancelled"
@@ -486,56 +512,13 @@ class IETypedURLsExtractor(BaseExtractor):
         except Exception:
             return None
 
-    def _discover_files(
-        self,
-        evidence_fs,
-        callbacks: ExtractorCallbacks
-    ) -> List[Dict]:
-        """Scan evidence for NTUSER.DAT files (single partition)."""
-        ntuser_files = []
-
-        # NTUSER.DAT patterns
-        patterns = [
-            "Users/*/NTUSER.DAT",
-            "Documents and Settings/*/NTUSER.DAT",
-        ]
-
-        for pattern in patterns:
-            try:
-                for match in evidence_fs.iter_paths(pattern):
-                    if "($FILE_NAME)" in match:
-                        continue
-
-                    user = extract_user_from_path(match)
-
-                    ntuser_files.append({
-                        "logical_path": match,
-                        "user": user,
-                    })
-
-            except Exception as e:
-                LOGGER.warning("Error scanning pattern %s: %s", pattern, e)
-
-        return ntuser_files
-
     def _discover_files_multi_partition(
         self,
-        evidence_fs,
         evidence_conn,
         evidence_id: int,
         callbacks: ExtractorCallbacks,
     ) -> Dict[int, List[Dict]]:
         """Discover NTUSER.DAT files across ALL partitions using file_list."""
-        available, count = check_file_list_available(evidence_conn, evidence_id) if evidence_conn else (False, 0)
-
-        if not available:
-            callbacks.on_log("file_list empty, falling back to single-partition discovery", "info")
-            partition_index = getattr(evidence_fs, 'partition_index', 0)
-            files = self._discover_files(evidence_fs, callbacks)
-            return {partition_index: files} if files else {}
-
-        callbacks.on_log(f"Using file_list discovery ({count:,} files indexed)", "info")
-
         result = discover_from_file_list(
             evidence_conn,
             evidence_id,
@@ -544,9 +527,8 @@ class IETypedURLsExtractor(BaseExtractor):
         )
 
         if result.is_empty:
-            partition_index = getattr(evidence_fs, 'partition_index', 0)
-            files = self._discover_files(evidence_fs, callbacks)
-            return {partition_index: files} if files else {}
+            callbacks.on_log("No NTUSER.DAT files found in file_list", "info")
+            return {}
 
         files_by_partition: Dict[int, List[Dict]] = {}
 

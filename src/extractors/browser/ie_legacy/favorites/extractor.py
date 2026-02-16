@@ -30,7 +30,7 @@ import json
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Dict, Any, Optional, List, Iterator
+from typing import Dict, Any, Optional, List
 
 from PySide6.QtWidgets import QWidget, QLabel
 
@@ -44,9 +44,6 @@ from ...._shared.file_list_discovery import (
     open_partition_for_extraction,
 )
 from .._patterns import (
-    IE_ARTIFACTS,
-    get_patterns,
-    get_all_patterns,
     detect_browser_from_path,
     extract_user_from_path,
 )
@@ -170,7 +167,6 @@ class IEFavoritesExtractor(BaseExtractor):
         evidence_id = config.get("evidence_id", 1)
         evidence_label = config.get("evidence_label", "")
         evidence_conn = config.get("evidence_conn")
-        scan_all_partitions = config.get("scan_all_partitions", True)
 
         # Start statistics tracking
         collector = self._get_statistics_collector()
@@ -185,7 +181,7 @@ class IEFavoritesExtractor(BaseExtractor):
             "run_id": run_id,
             "evidence_id": evidence_id,
             "extraction_timestamp_utc": datetime.now(timezone.utc).isoformat(),
-            "multi_partition_extraction": scan_all_partitions,
+            "multi_partition_extraction": True,
             "partitions_scanned": [],
             "partitions_with_artifacts": [],
             "files": [],
@@ -196,17 +192,41 @@ class IEFavoritesExtractor(BaseExtractor):
         # Scan for .url files
         callbacks.on_step("Scanning for .url favorites files")
 
-        files_by_partition: Dict[int, List[Dict]] = {}
-
-        if scan_all_partitions and evidence_conn is not None:
-            files_by_partition = self._discover_files_multi_partition(
-                evidence_fs, evidence_conn, evidence_id, callbacks
+        if evidence_conn is None:
+            error_msg = (
+                "file_list discovery requires evidence_conn; cannot run Favorites "
+                "extraction without file_list data"
             )
-        else:
-            url_files = self._discover_files(evidence_fs, callbacks)
-            partition_index = getattr(evidence_fs, 'partition_index', 0)
-            if url_files:
-                files_by_partition[partition_index] = url_files
+            LOGGER.error(error_msg)
+            callbacks.on_error(error_msg, "")
+            manifest_data["status"] = "error"
+            manifest_data["notes"].append(error_msg)
+            if collector:
+                collector.finish_run(evidence_id, self.metadata.name, status="error")
+            callbacks.on_step("Writing manifest")
+            (output_dir / "manifest.json").write_text(json.dumps(manifest_data, indent=2))
+            return False
+
+        available, count = check_file_list_available(evidence_conn, evidence_id)
+        if not available:
+            error_msg = (
+                "file_list is empty/unavailable for this evidence; cannot run Favorites "
+                "extraction without file_list data. Run file_list extraction first."
+            )
+            LOGGER.error(error_msg)
+            callbacks.on_error(error_msg, "")
+            manifest_data["status"] = "error"
+            manifest_data["notes"].append(error_msg)
+            if collector:
+                collector.finish_run(evidence_id, self.metadata.name, status="error")
+            callbacks.on_step("Writing manifest")
+            (output_dir / "manifest.json").write_text(json.dumps(manifest_data, indent=2))
+            return False
+
+        callbacks.on_log(f"Using file_list discovery ({count:,} files indexed)", "info")
+        files_by_partition = self._discover_files_multi_partition(
+            evidence_conn, evidence_id, callbacks
+        )
 
         # Flatten for counting
         all_files = []
@@ -504,209 +524,13 @@ class IEFavoritesExtractor(BaseExtractor):
         except Exception:
             return None
 
-    def _discover_files(
-        self,
-        evidence_fs,
-        callbacks: ExtractorCallbacks
-    ) -> List[Dict]:
-        """
-        Scan evidence for .url files (single partition).
-
-        OPTIMIZATION: Avoids recursive ** glob patterns which trigger full
-        filesystem walks on large E01 images. Instead:
-        1. Use non-recursive patterns to find Favorites directories
-        2. Recursively walk each Favorites folder directly
-        """
-        url_files = []
-        seen_paths = set()  # Deduplicate across patterns
-
-        # Get all patterns but filter out ** recursive patterns
-        patterns = get_all_patterns("favorites")
-        non_recursive_patterns = [p for p in patterns if "**" not in p]
-
-        # Track Favorites directories we've found for recursive scanning
-        favorites_dirs = set()
-
-        # Phase 1: Use non-recursive patterns (fast targeted search)
-        callbacks.on_log(f"Phase 1: Scanning {len(non_recursive_patterns)} non-recursive pattern(s)", "info")
-
-        for pattern in non_recursive_patterns:
-            try:
-                LOGGER.info("Scanning pattern: %s", pattern)
-                callbacks.on_step(f"Scanning: {pattern}")
-                pattern_matches = 0
-                for match in evidence_fs.iter_paths(pattern):
-                    if "($FILE_NAME)" in match:
-                        continue
-
-                    if not match.lower().endswith(".url"):
-                        continue
-
-                    if match in seen_paths:
-                        continue
-                    seen_paths.add(match)
-
-                    browser = detect_browser_from_path(match)
-                    user = extract_user_from_path(match)
-                    folder_path = self._extract_folder_path(match)
-                    name = Path(match).stem
-
-                    url_files.append({
-                        "logical_path": match,
-                        "browser": browser,
-                        "user": user,
-                        "name": name,
-                        "folder_path": folder_path,
-                    })
-
-                    pattern_matches += 1
-
-                    # Track parent Favorites directory for recursive scan
-                    fav_dir = self._get_favorites_parent_dir(match)
-                    if fav_dir:
-                        favorites_dirs.add(fav_dir)
-
-                if pattern_matches > 0:
-                    LOGGER.info("Pattern %s matched %d file(s)", pattern, pattern_matches)
-                    callbacks.on_log(f"Found {pattern_matches} file(s) matching {pattern}", "info")
-
-            except Exception as e:
-                LOGGER.warning("Error scanning pattern %s: %s", pattern, e)
-                callbacks.on_log(f"Error scanning {pattern}: {e}", "warning")
-
-        # Phase 2: Recursively scan each Favorites directory for subfolders
-        # This is faster than ** glob because we target specific directories
-        if favorites_dirs:
-            callbacks.on_log(f"Phase 2: Scanning {len(favorites_dirs)} Favorites folder(s) for subfolders", "info")
-
-        for fav_dir in favorites_dirs:
-            try:
-                LOGGER.info("Recursively scanning Favorites dir: %s", fav_dir)
-                callbacks.on_step(f"Scanning subfolders: {fav_dir}")
-                subfolder_count = 0
-
-                for file_path in self._walk_favorites_dir(evidence_fs, fav_dir):
-                    if file_path in seen_paths:
-                        continue
-
-                    if not file_path.lower().endswith(".url"):
-                        continue
-
-                    seen_paths.add(file_path)
-
-                    browser = detect_browser_from_path(file_path)
-                    user = extract_user_from_path(file_path)
-                    folder_path = self._extract_folder_path(file_path)
-                    name = Path(file_path).stem
-
-                    url_files.append({
-                        "logical_path": file_path,
-                        "browser": browser,
-                        "user": user,
-                        "name": name,
-                        "folder_path": folder_path,
-                    })
-                    subfolder_count += 1
-
-                if subfolder_count > 0:
-                    LOGGER.info("Found %d additional .url file(s) in subfolders of %s", subfolder_count, fav_dir)
-                    callbacks.on_log(f"Found {subfolder_count} file(s) in subfolders of {fav_dir}", "info")
-
-            except Exception as e:
-                LOGGER.warning("Error walking Favorites dir %s: %s", fav_dir, e)
-                callbacks.on_log(f"Error walking {fav_dir}: {e}", "warning")
-
-        callbacks.on_log(f"Discovery complete: {len(url_files)} total .url file(s) found", "info")
-        return url_files
-
-    def _get_favorites_parent_dir(self, file_path: str) -> Optional[str]:
-        """Extract the Favorites directory path from a .url file path."""
-        path = file_path.replace("\\", "/")
-        parts = path.split("/")
-
-        try:
-            fav_idx = next(
-                i for i, p in enumerate(parts)
-                if p.lower() == "favorites"
-            )
-            # Return path up to and including Favorites
-            return "/".join(parts[:fav_idx + 1])
-        except StopIteration:
-            return None
-
-    def _walk_favorites_dir(self, evidence_fs, favorites_dir: str) -> Iterator[str]:
-        """
-        Recursively walk a Favorites directory yielding .url file paths.
-
-        Uses targeted directory traversal instead of ** glob patterns.
-        """
-        try:
-            # Try to use walk_directory if available (faster than iter_paths)
-            if hasattr(evidence_fs, 'walk_directory'):
-                LOGGER.debug("Using optimized walk_directory for %s", favorites_dir)
-                file_count = 0
-                for path in evidence_fs.walk_directory(favorites_dir):
-                    if path.lower().endswith(".url"):
-                        file_count += 1
-                        yield path
-                LOGGER.debug("walk_directory yielded %d .url files from %s", file_count, favorites_dir)
-            else:
-                # Fallback: Use list_dir recursively
-                LOGGER.debug("Using fallback recursive_list_dir for %s", favorites_dir)
-                yield from self._recursive_list_dir(evidence_fs, favorites_dir)
-        except Exception as e:
-            LOGGER.warning("Error walking %s: %s", favorites_dir, e)
-
-    def _recursive_list_dir(
-        self,
-        evidence_fs,
-        dir_path: str,
-        depth: int = 0,
-        max_depth: int = 10
-    ) -> Iterator[str]:
-        """Recursively list directory contents (fallback method)."""
-        if depth > max_depth:
-            return
-
-        try:
-            if not hasattr(evidence_fs, 'list_dir'):
-                return
-
-            for entry in evidence_fs.list_dir(dir_path):
-                entry_path = f"{dir_path}/{entry}".replace("//", "/")
-
-                if entry.endswith("/"):
-                    # Directory - recurse into it
-                    yield from self._recursive_list_dir(
-                        evidence_fs,
-                        entry_path.rstrip("/"),
-                        depth + 1,
-                        max_depth
-                    )
-                elif entry.lower().endswith(".url"):
-                    yield entry_path
-
-        except Exception as e:
-            LOGGER.debug("Cannot list dir %s: %s", dir_path, e)
-
     def _discover_files_multi_partition(
         self,
-        evidence_fs,
         evidence_conn,
         evidence_id: int,
         callbacks: ExtractorCallbacks,
     ) -> Dict[int, List[Dict]]:
         """Discover .url files across ALL partitions using file_list."""
-        available, count = check_file_list_available(evidence_conn, evidence_id) if evidence_conn else (False, 0)
-
-        if not available:
-            callbacks.on_log("file_list empty, falling back to single-partition discovery", "info")
-            partition_index = getattr(evidence_fs, 'partition_index', 0)
-            files = self._discover_files(evidence_fs, callbacks)
-            return {partition_index: files} if files else {}
-
-        callbacks.on_log(f"Using file_list discovery ({count:,} files indexed)", "info")
-
         result = discover_from_file_list(
             evidence_conn,
             evidence_id,
@@ -715,9 +539,8 @@ class IEFavoritesExtractor(BaseExtractor):
         )
 
         if result.is_empty:
-            partition_index = getattr(evidence_fs, 'partition_index', 0)
-            files = self._discover_files(evidence_fs, callbacks)
-            return {partition_index: files} if files else {}
+            callbacks.on_log("No Favorites .url files found in file_list", "info")
+            return {}
 
         files_by_partition: Dict[int, List[Dict]] = {}
 
