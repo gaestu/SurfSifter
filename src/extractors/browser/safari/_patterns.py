@@ -6,15 +6,36 @@ Safari is macOS-only and uses Apple-specific formats:
 - Cookies: Cookies.binarycookies (binary format)
 - Bookmarks: Bookmarks.plist (binary/XML plist)
 - Downloads: Downloads.plist (plist)
-- Cache: WebKitCache with fsCachedData
+- Cache: WebKitCache (Blobs + Records), NetworkCache, Cache.db
+- Spotlight metadata: .webhistory / .webbookmark files (persist after clearing)
 
 Note: Safari is marked as EXPERIMENTAL due to its unique formats.
 """
 
 from __future__ import annotations
 
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Literal, TypedDict
 from pathlib import Path
+
+
+def _with_absolute_variants(paths: List[str]) -> List[str]:
+    """
+    Expand root patterns to include both relative and absolute forms.
+
+    file_list rows from SleuthKit are typically absolute ("/Users/..."),
+    while some scanners may use relative roots.
+    """
+    expanded: List[str] = []
+    seen: set[str] = set()
+
+    for path in paths:
+        for candidate in (path, f"/{path}" if not path.startswith("/") else path):
+            if candidate not in seen:
+                seen.add(candidate)
+                expanded.append(candidate)
+
+    return expanded
+
 
 # Safari browser definitions
 # Only one browser in this family (unlike Chromium with Chrome, Edge, etc.)
@@ -26,24 +47,52 @@ SAFARI_BROWSERS: Dict[str, Dict] = {
         "profile_roots": [
             # macOS user Library - primary location
             "Users/*/Library/Safari",
+            # Containerized Safari data (sandbox/container context)
+            "Users/*/Library/Containers/com.apple.Safari/Data/Library/Safari",
+            # Safari Technology Preview container
+            "Users/*/Library/Containers/com.apple.SafariTechnologyPreview/Data/Library/Safari",
             # System Library (rare, but possible)
             "Library/Safari",
         ],
         # Cookies are stored separately
         "cookies_roots": [
             "Users/*/Library/Cookies",
+            "Users/*/Library/Containers/com.apple.Safari/Data/Library/Cookies",
+            "Users/*/Library/Containers/com.apple.SafariTechnologyPreview/Data/Library/Cookies",
             "Library/Cookies",
         ],
         # Cache is in a different location
         "cache_roots": [
             "Users/*/Library/Caches/com.apple.Safari",
+            "Users/*/Library/Containers/com.apple.Safari/Data/Library/Caches/com.apple.Safari",
+            "Users/*/Library/Containers/com.apple.SafariTechnologyPreview/Data/Library/Caches/com.apple.SafariTechnologyPreview",
             "Library/Caches/com.apple.Safari",
+        ],
+        # Spotlight metadata caches (persist even after Safari history/bookmarks are cleared)
+        "metadata_roots": [
+            "Users/*/Library/Caches/Metadata/Safari",
+            "Users/*/Library/Containers/com.apple.Safari/Data/Library/Caches/Metadata/Safari",
         ],
     },
 }
 
+for browser_info in SAFARI_BROWSERS.values():
+    browser_info["profile_roots"] = _with_absolute_variants(browser_info["profile_roots"])
+    browser_info["cookies_roots"] = _with_absolute_variants(browser_info["cookies_roots"])
+    browser_info["cache_roots"] = _with_absolute_variants(browser_info["cache_roots"])
+    browser_info["metadata_roots"] = _with_absolute_variants(browser_info["metadata_roots"])
+
+
+SafariRootType = Literal["profile", "cookies", "cache", "metadata"]
+
+
+class SafariArtifactInfo(TypedDict):
+    patterns: List[str]
+    root_type: SafariRootType
+
+
 # Safari artifact patterns relative to profile roots
-SAFARI_ARTIFACTS: Dict[str, Dict[str, List[str]]] = {
+SAFARI_ARTIFACTS: Dict[str, SafariArtifactInfo] = {
     "history": {
         # History.db is SQLite with Cocoa timestamps (seconds since 2001-01-01)
         "patterns": [
@@ -51,6 +100,7 @@ SAFARI_ARTIFACTS: Dict[str, Dict[str, List[str]]] = {
             "History.db-wal",
             "History.db-journal",
             "History.db-shm",
+            "History.db-lock",
         ],
         "root_type": "profile",
     },
@@ -76,12 +126,23 @@ SAFARI_ARTIFACTS: Dict[str, Dict[str, List[str]]] = {
         "root_type": "profile",
     },
     "cache": {
-        # Safari cache is complex with multiple components
+        # Safari cache — multiple storage locations:
+        # - Cache.db: SQLite index of cached resources
+        # - WebKitCache/Version */Blobs/*: raw cached response bodies
+        # - WebKitCache/Version */Records/*/Resource/*: structured cache records
+        # - WebKit/NetworkCache/*: modern NetworkProcess cache
+        # - fsCachedData/*: legacy iOS-style cached data (rare on desktop)
         "patterns": [
             "Cache.db",
             "Cache.db-wal",
             "Cache.db-journal",
+            "Cache.db-shm",
             "fsCachedData/*",
+            "WebKitCache/Version */Blobs/*",
+            "WebKitCache/Version */Records/*",
+            "WebKit/NetworkCache/Version */Blobs/*",
+            "WebKit/NetworkCache/Version */Records/*",
+            "WebKit/CacheStorage/*",
         ],
         "root_type": "cache",
     },
@@ -123,6 +184,86 @@ SAFARI_ARTIFACTS: Dict[str, Dict[str, List[str]]] = {
         ],
         "root_type": "profile",
     },
+    "recently_closed_tabs": {
+        # Recently closed tabs — direct evidence of browsing activity
+        "patterns": [
+            "RecentlyClosedTabs.plist",
+        ],
+        "root_type": "profile",
+    },
+    "autofill": {
+        # Safari form autofill data and corrections
+        "patterns": [
+            "Form Values",
+            "AutoFillCorrections.db",
+            "AutoFillCorrections.db-wal",
+            "AutoFillCorrections.db-shm",
+            "CloudAutoFillCorrections.db",
+            "CloudAutoFillCorrections.db-wal",
+            "CloudAutoFillCorrections.db-shm",
+        ],
+        "root_type": "profile",
+    },
+    "per_site_preferences": {
+        # Per-site permission and preference settings — lists visited sites
+        "patterns": [
+            "PerSitePreferences.db",
+            "PerSitePreferences.db-wal",
+            "PerSitePreferences.db-shm",
+            "PerSiteZoomPreferences.plist",
+        ],
+        "root_type": "profile",
+    },
+    "history_index": {
+        # Safari search index for history — may contain terms not in History.db
+        "patterns": [
+            "HistoryIndex.sk",
+        ],
+        "root_type": "profile",
+    },
+    "permissions": {
+        # Site-level permission grants (media, notifications, plugins)
+        "patterns": [
+            "UserMediaPermissions.plist",
+            "UserNotificationPermissions.plist",
+            "PlugInOrigins.plist",
+            "SitesAllowedToAutoplay.plist",
+        ],
+        "root_type": "profile",
+    },
+    "cloud_history": {
+        # iCloud Safari sync configuration — indicates sync was active
+        "patterns": [
+            "CloudHistoryRemoteConfiguration.plist",
+        ],
+        "root_type": "profile",
+    },
+    "search_descriptions": {
+        # Installed search engine definitions
+        "patterns": [
+            "SearchDescriptions.plist",
+        ],
+        "root_type": "profile",
+    },
+    "webpage_icons": {
+        # Legacy favicon database (pre-macOS 12)
+        "patterns": [
+            "WebpageIcons.db",
+        ],
+        "root_type": "profile",
+    },
+    "spotlight_metadata": {
+        # Spotlight-indexed Safari metadata — HIGH forensic value!
+        # These .webhistory and .webbookmark files persist even after
+        # Safari history/bookmarks are cleared, providing evidence
+        # recovery capabilities.
+        "patterns": [
+            "History/*.webhistory",
+            "History/.tracked filenames.plist",
+            "Bookmarks/*.webbookmark",
+        ],
+        "root_type": "metadata",
+    },
 }
 
 
@@ -154,6 +295,8 @@ def get_patterns(artifact: str) -> List[str]:
         roots = browser["cookies_roots"]
     elif root_type == "cache":
         roots = browser["cache_roots"]
+    elif root_type == "metadata":
+        roots = browser["metadata_roots"]
     else:
         roots = browser["profile_roots"]
 

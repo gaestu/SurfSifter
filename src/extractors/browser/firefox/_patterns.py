@@ -45,6 +45,25 @@ import re
 from typing import Dict, List, Any
 
 
+def _with_absolute_variants(paths: List[str]) -> List[str]:
+    """
+    Expand root patterns to include both relative and absolute forms.
+
+    file_list rows from SleuthKit commonly contain absolute paths
+    (e.g., "/Users/alice/..."), while some iterators are relative.
+    """
+    expanded: List[str] = []
+    seen: set[str] = set()
+
+    for path in paths:
+        for candidate in (path, f"/{path}" if not path.startswith("/") else path):
+            if candidate not in seen:
+                seen.add(candidate)
+                expanded.append(candidate)
+
+    return expanded
+
+
 # Browser-specific profile root paths
 # Keys are browser identifiers, values are display name and profile roots
 FIREFOX_BROWSERS: Dict[str, Dict[str, Any]] = {
@@ -99,6 +118,16 @@ FIREFOX_BROWSERS: Dict[str, Dict[str, Any]] = {
         "cache_roots": None,  # Use profile_roots
     },
 }
+
+
+for browser_info in FIREFOX_BROWSERS.values():
+    profile_roots = browser_info.get("profile_roots")
+    if isinstance(profile_roots, list) and profile_roots:
+        browser_info["profile_roots"] = _with_absolute_variants(profile_roots)
+
+    cache_roots = browser_info.get("cache_roots")
+    if isinstance(cache_roots, list) and cache_roots:
+        browser_info["cache_roots"] = _with_absolute_variants(cache_roots)
 
 
 # Artifact paths relative to profile root

@@ -31,6 +31,27 @@ from __future__ import annotations
 from typing import Dict, List, Any
 
 
+def _with_absolute_variants(paths: List[str]) -> List[str]:
+    """
+    Expand root patterns to include both relative and absolute forms.
+
+    SleuthKit-based file_list rows are commonly stored as absolute paths
+    (e.g., "/Users/alice/..."), while some filesystem iterators match
+    relative paths ("Users/alice/..."). Keeping both variants improves
+    discovery consistency across modes.
+    """
+    expanded: List[str] = []
+    seen: set[str] = set()
+
+    for path in paths:
+        for candidate in (path, f"/{path}" if not path.startswith("/") else path):
+            if candidate not in seen:
+                seen.add(candidate)
+                expanded.append(candidate)
+
+    return expanded
+
+
 # Browser-specific profile root paths
 # Keys are browser identifiers, values are display name, profile roots, and structure type
 #
@@ -50,6 +71,12 @@ CHROMIUM_BROWSERS: Dict[str, Dict[str, Any]] = {
             # Linux
             "home/*/.config/google-chrome",
         ],
+        "cache_roots": [
+            # macOS cache location
+            "Users/*/Library/Caches/Google/Chrome",
+            # Linux cache location
+            "home/*/.cache/google-chrome",
+        ],
     },
     "chrome_beta": {
         "display_name": "Google Chrome Beta",
@@ -60,6 +87,10 @@ CHROMIUM_BROWSERS: Dict[str, Dict[str, Any]] = {
             "Users/*/Library/Application Support/Google/Chrome Beta",
             # Linux
             "home/*/.config/google-chrome-beta",
+        ],
+        "cache_roots": [
+            "Users/*/Library/Caches/Google/Chrome Beta",
+            "home/*/.cache/google-chrome-beta",
         ],
     },
     "chrome_dev": {
@@ -72,6 +103,10 @@ CHROMIUM_BROWSERS: Dict[str, Dict[str, Any]] = {
             # Linux (uses "unstable" suffix)
             "home/*/.config/google-chrome-unstable",
         ],
+        "cache_roots": [
+            "Users/*/Library/Caches/Google/Chrome Dev",
+            "home/*/.cache/google-chrome-unstable",
+        ],
     },
     "chrome_canary": {
         "display_name": "Google Chrome Canary",
@@ -82,6 +117,10 @@ CHROMIUM_BROWSERS: Dict[str, Dict[str, Any]] = {
             "Users/*/Library/Application Support/Google/Chrome Canary",
             # Linux (rare, but exists)
             "home/*/.config/google-chrome-canary",
+        ],
+        "cache_roots": [
+            "Users/*/Library/Caches/Google/Chrome Canary",
+            "home/*/.cache/google-chrome-canary",
         ],
     },
     # =========================================================================
@@ -97,6 +136,10 @@ CHROMIUM_BROWSERS: Dict[str, Dict[str, Any]] = {
             # Linux
             "home/*/.config/chromium",
         ],
+        "cache_roots": [
+            "Users/*/Library/Caches/Chromium",
+            "home/*/.cache/chromium",
+        ],
     },
     # =========================================================================
     # Microsoft Edge (all channels)
@@ -111,6 +154,10 @@ CHROMIUM_BROWSERS: Dict[str, Dict[str, Any]] = {
             # Linux
             "home/*/.config/microsoft-edge",
         ],
+        "cache_roots": [
+            "Users/*/Library/Caches/Microsoft Edge",
+            "home/*/.cache/microsoft-edge",
+        ],
     },
     "edge_beta": {
         "display_name": "Microsoft Edge Beta",
@@ -121,6 +168,10 @@ CHROMIUM_BROWSERS: Dict[str, Dict[str, Any]] = {
             "Users/*/Library/Application Support/Microsoft Edge Beta",
             # Linux
             "home/*/.config/microsoft-edge-beta",
+        ],
+        "cache_roots": [
+            "Users/*/Library/Caches/Microsoft Edge Beta",
+            "home/*/.cache/microsoft-edge-beta",
         ],
     },
     "edge_dev": {
@@ -133,6 +184,10 @@ CHROMIUM_BROWSERS: Dict[str, Dict[str, Any]] = {
             # Linux
             "home/*/.config/microsoft-edge-dev",
         ],
+        "cache_roots": [
+            "Users/*/Library/Caches/Microsoft Edge Dev",
+            "home/*/.cache/microsoft-edge-dev",
+        ],
     },
     "edge_canary": {
         "display_name": "Microsoft Edge Canary",
@@ -143,6 +198,10 @@ CHROMIUM_BROWSERS: Dict[str, Dict[str, Any]] = {
             "Users/*/Library/Application Support/Microsoft Edge Canary",
             # Linux (rare)
             "home/*/.config/microsoft-edge-canary",
+        ],
+        "cache_roots": [
+            "Users/*/Library/Caches/Microsoft Edge Canary",
+            "home/*/.cache/microsoft-edge-canary",
         ],
     },
     # =========================================================================
@@ -158,6 +217,10 @@ CHROMIUM_BROWSERS: Dict[str, Dict[str, Any]] = {
             # Linux
             "home/*/.config/BraveSoftware/Brave-Browser",
         ],
+        "cache_roots": [
+            "Users/*/Library/Caches/BraveSoftware/Brave-Browser",
+            "home/*/.cache/BraveSoftware/Brave-Browser",
+        ],
     },
     "brave_beta": {
         "display_name": "Brave Beta",
@@ -169,6 +232,10 @@ CHROMIUM_BROWSERS: Dict[str, Dict[str, Any]] = {
             # Linux
             "home/*/.config/BraveSoftware/Brave-Browser-Beta",
         ],
+        "cache_roots": [
+            "Users/*/Library/Caches/BraveSoftware/Brave-Browser-Beta",
+            "home/*/.cache/BraveSoftware/Brave-Browser-Beta",
+        ],
     },
     "brave_nightly": {
         "display_name": "Brave Nightly",
@@ -179,6 +246,10 @@ CHROMIUM_BROWSERS: Dict[str, Dict[str, Any]] = {
             "Users/*/Library/Application Support/BraveSoftware/Brave-Browser-Nightly",
             # Linux
             "home/*/.config/BraveSoftware/Brave-Browser-Nightly",
+        ],
+        "cache_roots": [
+            "Users/*/Library/Caches/BraveSoftware/Brave-Browser-Nightly",
+            "home/*/.cache/BraveSoftware/Brave-Browser-Nightly",
         ],
     },
     # =========================================================================
@@ -197,6 +268,10 @@ CHROMIUM_BROWSERS: Dict[str, Dict[str, Any]] = {
             # Linux
             "home/*/.config/opera",
         ],
+        "cache_roots": [
+            "Users/*/Library/Caches/com.operasoftware.Opera",
+            "home/*/.cache/opera",
+        ],
     },
     "opera_gx": {
         "display_name": "Opera GX",
@@ -209,8 +284,18 @@ CHROMIUM_BROWSERS: Dict[str, Dict[str, Any]] = {
             # Linux (rare)
             "home/*/.config/opera-gx",
         ],
+        "cache_roots": [
+            "Users/*/Library/Caches/com.operasoftware.OperaGX",
+            "home/*/.cache/opera-gx",
+        ],
     },
 }
+
+
+for browser_info in CHROMIUM_BROWSERS.values():
+    browser_info["profile_roots"] = _with_absolute_variants(browser_info["profile_roots"])
+    if "cache_roots" in browser_info:
+        browser_info["cache_roots"] = _with_absolute_variants(browser_info["cache_roots"])
 
 
 # Profile subdirectory patterns for browsers with multi-profile support
@@ -347,8 +432,15 @@ def get_patterns(browser: str, artifact: str) -> List[str]:
     artifact_paths = CHROMIUM_ARTIFACTS[artifact]
     is_flat = browser_info.get("flat_profile", False)
 
+    if artifact == "cache":
+        roots = list(browser_info["profile_roots"])
+        roots.extend(browser_info.get("cache_roots", []))
+        profile_roots = list(dict.fromkeys(roots))  # de-duplicate while preserving order
+    else:
+        profile_roots = browser_info["profile_roots"]
+
     patterns = []
-    for profile_root in browser_info["profile_roots"]:
+    for profile_root in profile_roots:
         if is_flat:
             # Opera-style: artifacts directly under profile root
             for artifact_path in artifact_paths:
