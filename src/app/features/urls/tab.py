@@ -49,9 +49,10 @@ class FilterLoadWorker(QThread):
     # Limit domain dropdown to top N to prevent UI slowdown with 16k+ domains
     MAX_DOMAINS = 200
 
-    def __init__(self, case_data: CaseDataAccess, evidence_id: int):
+    def __init__(self, case_folder: Path, case_db_path: Path, evidence_id: int):
         super().__init__()
-        self.case_data = case_data
+        self.case_folder = case_folder
+        self.case_db_path = case_db_path
         self.evidence_id = evidence_id
 
     def run(self):
@@ -60,20 +61,32 @@ class FilterLoadWorker(QThread):
         start_time = time.time()
 
         try:
-            # Load domains with count, limited to top N
-            domains = self._load_top_domains()
+            if self.isInterruptionRequested():
+                return
 
-            # Load sources (usually small list)
-            sources = self.case_data.list_url_sources(self.evidence_id)
+            with CaseDataAccess(self.case_folder, self.case_db_path) as case_data:
+                # Load domains with count, limited to top N
+                domains = self._load_top_domains(case_data)
+                if self.isInterruptionRequested():
+                    return
 
-            # Load match lists (usually small list)
-            try:
-                match_lists = self.case_data.list_url_match_lists(self.evidence_id)
-            except Exception:
-                match_lists = []
+                # Load sources (usually small list)
+                sources = case_data.list_url_sources(self.evidence_id)
+                if self.isInterruptionRequested():
+                    return
 
-            # Load tags (usually small list)
-            tags = self.case_data.list_tags(self.evidence_id)
+                # Load match lists (usually small list)
+                try:
+                    match_lists = case_data.list_url_match_lists(self.evidence_id)
+                except Exception:
+                    match_lists = []
+                if self.isInterruptionRequested():
+                    return
+
+                # Load tags (usually small list)
+                tags = case_data.list_tags(self.evidence_id)
+                if self.isInterruptionRequested():
+                    return
 
             elapsed = time.time() - start_time
             logger.info(
@@ -92,10 +105,10 @@ class FilterLoadWorker(QThread):
             logger.error("FilterLoadWorker error: %s", e, exc_info=True)
             self.error.emit(str(e))
 
-    def _load_top_domains(self) -> List[Dict[str, Any]]:
+    def _load_top_domains(self, case_data: CaseDataAccess) -> List[Dict[str, Any]]:
         """Load top domains by frequency instead of all domains."""
         # Use case_data helper for clean data access
-        return self.case_data.get_top_domains(self.evidence_id, limit=self.MAX_DOMAINS)
+        return case_data.get_top_domains(self.evidence_id, limit=self.MAX_DOMAINS)
 
 
 class DataLoadWorker(QThread):
@@ -111,14 +124,16 @@ class DataLoadWorker(QThread):
 
     def __init__(
         self,
-        case_data: CaseDataAccess,
+        case_folder: Path,
+        case_db_path: Path,
         evidence_id: int,
         filters: dict,
         page_size: int = 10000,
         page: int = 0,
     ):
         super().__init__()
-        self.case_data = case_data
+        self.case_folder = case_folder
+        self.case_db_path = case_db_path
         self.evidence_id = evidence_id
         self.filters = filters
         self.page_size = page_size
@@ -130,27 +145,35 @@ class DataLoadWorker(QThread):
         start_time = time.time()
 
         try:
-            # Get total count first (fast query)
-            total_count = self.case_data.count_urls(
-                self.evidence_id,
-                domain_like=self.filters.get("domain", "%"),
-                url_like=self.filters.get("url", "%"),
-                tag_like=self.filters.get("tag", "%"),
-                discovered_by=self.filters.get("sources"),
-                match_filter=self.filters.get("match_filter"),
-            )
+            if self.isInterruptionRequested():
+                return
 
-            # Load page data
-            rows = self.case_data.iter_urls(
-                self.evidence_id,
-                domain_like=self.filters.get("domain", "%"),
-                url_like=self.filters.get("url", "%"),
-                tag_like=self.filters.get("tag", "%"),
-                discovered_by=self.filters.get("sources"),
-                match_filter=self.filters.get("match_filter"),
-                limit=self.page_size,
-                offset=self.page * self.page_size,
-            )
+            with CaseDataAccess(self.case_folder, self.case_db_path) as case_data:
+                # Get total count first (fast query)
+                total_count = case_data.count_urls(
+                    self.evidence_id,
+                    domain_like=self.filters.get("domain", "%"),
+                    url_like=self.filters.get("url", "%"),
+                    tag_like=self.filters.get("tag", "%"),
+                    discovered_by=self.filters.get("sources"),
+                    match_filter=self.filters.get("match_filter"),
+                )
+                if self.isInterruptionRequested():
+                    return
+
+                # Load page data
+                rows = case_data.iter_urls(
+                    self.evidence_id,
+                    domain_like=self.filters.get("domain", "%"),
+                    url_like=self.filters.get("url", "%"),
+                    tag_like=self.filters.get("tag", "%"),
+                    discovered_by=self.filters.get("sources"),
+                    match_filter=self.filters.get("match_filter"),
+                    limit=self.page_size,
+                    offset=self.page * self.page_size,
+                )
+                if self.isInterruptionRequested():
+                    return
 
             elapsed = time.time() - start_time
             logger.info(
@@ -195,11 +218,21 @@ class UrlsTab(QWidget):
 
         # Background filter loading (performance optimization)
         self._filter_worker: Optional[FilterLoadWorker] = None
+        self._pending_filter_workers: List[FilterLoadWorker] = []
+        self._filter_worker_generation = 0
         self._filters_loading = False
 
         # Background data loading (Phase 2.1)
         self._data_worker: Optional[DataLoadWorker] = None
+        self._pending_data_workers: List[DataLoadWorker] = []
+        self._data_worker_generation = 0
         self._data_loading = False
+
+        # URL match worker lifecycle
+        self.match_worker: Optional[UrlMatchWorker] = None
+        self._pending_match_workers: List[UrlMatchWorker] = []
+        self._match_worker_generation = 0
+        self.progress_dialog: Optional[QProgressDialog] = None
 
         layout = QVBoxLayout()
 
@@ -455,19 +488,36 @@ class UrlsTab(QWidget):
             self._set_filters_empty()
             return
 
-        # Cancel any existing worker
+        # Increment generation; any stale worker callbacks are ignored.
+        self._filter_worker_generation += 1
+        current_gen = self._filter_worker_generation
+
+        # Keep old worker alive until it finishes (prevents QThread destruction crash).
         if self._filter_worker is not None:
-            self._filter_worker.finished.disconnect()
-            self._filter_worker.error.disconnect()
+            if self._filter_worker.isRunning():
+                self._pending_filter_workers.append(self._filter_worker)
+            else:
+                self._filter_worker.deleteLater()
             self._filter_worker = None
+        self._pending_filter_workers = [w for w in self._pending_filter_workers if w.isRunning()]
 
         # Show loading state
         self._set_filters_loading()
 
+        case_folder = getattr(self.case_data, "case_folder", None)
+        case_db_path = getattr(self.case_data, "db_path", None)
+        if case_folder is None or case_db_path is None:
+            self._on_filters_load_error("Case context unavailable for background filter loading", current_gen)
+            return
+
         # Start background loading
-        self._filter_worker = FilterLoadWorker(self.case_data, int(self.evidence_id))
-        self._filter_worker.finished.connect(self._on_filters_loaded)
-        self._filter_worker.error.connect(self._on_filters_load_error)
+        self._filter_worker = FilterLoadWorker(Path(case_folder), Path(case_db_path), int(self.evidence_id))
+        self._filter_worker.finished.connect(
+            lambda data, gen=current_gen: self._on_filters_loaded(data, gen)
+        )
+        self._filter_worker.error.connect(
+            lambda error, gen=current_gen: self._on_filters_load_error(error, gen)
+        )
         self._filter_worker.start()
 
         logger.debug("Started background filter loading for evidence_id=%s", self.evidence_id)
@@ -531,13 +581,21 @@ class UrlsTab(QWidget):
         self.tag_combo.setEnabled(False)
         self.tag_combo.blockSignals(False)
 
-    def _on_filters_loaded(self, data: Dict[str, Any]) -> None:
+    def _on_filters_loaded(self, data: Dict[str, Any], generation: int = 0) -> None:
         """
         Handle background filter loading completion.
 
         Args:
             data: Dictionary with domains, sources, match_lists, tags
         """
+        if generation != self._filter_worker_generation:
+            logger.debug(
+                "Ignoring stale FilterLoadWorker result (gen %d vs current %d)",
+                generation,
+                self._filter_worker_generation,
+            )
+            return
+
         self._filters_loading = False
         self._filter_worker = None
 
@@ -613,8 +671,11 @@ class UrlsTab(QWidget):
         logger.debug("Filter loading complete: %d domains, %d sources, %d match_lists, %d tags",
                      len(domain_items), len(sources), len(match_lists), len(tags))
 
-    def _on_filters_load_error(self, error: str) -> None:
+    def _on_filters_load_error(self, error: str, generation: int = 0) -> None:
         """Handle background filter loading error."""
+        if generation != self._filter_worker_generation:
+            return
+
         self._filters_loading = False
         self._filter_worker = None
 
@@ -726,29 +787,44 @@ class UrlsTab(QWidget):
 
         Phase 2.1 - Loads URL data in background thread.
         """
-        # Cancel any existing worker
+        # Increment generation; any stale worker callbacks are ignored.
+        self._data_worker_generation += 1
+        current_gen = self._data_worker_generation
+
+        # Keep old worker alive until it finishes (prevents QThread destruction crash).
         if self._data_worker is not None:
-            try:
-                self._data_worker.finished.disconnect()
-                self._data_worker.error.disconnect()
-            except RuntimeError:
-                pass  # Already disconnected
+            if self._data_worker.isRunning():
+                self._pending_data_workers.append(self._data_worker)
+            else:
+                self._data_worker.deleteLater()
             self._data_worker = None
+        self._pending_data_workers = [w for w in self._pending_data_workers if w.isRunning()]
 
         # Show loading state
         self._data_loading = True
         self._set_table_loading()
 
+        case_folder = getattr(self.case_data, "case_folder", None)
+        case_db_path = getattr(self.case_data, "db_path", None)
+        if case_folder is None or case_db_path is None:
+            self._on_data_load_error("Case context unavailable for background URL loading", current_gen)
+            return
+
         # Start background worker with current filters
         self._data_worker = DataLoadWorker(
-            self.case_data,
+            Path(case_folder),
+            Path(case_db_path),
             int(self.evidence_id),
             self.model.get_filters(),
             page_size=self.model.page_size,
             page=self.model.page,
         )
-        self._data_worker.finished.connect(self._on_data_loaded)
-        self._data_worker.error.connect(self._on_data_load_error)
+        self._data_worker.finished.connect(
+            lambda rows, count, gen=current_gen: self._on_data_loaded(rows, count, gen)
+        )
+        self._data_worker.error.connect(
+            lambda error, gen=current_gen: self._on_data_load_error(error, gen)
+        )
         self._data_worker.start()
 
         logger.debug("Started background data loading for evidence_id=%s", self.evidence_id)
@@ -760,12 +836,20 @@ class UrlsTab(QWidget):
         self.prev_button.setEnabled(False)
         self.next_button.setEnabled(False)
 
-    def _on_data_loaded(self, rows: list, total_count: int) -> None:
+    def _on_data_loaded(self, rows: list, total_count: int, generation: int = 0) -> None:
         """
         Handle background data loading completion.
 
         Updates model with loaded data.
         """
+        if generation != self._data_worker_generation:
+            logger.debug(
+                "Ignoring stale DataLoadWorker result (gen %d vs current %d)",
+                generation,
+                self._data_worker_generation,
+            )
+            return
+
         self._data_loading = False
         self._data_worker = None
 
@@ -777,8 +861,11 @@ class UrlsTab(QWidget):
 
         logger.debug("Data loading complete: %d rows, %d total", len(rows), total_count)
 
-    def _on_data_load_error(self, error: str) -> None:
+    def _on_data_load_error(self, error: str, generation: int = 0) -> None:
         """Handle background data loading error."""
+        if generation != self._data_worker_generation:
+            return
+
         self._data_loading = False
         self._data_worker = None
 
@@ -1072,6 +1159,28 @@ class UrlsTab(QWidget):
                 )
                 return
 
+            # Invalidate stale callbacks from any previous worker.
+            self._match_worker_generation += 1
+            current_gen = self._match_worker_generation
+
+            # Keep old worker alive until it finishes (prevents QThread destruction crash).
+            if self.match_worker is not None:
+                if self.match_worker.isRunning():
+                    self._pending_match_workers.append(self.match_worker)
+                else:
+                    self.match_worker.deleteLater()
+                self.match_worker = None
+            self._pending_match_workers = [w for w in self._pending_match_workers if w.isRunning()]
+
+            # Replace any prior progress dialog safely.
+            if self.progress_dialog is not None:
+                try:
+                    self.progress_dialog.close()
+                    self.progress_dialog.deleteLater()
+                except RuntimeError:
+                    pass
+                self.progress_dialog = None
+
             # Create and start worker
             self.match_worker = UrlMatchWorker(
                 self.case_data.db_manager, self.evidence_id, selected_lists
@@ -1087,9 +1196,15 @@ class UrlsTab(QWidget):
             self.progress_dialog.setAutoClose(True)
 
             # Connect signals
-            self.match_worker.progress.connect(self._update_match_progress)
-            self.match_worker.finished.connect(self._match_finished)
-            self.match_worker.error.connect(self._match_error)
+            self.match_worker.progress.connect(
+                lambda current, total, gen=current_gen: self._update_match_progress(current, total, gen)
+            )
+            self.match_worker.finished.connect(
+                lambda results, gen=current_gen: self._match_finished(results, gen)
+            )
+            self.match_worker.error.connect(
+                lambda error_msg, gen=current_gen: self._match_error(error_msg, gen)
+            )
             self.progress_dialog.canceled.connect(self._cancel_match_worker)
 
             self.match_worker.start()
@@ -1104,18 +1219,36 @@ class UrlsTab(QWidget):
 
     def _cancel_match_worker(self) -> None:
         """Gracefully cancel match worker when user clicks Cancel."""
-        if hasattr(self, 'match_worker') and self.match_worker is not None:
-            if self.match_worker.isRunning():
-                self.match_worker.requestInterruption()
-                self.match_worker.quit()
-                if not self.match_worker.wait(1000):
-                    logger.warning("UrlMatchWorker did not stop on cancel, terminating")
-                    self.match_worker.terminate()
-                    self.match_worker.wait(500)
-            self.match_worker = None
+        if self.match_worker is None:
+            return
 
-    def _update_match_progress(self, current: int, total: int) -> None:
+        # Invalidate old worker callbacks immediately.
+        self._match_worker_generation += 1
+        worker = self.match_worker
+        self.match_worker = None
+
+        if worker.isRunning():
+            worker.requestInterruption()
+            worker.quit()
+            if not worker.wait(300):
+                logger.info("UrlMatchWorker still stopping after cancel; keeping worker alive")
+                self._pending_match_workers.append(worker)
+        else:
+            worker.deleteLater()
+
+        if self.progress_dialog is not None:
+            try:
+                self.progress_dialog.close()
+                self.progress_dialog.deleteLater()
+            except RuntimeError:
+                pass
+            self.progress_dialog = None
+
+    def _update_match_progress(self, current: int, total: int, generation: int = 0) -> None:
         """Update match progress dialog."""
+        if generation != self._match_worker_generation or self.progress_dialog is None:
+            return
+
         if total > 0:
             progress = int((current / total) * 100)
             self.progress_dialog.setValue(progress)
@@ -1123,9 +1256,18 @@ class UrlsTab(QWidget):
                 f"Matching... {progress}%"
             )
 
-    def _match_finished(self, results: Dict[str, int]) -> None:
+    def _match_finished(self, results: Dict[str, int], generation: int = 0) -> None:
         """Handle match completion."""
-        self.progress_dialog.close()
+        if generation != self._match_worker_generation:
+            return
+
+        if self.progress_dialog is not None:
+            self.progress_dialog.close()
+            self.progress_dialog.deleteLater()
+            self.progress_dialog = None
+        if self.match_worker is not None:
+            self.match_worker.deleteLater()
+            self.match_worker = None
 
         total_matches = sum(results.values())
         message = f"Matching completed!\n\nTotal matches found: {total_matches:,}\n\n"
@@ -1144,9 +1286,19 @@ class UrlsTab(QWidget):
         # Refresh data
         self.refresh()
 
-    def _match_error(self, error_msg: str) -> None:
+    def _match_error(self, error_msg: str, generation: int = 0) -> None:
         """Handle match error."""
-        self.progress_dialog.close()
+        if generation != self._match_worker_generation:
+            return
+
+        if self.progress_dialog is not None:
+            self.progress_dialog.close()
+            self.progress_dialog.deleteLater()
+            self.progress_dialog = None
+        if self.match_worker is not None:
+            self.match_worker.deleteLater()
+            self.match_worker = None
+
         QMessageBox.critical(
             self,
             "Match Error",
@@ -1160,59 +1312,65 @@ class UrlsTab(QWidget):
         Called by MainWindow.closeEvent() and _on_close_evidence_tab() to prevent
         Qt abort from destroying QThread while still running.
         """
-        # Stop filter worker
+        # Invalidate all pending callbacks.
+        self._filter_worker_generation += 1
+        self._data_worker_generation += 1
+        self._match_worker_generation += 1
+
+        def _stop_worker(worker: QThread, worker_name: str, timeout_ms: int = 2000) -> None:
+            if worker is None:
+                return
+            try:
+                worker.finished.disconnect()
+            except (RuntimeError, TypeError):
+                pass
+            try:
+                worker.error.disconnect()
+            except (RuntimeError, TypeError):
+                pass
+            try:
+                worker.progress.disconnect()  # UrlMatchWorker only
+            except (RuntimeError, TypeError, AttributeError):
+                pass
+
+            if worker.isRunning():
+                worker.requestInterruption()
+                worker.quit()
+                if not worker.wait(timeout_ms):
+                    logger.warning("%s did not stop in %dms, terminating", worker_name, timeout_ms)
+                    worker.terminate()
+                    worker.wait(500)
+            worker.deleteLater()
+
+        # Stop current workers.
         if self._filter_worker is not None:
-            try:
-                self._filter_worker.finished.disconnect()
-                self._filter_worker.error.disconnect()
-            except (RuntimeError, TypeError):
-                pass  # Already disconnected
-            if self._filter_worker.isRunning():
-                self._filter_worker.requestInterruption()
-                self._filter_worker.quit()
-                if not self._filter_worker.wait(2000):
-                    logger.warning("FilterLoadWorker did not stop in 2s, terminating")
-                    self._filter_worker.terminate()
-                    self._filter_worker.wait(500)
+            _stop_worker(self._filter_worker, "FilterLoadWorker")
             self._filter_worker = None
-
-        # Stop data worker
         if self._data_worker is not None:
-            try:
-                self._data_worker.finished.disconnect()
-                self._data_worker.error.disconnect()
-            except (RuntimeError, TypeError):
-                pass
-            if self._data_worker.isRunning():
-                self._data_worker.requestInterruption()
-                self._data_worker.quit()
-                if not self._data_worker.wait(2000):
-                    logger.warning("DataLoadWorker did not stop in 2s, terminating")
-                    self._data_worker.terminate()
-                    self._data_worker.wait(500)
+            _stop_worker(self._data_worker, "DataLoadWorker")
             self._data_worker = None
-
-        # Stop match worker if exists
-        if hasattr(self, 'match_worker') and self.match_worker is not None:
-            try:
-                self.match_worker.progress.disconnect()
-                self.match_worker.finished.disconnect()
-                self.match_worker.error.disconnect()
-            except (RuntimeError, TypeError):
-                pass
-            if self.match_worker.isRunning():
-                self.match_worker.requestInterruption()
-                self.match_worker.quit()
-                if not self.match_worker.wait(2000):
-                    logger.warning("UrlMatchWorker did not stop in 2s, terminating")
-                    self.match_worker.terminate()
-                    self.match_worker.wait(500)
+        if self.match_worker is not None:
+            _stop_worker(self.match_worker, "UrlMatchWorker")
             self.match_worker = None
 
-        # Close progress dialog if open
-        if hasattr(self, 'progress_dialog') and self.progress_dialog is not None:
+        # Stop pending workers that were intentionally kept alive.
+        for worker in self._pending_filter_workers:
+            _stop_worker(worker, "Pending FilterLoadWorker", timeout_ms=1000)
+        self._pending_filter_workers.clear()
+
+        for worker in self._pending_data_workers:
+            _stop_worker(worker, "Pending DataLoadWorker", timeout_ms=1000)
+        self._pending_data_workers.clear()
+
+        for worker in self._pending_match_workers:
+            _stop_worker(worker, "Pending UrlMatchWorker", timeout_ms=1000)
+        self._pending_match_workers.clear()
+
+        # Close progress dialog if open.
+        if self.progress_dialog is not None:
             try:
                 self.progress_dialog.close()
+                self.progress_dialog.deleteLater()
             except RuntimeError:
                 pass
             self.progress_dialog = None

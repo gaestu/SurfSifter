@@ -126,6 +126,7 @@ class URLMatcher:
         list_name: str,
         list_path: Path,
         progress_callback: Optional[Callable[[int, int], None]] = None,
+        should_interrupt: Optional[Callable[[], bool]] = None,
     ) -> Dict[str, int]:
         """
         Match all URLs in database against URL list.
@@ -134,6 +135,7 @@ class URLMatcher:
             list_name: Name of URL list (for display, typically filename without .txt)
             list_path: Path to URL list file
             progress_callback: Optional callback(rows_processed, total_rows)
+            should_interrupt: Optional callback returning True when matching should stop
 
         Returns:
             Dictionary with keys:
@@ -143,6 +145,7 @@ class URLMatcher:
 
         Raises:
             FileNotFoundError: If list doesn't exist
+            InterruptedError: If should_interrupt callback requests cancellation
 
         Side Effect:
             Inserts matches into url_matches table
@@ -175,10 +178,18 @@ class URLMatcher:
         logger.info(f"Processing {total_rows} URLs with {len(patterns)} patterns (mode={mode})")
 
         for idx, row in enumerate(rows):
+            if should_interrupt and should_interrupt():
+                logger.info("URL matching interrupted at %d/%d URLs", idx, total_rows)
+                raise InterruptedError("URL matching interrupted")
+
             url_id, url, domain = row
 
             # Try matching against each pattern
             for pattern in patterns:
+                if should_interrupt and should_interrupt():
+                    logger.info("URL matching interrupted while processing patterns")
+                    raise InterruptedError("URL matching interrupted")
+
                 if self.match_pattern(url, pattern, mode):
                     # Insert match record
                     try:

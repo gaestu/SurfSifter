@@ -149,6 +149,9 @@ class UrlMatchWorker(QThread):
         try:
             from core.matching import URLMatcher
 
+            if self.isInterruptionRequested():
+                return
+
             # Get evidence label from case database
             label = self._get_evidence_label()
 
@@ -163,7 +166,14 @@ class UrlMatchWorker(QThread):
 
                 total_lists = len(self.selected_lists)
                 for i, (list_name, list_path) in enumerate(self.selected_lists):
+                    if self.isInterruptionRequested():
+                        logger.info("UrlMatchWorker interrupted before list '%s'", list_name)
+                        return
+
                     def progress_callback(current: int, total: int):
+                        if self.isInterruptionRequested():
+                            raise InterruptedError("URL matching interrupted")
+
                         # Report progress across all lists
                         if total > 0:
                             overall_current = (i * 1000) + int(current * 1000 / total)
@@ -173,14 +183,29 @@ class UrlMatchWorker(QThread):
                         self.progress.emit(overall_current, overall_total)
 
                     # Match URLs against this list
-                    match_result = matcher.match_urls(list_name, list_path, progress_callback)
+                    match_result = matcher.match_urls(
+                        list_name,
+                        list_path,
+                        progress_callback,
+                        should_interrupt=self.isInterruptionRequested,
+                    )
                     results[list_name] = match_result["matched"]
 
+                if self.isInterruptionRequested():
+                    logger.info("UrlMatchWorker interrupted after processing lists")
+                    return
                 self.finished.emit(results)
 
             finally:
                 evidence_conn.close()
+                try:
+                    self.db_manager.close_thread_connections()
+                except Exception:
+                    pass
 
+        except InterruptedError:
+            logger.info("UrlMatchWorker interrupted")
+            return
         except Exception as e:
             import traceback
             logger.exception("UrlMatchWorker error")
