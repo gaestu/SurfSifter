@@ -251,19 +251,12 @@ class SleuthKitFileListGenerator:
                 offset = start_sector * block_size
                 length = length_sectors * block_size
 
-                # Check if filesystem is readable (NTFS, FAT, exFAT, ext*, etc.)
-                # For GPT partitions with empty descriptions, we'll let fls try to
-                # determine the filesystem type (common for Windows GPT disks)
-                fs_keywords = [
-                    'NTFS', 'FAT', 'EXFAT', 'EXT', 'HFS', 'APFS', 'LINUX',
-                    'BASIC DATA PARTITION',  # GPT Microsoft basic data (often NTFS)
-                    'MS DATA',               # Alternate mmls label for Microsoft basic data
-                    'EFI',                   # EFI System Partition (often FAT, but mmls may not say FAT)
-                    'SYSTEM PARTITION',      # Common label variant
-                ]
-                # If description is empty (common for GPT), assume potentially readable
-                # fls will report if it can't determine the filesystem type
-                fs_readable = (not description) or any(fs in desc_upper for fs in fs_keywords)
+                # All non-Meta/non-Unallocated partitions are considered
+                # potentially readable. Let fls attempt enumeration and handle
+                # errors gracefully. The old keyword whitelist was too restrictive
+                # and missed Apple partitions (e.g. _DS_DEV_DISK_X_), recovery
+                # volumes (Untitled), and other valid filesystems.
+                fs_readable = True
 
                 partitions.append({
                     'index': partition_index,
@@ -288,16 +281,6 @@ class SleuthKitFileListGenerator:
                 'description': 'Direct filesystem',
                 'filesystem_readable': True,
             }]
-
-        # If nothing was marked readable, assume all parsed partitions are readable
-        if not any(p['filesystem_readable'] for p in partitions):
-            logger.warning(
-                "mmls returned %d partitions but none were marked readable; "
-                "treating all as readable to allow fls to attempt enumeration",
-                len(partitions)
-            )
-            for p in partitions:
-                p['filesystem_readable'] = True
 
         logger.info("Found %d partition(s) via mmls", len(partitions))
         return partitions
@@ -505,7 +488,11 @@ class SleuthKitFileListGenerator:
         # - Unknown partition types
         if not is_ntfs:
             # Non-Windows filesystems we can confidently skip filtering for
-            non_windows_fs = ['EXT', 'HFS', 'APFS', 'LINUX', 'SWAP', 'BSD', 'UFS']
+            # Includes Apple-specific labels (e.g. _DS_DEV_DISK_X_, Apple_HFS)
+            non_windows_fs = [
+                'EXT', 'HFS', 'APFS', 'LINUX', 'SWAP', 'BSD', 'UFS',
+                'APPLE', '_DS_DEV_', 'CORESTORAGE',
+            ]
             is_non_windows = any(fs in description for fs in non_windows_fs)
             if not is_non_windows:
                 logger.debug(

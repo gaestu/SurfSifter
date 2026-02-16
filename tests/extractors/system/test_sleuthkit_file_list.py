@@ -1424,7 +1424,10 @@ class TestNtfsMetadataFilteringDetermination:
 
         # But the new logic should enable it anyway
         if not is_ntfs:
-            non_windows_fs = ['EXT', 'HFS', 'APFS', 'LINUX', 'SWAP', 'BSD', 'UFS']
+            non_windows_fs = [
+                'EXT', 'HFS', 'APFS', 'LINUX', 'SWAP', 'BSD', 'UFS',
+                'APPLE', '_DS_DEV_', 'CORESTORAGE',
+            ]
             is_non_windows = any(fs in description for fs in non_windows_fs)
             if not is_non_windows:
                 is_ntfs = True
@@ -1438,7 +1441,10 @@ class TestNtfsMetadataFilteringDetermination:
         is_ntfs = 'NTFS' in description or 'EXFAT' in description or '0X07' in description
 
         if not is_ntfs:
-            non_windows_fs = ['EXT', 'HFS', 'APFS', 'LINUX', 'SWAP', 'BSD', 'UFS']
+            non_windows_fs = [
+                'EXT', 'HFS', 'APFS', 'LINUX', 'SWAP', 'BSD', 'UFS',
+                'APPLE', '_DS_DEV_', 'CORESTORAGE',
+            ]
             is_non_windows = any(fs in description for fs in non_windows_fs)
             if not is_non_windows:
                 is_ntfs = True
@@ -1452,7 +1458,10 @@ class TestNtfsMetadataFilteringDetermination:
         is_ntfs = 'NTFS' in description or 'EXFAT' in description or '0X07' in description
 
         if not is_ntfs:
-            non_windows_fs = ['EXT', 'HFS', 'APFS', 'LINUX', 'SWAP', 'BSD', 'UFS']
+            non_windows_fs = [
+                'EXT', 'HFS', 'APFS', 'LINUX', 'SWAP', 'BSD', 'UFS',
+                'APPLE', '_DS_DEV_', 'CORESTORAGE',
+            ]
             is_non_windows = any(fs in description for fs in non_windows_fs)
             if not is_non_windows:
                 is_ntfs = True
@@ -1466,7 +1475,10 @@ class TestNtfsMetadataFilteringDetermination:
         is_ntfs = 'NTFS' in description or 'EXFAT' in description or '0X07' in description
 
         if not is_ntfs:
-            non_windows_fs = ['EXT', 'HFS', 'APFS', 'LINUX', 'SWAP', 'BSD', 'UFS']
+            non_windows_fs = [
+                'EXT', 'HFS', 'APFS', 'LINUX', 'SWAP', 'BSD', 'UFS',
+                'APPLE', '_DS_DEV_', 'CORESTORAGE',
+            ]
             is_non_windows = any(fs in description for fs in non_windows_fs)
             if not is_non_windows:
                 is_ntfs = True
@@ -1480,7 +1492,10 @@ class TestNtfsMetadataFilteringDetermination:
         is_ntfs = 'NTFS' in description or 'EXFAT' in description or '0X07' in description
 
         if not is_ntfs:
-            non_windows_fs = ['EXT', 'HFS', 'APFS', 'LINUX', 'SWAP', 'BSD', 'UFS']
+            non_windows_fs = [
+                'EXT', 'HFS', 'APFS', 'LINUX', 'SWAP', 'BSD', 'UFS',
+                'APPLE', '_DS_DEV_', 'CORESTORAGE',
+            ]
             is_non_windows = any(fs in description for fs in non_windows_fs)
             if not is_non_windows:
                 is_ntfs = True
@@ -1494,7 +1509,10 @@ class TestNtfsMetadataFilteringDetermination:
         is_ntfs = 'NTFS' in description or 'EXFAT' in description or '0X07' in description
 
         if not is_ntfs:
-            non_windows_fs = ['EXT', 'HFS', 'APFS', 'LINUX', 'SWAP', 'BSD', 'UFS']
+            non_windows_fs = [
+                'EXT', 'HFS', 'APFS', 'LINUX', 'SWAP', 'BSD', 'UFS',
+                'APPLE', '_DS_DEV_', 'CORESTORAGE',
+            ]
             is_non_windows = any(fs in description for fs in non_windows_fs)
             if not is_non_windows:
                 is_ntfs = True
@@ -1508,9 +1526,29 @@ class TestNtfsMetadataFilteringDetermination:
         is_ntfs = 'NTFS' in description or 'EXFAT' in description or '0X07' in description
 
         if not is_ntfs:
-            non_windows_fs = ['EXT', 'HFS', 'APFS', 'LINUX', 'SWAP', 'BSD', 'UFS']
+            non_windows_fs = [
+                'EXT', 'HFS', 'APFS', 'LINUX', 'SWAP', 'BSD', 'UFS',
+                'APPLE', '_DS_DEV_', 'CORESTORAGE',
+            ]
             is_non_windows = any(fs in description for fs in non_windows_fs)
             if not is_non_windows:
                 is_ntfs = True
 
         assert is_ntfs is False
+
+    def test_ds_dev_disk_disables_filtering(self):
+        """Apple _DS_DEV_DISK_X_ partition should NOT enable NTFS filtering."""
+        partition = {'index': 0, 'offset': 0, 'description': '_DS_DEV_DISK_X_'}
+        description = partition.get('description', '').upper()
+        is_ntfs = 'NTFS' in description or 'EXFAT' in description or '0X07' in description
+
+        if not is_ntfs:
+            non_windows_fs = [
+                'EXT', 'HFS', 'APFS', 'LINUX', 'SWAP', 'BSD', 'UFS',
+                'APPLE', '_DS_DEV_', 'CORESTORAGE',
+            ]
+            is_non_windows = any(fs in description for fs in non_windows_fs)
+            if not is_non_windows:
+                is_ntfs = True
+
+        assert is_ntfs is False, "Apple _DS_DEV_DISK_ partition should not have NTFS filtering"
