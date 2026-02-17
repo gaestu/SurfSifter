@@ -14,16 +14,19 @@ Exported Extractors:
 - SafariCookiesExtractor: Cookies from Cookies.binarycookies
 - SafariBookmarksExtractor: Bookmarks from Bookmarks.plist
 - SafariDownloadsExtractor: Downloads from Downloads.plist
+- SafariSessionsExtractor: Open windows/tabs and recently closed tabs
 """
 
 from .history import SafariHistoryExtractor
 from .cookies import SafariCookiesExtractor
 from .bookmarks import SafariBookmarksExtractor
 from .downloads import SafariDownloadsExtractor
+from .sessions import SafariSessionsExtractor
 
 __all__ = [
     "SafariHistoryExtractor",
     "SafariCookiesExtractor",
     "SafariBookmarksExtractor",
     "SafariDownloadsExtractor",
+    "SafariSessionsExtractor",
 ]

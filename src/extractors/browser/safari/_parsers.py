@@ -21,7 +21,8 @@ import plistlib
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import List, Optional, Dict, Any, Iterator
+from typing import List, Optional, Dict, Any, Iterator, Set
+from urllib.parse import urljoin
 
 # Cocoa epoch: January 1, 2001 00:00:00 UTC
 # Cocoa timestamps are seconds (float) since this date
@@ -540,3 +541,455 @@ def get_download_stats(downloads: List[SafariDownload]) -> Dict[str, Any]:
         "total_downloads": len(downloads),
         "total_bytes": sum(d.total_bytes for d in downloads),
     }
+
+
+# =============================================================================
+# Sessions Parsing
+# =============================================================================
+
+@dataclass
+class SafariSessionTab:
+    """Safari session tab record from LastSession.plist."""
+    tab_url: str
+    tab_title: str
+    last_visit_time: Optional[datetime]
+    tab_index: int
+    window_index: int
+    is_pinned: bool
+    tab_uuid: Optional[str]
+    back_forward_entries: List[Dict[str, Any]]
+
+
+@dataclass
+class SafariSessionWindow:
+    """Safari session window record from LastSession.plist."""
+    window_index: int
+    selected_tab_index: int
+    is_private: bool
+    tab_count: int
+
+
+@dataclass
+class SafariClosedTab:
+    """Safari recently closed tab record from RecentlyClosedTabs.plist."""
+    tab_url: str
+    tab_title: str
+    date_closed: Optional[datetime]
+
+
+def parse_session_plist(file_path: Path) -> Dict[str, Any]:
+    """
+    Parse Safari LastSession.plist.
+
+    Returns:
+        Dict with keys: windows, tabs, history, closed_tabs
+    """
+    result: Dict[str, Any] = {
+        "windows": [],
+        "tabs": [],
+        "history": [],
+        "closed_tabs": [],
+    }
+
+    try:
+        with open(file_path, "rb") as f:
+            plist_data = plistlib.load(f)
+    except Exception:
+        return result
+
+    if not isinstance(plist_data, dict):
+        return result
+
+    windows = plist_data.get("SessionWindows", [])
+    if not isinstance(windows, list):
+        return result
+
+    for window_index, window_data in enumerate(windows):
+        if not isinstance(window_data, dict):
+            continue
+
+        tab_states = window_data.get("TabStates", [])
+        if not isinstance(tab_states, list):
+            tab_states = []
+
+        selected_tab_index = _coerce_int(window_data.get("SelectedTabIndex"), default=0)
+        is_private = bool(window_data.get("IsPrivateWindow", False))
+
+        result["windows"].append(
+            SafariSessionWindow(
+                window_index=window_index,
+                selected_tab_index=selected_tab_index,
+                is_private=is_private,
+                tab_count=len(tab_states),
+            )
+        )
+
+        for tab_index, tab_data in enumerate(tab_states):
+            if not isinstance(tab_data, dict):
+                continue
+
+            tab_url = str(tab_data.get("TabURL") or "").strip()
+            if not _is_non_blank_url(tab_url):
+                continue
+
+            tab_title = str(tab_data.get("TabTitle") or "").strip()
+            tab_uuid = tab_data.get("TabUUID")
+            last_visit = cocoa_to_datetime(_coerce_float(tab_data.get("LastVisitTime")))
+            is_pinned = bool(tab_data.get("IsAppTab", False))
+
+            history_entries = _parse_back_forward_list(tab_data)
+            if not history_entries:
+                state_blob = tab_data.get("SessionState") or tab_data.get("SessionStateData")
+                if isinstance(state_blob, (bytes, bytearray)):
+                    history_entries = _parse_session_state_archive(bytes(state_blob))
+
+            result["tabs"].append(
+                SafariSessionTab(
+                    tab_url=tab_url,
+                    tab_title=tab_title,
+                    last_visit_time=last_visit,
+                    tab_index=tab_index,
+                    window_index=window_index,
+                    is_pinned=is_pinned,
+                    tab_uuid=tab_uuid if isinstance(tab_uuid, str) else None,
+                    back_forward_entries=history_entries,
+                )
+            )
+
+            for nav_index, entry in enumerate(history_entries):
+                history_url = str(entry.get("url") or "").strip()
+                if not _is_non_blank_url(history_url):
+                    continue
+
+                result["history"].append(
+                    {
+                        "window_index": window_index,
+                        "tab_index": tab_index,
+                        "nav_index": _coerce_int(entry.get("nav_index"), default=nav_index),
+                        "url": history_url,
+                        "title": str(entry.get("title") or ""),
+                        "timestamp_utc": last_visit.isoformat() if last_visit else None,
+                    }
+                )
+
+    return result
+
+
+def parse_recently_closed_tabs(file_path: Path) -> List[SafariClosedTab]:
+    """
+    Parse Safari RecentlyClosedTabs.plist.
+
+    Returns:
+        List of SafariClosedTab records.
+    """
+    closed_tabs: List[SafariClosedTab] = []
+
+    try:
+        with open(file_path, "rb") as f:
+            plist_data = plistlib.load(f)
+    except Exception:
+        return closed_tabs
+
+    tab_entries: List[Any] = []
+    if isinstance(plist_data, list):
+        tab_entries = plist_data
+    elif isinstance(plist_data, dict):
+        for key in ("RecentlyClosedTabs", "ClosedTabOrWindowPersistentStates"):
+            candidate = plist_data.get(key)
+            if isinstance(candidate, list):
+                tab_entries = candidate
+                break
+        if not tab_entries:
+            for value in plist_data.values():
+                if isinstance(value, list):
+                    tab_entries = value
+                    break
+
+    for entry in tab_entries:
+        if not isinstance(entry, dict):
+            continue
+
+        tab_url = str(entry.get("TabURL") or "").strip()
+        if not _is_non_blank_url(tab_url):
+            continue
+
+        tab_title = str(entry.get("TabTitle") or "").strip()
+        date_closed = cocoa_to_datetime(_coerce_float(entry.get("DateClosed")))
+
+        closed_tabs.append(
+            SafariClosedTab(
+                tab_url=tab_url,
+                tab_title=tab_title,
+                date_closed=date_closed,
+            )
+        )
+
+    return closed_tabs
+
+
+def _parse_back_forward_list(tab_dict: dict) -> List[Dict[str, Any]]:
+    """Extract tab navigation entries from BackForwardList (Safari <= 12)."""
+    entries: List[Dict[str, Any]] = []
+    back_forward = tab_dict.get("BackForwardList")
+    if not isinstance(back_forward, dict):
+        return entries
+
+    raw_entries = back_forward.get("Entries", [])
+    if not isinstance(raw_entries, list):
+        return entries
+
+    for nav_index, item in enumerate(raw_entries):
+        if not isinstance(item, dict):
+            continue
+
+        url = str(item.get("URL") or item.get("url") or "").strip()
+        if not _is_non_blank_url(url):
+            continue
+
+        title = str(item.get("Title") or item.get("title") or "").strip()
+        entries.append({"url": url, "title": title, "nav_index": nav_index})
+
+    return entries
+
+
+def _parse_session_state_archive(blob: bytes) -> List[Dict[str, Any]]:
+    """
+    Best-effort parse for Safari SessionState NSKeyedArchive blobs (Safari 13+).
+
+    Returns:
+        List of {url, title, nav_index} dicts. Empty list on parse failures.
+    """
+    if not blob:
+        return []
+
+    try:
+        archive = plistlib.loads(blob)
+    except Exception:
+        return []
+
+    objects = archive.get("$objects") if isinstance(archive, dict) else None
+    object_list = objects if isinstance(objects, list) else []
+
+    collected: List[Dict[str, Any]] = []
+    seen: Set[int] = set()
+    _collect_archive_entries(archive, object_list, collected, seen)
+
+    # Normalize nav_index and remove duplicates while preserving order.
+    normalized: List[Dict[str, Any]] = []
+    seen_keys: Set[tuple[str, str]] = set()
+    for item in collected:
+        url = str(item.get("url") or "").strip()
+        if not _is_non_blank_url(url):
+            continue
+
+        title = str(item.get("title") or "").strip()
+        key = (url, title)
+        if key in seen_keys:
+            continue
+        seen_keys.add(key)
+        normalized.append(
+            {
+                "url": url,
+                "title": title,
+                "nav_index": len(normalized),
+            }
+        )
+
+    return normalized
+
+
+def get_session_stats(
+    windows: List[SafariSessionWindow],
+    tabs: List[SafariSessionTab],
+) -> Dict[str, Any]:
+    """Get statistics about parsed Safari session data."""
+    if not windows and not tabs:
+        return {
+            "total_windows": 0,
+            "total_tabs": 0,
+            "private_windows": 0,
+            "pinned_tabs": 0,
+            "date_range": None,
+        }
+
+    tab_times = [tab.last_visit_time for tab in tabs if tab.last_visit_time]
+    private_windows = sum(1 for window in windows if window.is_private)
+    pinned_tabs = sum(1 for tab in tabs if tab.is_pinned)
+
+    return {
+        "total_windows": len(windows),
+        "total_tabs": len(tabs),
+        "private_windows": private_windows,
+        "pinned_tabs": pinned_tabs,
+        "date_range": {
+            "earliest": min(tab_times).isoformat() if tab_times else None,
+            "latest": max(tab_times).isoformat() if tab_times else None,
+        },
+    }
+
+
+def _collect_archive_entries(
+    node: Any,
+    objects: List[Any],
+    out: List[Dict[str, Any]],
+    seen: Set[int],
+) -> None:
+    """Recursively collect URL/title candidates from NSKeyedArchive object graph."""
+    node = _resolve_archive_object(node, objects)
+
+    if isinstance(node, (dict, list, tuple)):
+        marker = id(node)
+        if marker in seen:
+            return
+        seen.add(marker)
+
+    if isinstance(node, dict):
+        entry = _extract_url_title_from_mapping(node, objects)
+        if entry:
+            out.append(entry)
+
+        decoded = _decode_ns_keyed_dict(node, objects)
+        if decoded:
+            decoded_entry = _extract_url_title_from_mapping(decoded, objects)
+            if decoded_entry:
+                out.append(decoded_entry)
+            for value in decoded.values():
+                _collect_archive_entries(value, objects, out, seen)
+
+        for value in node.values():
+            _collect_archive_entries(value, objects, out, seen)
+        return
+
+    if isinstance(node, list):
+        for item in node:
+            _collect_archive_entries(item, objects, out, seen)
+        return
+
+    if isinstance(node, tuple):
+        for item in node:
+            _collect_archive_entries(item, objects, out, seen)
+
+
+def _extract_url_title_from_mapping(mapping: Dict[Any, Any], objects: List[Any]) -> Optional[Dict[str, Any]]:
+    """Extract URL/title pair from a mapping if present."""
+    url_candidates: List[str] = []
+    title_value: Optional[str] = None
+
+    for key, value in mapping.items():
+        if not isinstance(key, str):
+            continue
+
+        key_lower = key.lower()
+        resolved_value = _stringify_archive_value(value, objects)
+
+        if "title" in key_lower and not title_value:
+            title_value = resolved_value
+            continue
+
+        if "url" in key_lower and resolved_value:
+            url_candidates.append(resolved_value)
+            continue
+
+        if key in ("NS.relative", "NS.string") and resolved_value:
+            url_candidates.append(resolved_value)
+
+    # Build URL from NSURL-style {NS.base, NS.relative} pairs when needed.
+    if not url_candidates:
+        relative = _stringify_archive_value(mapping.get("NS.relative"), objects)
+        base = _stringify_archive_value(mapping.get("NS.base"), objects)
+        if relative:
+            if "://" in relative or relative.startswith(("about:", "file:", "data:", "safari-")):
+                url_candidates.append(relative)
+            elif base:
+                url_candidates.append(urljoin(base, relative))
+
+    for url in url_candidates:
+        if _is_non_blank_url(url):
+            return {"url": url, "title": title_value or ""}
+
+    return None
+
+
+def _decode_ns_keyed_dict(node: Dict[Any, Any], objects: List[Any]) -> Dict[str, Any]:
+    """Decode NSKeyedArchive NSDictionary-like nodes (NS.keys / NS.objects)."""
+    raw_keys = node.get("NS.keys")
+    raw_values = node.get("NS.objects")
+
+    if not isinstance(raw_keys, list) or not isinstance(raw_values, list):
+        return {}
+
+    decoded: Dict[str, Any] = {}
+    for key_obj, value_obj in zip(raw_keys, raw_values):
+        key = _stringify_archive_value(key_obj, objects)
+        if not key:
+            continue
+        decoded[key] = _resolve_archive_object(value_obj, objects)
+
+    return decoded
+
+
+def _resolve_archive_object(value: Any, objects: List[Any]) -> Any:
+    """Resolve plistlib.UID references to their underlying archive object."""
+    if isinstance(value, plistlib.UID):
+        index = _coerce_int(value.data, default=-1)
+        if 0 <= index < len(objects):
+            return objects[index]
+    return value
+
+
+def _stringify_archive_value(value: Any, objects: List[Any]) -> str:
+    """Convert a potential archive value into string when possible."""
+    resolved = _resolve_archive_object(value, objects)
+
+    if isinstance(resolved, str):
+        return resolved.strip()
+
+    if isinstance(resolved, bytes):
+        try:
+            return resolved.decode("utf-8", errors="ignore").strip()
+        except Exception:
+            return ""
+
+    if isinstance(resolved, dict):
+        # Common NSURL representation in keyed archives.
+        relative = _stringify_archive_value(resolved.get("NS.relative"), objects)
+        if relative:
+            return relative
+        string_value = _stringify_archive_value(resolved.get("NS.string"), objects)
+        if string_value:
+            return string_value
+        for key in ("URL", "url", "OriginalURL", "originalURL"):
+            candidate = _stringify_archive_value(resolved.get(key), objects)
+            if candidate:
+                return candidate
+
+    if isinstance(resolved, (int, float)):
+        return str(resolved)
+
+    return ""
+
+
+def _coerce_int(value: Any, default: int = 0) -> int:
+    """Safely coerce value to int."""
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _coerce_float(value: Any) -> Optional[float]:
+    """Safely coerce value to float."""
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _is_non_blank_url(url: str) -> bool:
+    """Return True for non-empty URLs excluding about:blank."""
+    candidate = (url or "").strip()
+    if not candidate:
+        return False
+    if candidate.lower() == "about:blank":
+        return False
+    return True
