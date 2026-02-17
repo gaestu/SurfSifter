@@ -2,12 +2,15 @@
 
 from dataclasses import asdict
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, TYPE_CHECKING, Union
 
 from PySide6.QtCore import Signal
 from PySide6.QtWidgets import QWidget, QVBoxLayout
 
 from reports.ui import ReportTabWidget
+
+if TYPE_CHECKING:
+    from app.data.case_data import CaseDataAccess
 
 
 class ReportsTab(QWidget):
@@ -23,7 +26,7 @@ class ReportsTab(QWidget):
         super().__init__(parent)
 
         # State passed from main.py
-        self._case_data: Optional[dict] = None
+        self._case_data: Optional[Union[CaseDataAccess, dict]] = None
         self._evidence_id: Optional[int] = None
         self._evidence_label: Optional[str] = None
         self._db_manager = None
@@ -74,11 +77,11 @@ class ReportsTab(QWidget):
         else:
             self._report_widget.set_workspace_path(None)
 
-    def set_case_data(self, case_data: Optional[dict]) -> None:
+    def set_case_data(self, case_data: Optional[Union[CaseDataAccess, dict]]) -> None:
         """Set case metadata.
 
         Args:
-            case_data: Dictionary with case metadata
+            case_data: CaseDataAccess instance or dictionary with case metadata
         """
         self._case_data = case_data
         self._report_widget.set_case_data(case_data)

@@ -124,7 +124,7 @@ class MainWindow(QMainWindow):
         self._download_task: Optional[DownloadTask] = None
         self._download_dialog: Optional[DownloadManagerDialog] = None
         # TODO: Refactor report task
-        self._report_task: Optional[ReportTask] = None
+        self._report_task: Optional[Any] = None
         self._report_progress: Optional[QProgressDialog] = None
         self._current_reports_tab = None  # Reference to the reports tab being used
         self._report_success = False
@@ -367,6 +367,14 @@ class MainWindow(QMainWindow):
         UI refinements - disk selection in Overview, "Extractors" tab renamed.
         Added defer_load for lazy loading (Phase 3).
         """
+        # Guard: case must be open before building evidence tabs
+        assert self.case_path is not None, "case_path must be set before building evidence tabs"
+        assert self.case_db_path is not None, "case_db_path must be set before building evidence tabs"
+        assert self.db_manager is not None, "db_manager must be set before building evidence tabs"
+        case_path: Path = self.case_path
+        case_db_path: Path = self.case_db_path
+        db_manager: DatabaseManager = self.db_manager
+
         evidence_tabs = QTabWidget()
 
         # 1. Overview (includes disk/partition selection)
@@ -391,7 +399,7 @@ class MainWindow(QMainWindow):
         # Added defer_load for Phase 3 lazy loading
         from app.features.file_list import FileListTab
         file_list_tab = FileListTab(
-            self.case_path, evidence_id, self.case_db_path,
+            case_path, evidence_id, case_db_path,
             defer_load=defer_load
         )
         if self.case_data:
@@ -401,9 +409,9 @@ class MainWindow(QMainWindow):
         # 4. Browser/Cache Inventory (NEW)
         from app.features.browser_inventory import BrowserInventoryTab
         browser_inventory_tab = BrowserInventoryTab(
-            self.case_path,
+            case_path,
             evidence_id,
-            self.case_db_path,
+            case_db_path,
             case_data=self.case_data,
         )
         # Re-Ingest feature retired - extraction is the supported workflow
@@ -450,7 +458,7 @@ class MainWindow(QMainWindow):
 
         # 9. Download (Refactored with 3 subtabs)
         from app.features.downloads import DownloadTab
-        download_tab = DownloadTab(evidence_id, self.case_data, self.case_path)
+        download_tab = DownloadTab(evidence_id, self.case_data, case_path)
         download_tab.download_started.connect(self._on_download_started_from_tab)
         download_tab.download_paused.connect(self._on_download_paused)
         download_tab.download_cancelled.connect(self._on_download_cancelled)
@@ -465,8 +473,7 @@ class MainWindow(QMainWindow):
         # Set global default branding settings from preferences
         reports_tab.set_default_settings(self.settings.reports, self.settings_file.parent)
         # Set database manager for section persistence, then case data and evidence
-        if self.db_manager:
-            reports_tab.set_database_manager(self.db_manager)
+        reports_tab.set_database_manager(db_manager)
         if self.case_data:
             reports_tab.set_case_data(self.case_data)
         reports_tab.set_evidence(evidence_id, evidence_label)
@@ -474,7 +481,7 @@ class MainWindow(QMainWindow):
 
         # 11. Screenshots (NEW)
         from app.features.screenshots import ScreenshotsTab
-        screenshots_tab = ScreenshotsTab(self.case_data, self.case_path, self.db_manager)
+        screenshots_tab = ScreenshotsTab(self.case_data, case_path, db_manager)
         screenshots_tab.set_evidence(evidence_id, evidence_label)
         evidence_tabs.addTab(screenshots_tab, "Screenshots")
 
@@ -489,10 +496,10 @@ class MainWindow(QMainWindow):
         # 13. Audit (NEW) - includes Statistics, Warnings, and Logs subtabs
         from app.features.audit import AuditTab
         audit_tab = AuditTab(
-            self.db_manager,
+            db_manager,
             evidence_id,
             evidence_label,
-            case_path=self.case_path,
+            case_path=case_path,
             audit_logger=self.audit_logger,
         )
         evidence_tabs.addTab(audit_tab, "📋 Audit")
@@ -1470,7 +1477,7 @@ class MainWindow(QMainWindow):
 
                     self.logger.info(
                         "Added E01 evidence with %d partition(s). Use Disk tab to select which to scan.",
-                        len(partitions)
+                        len(partitions) if partitions else 0
                     )
 
                 except Exception as exc:
@@ -1774,7 +1781,7 @@ class MainWindow(QMainWindow):
             )
             return
 
-        if not self.case_path or not self.case_data:
+        if not self.case_path or not self.case_db_path or not self.case_data:
             QMessageBox.warning(
                 self,
                 "No Case",
@@ -1919,6 +1926,8 @@ class MainWindow(QMainWindow):
             Evidence label or None if not found
         """
         if not self.case_data:
+            return None
+        if self.case_db_path is None:
             return None
         try:
             with sqlite3.connect(self.case_db_path) as conn:
@@ -2157,6 +2166,9 @@ class MainWindow(QMainWindow):
             dialog.cancel_button.setText(dialog.tr("Cancel"))
             images_to_process.clear()  # Reset for new download run
 
+            if self.case_path is None or self.case_db_path is None:
+                self.logger.error("Cannot start download: case_path or case_db_path is None")
+                return
             config = DownloadTaskConfig(
                 case_root=self.case_path,
                 case_db_path=self.case_db_path,
@@ -2328,6 +2340,9 @@ class MainWindow(QMainWindow):
         # Get evidence label for thumbnail path
         evidence_label = self._get_evidence_label(evidence_id)
 
+        if self.case_path is None or self.case_db_path is None:
+            self.logger.error("Cannot post-process: case_path or case_db_path is None")
+            return
         config = DownloadPostProcessConfig(
             case_root=self.case_path,
             case_db_path=self.case_db_path,
@@ -2519,13 +2534,14 @@ class MainWindow(QMainWindow):
                     if updated_evidence:
                         self._load_partition_data_into_tab(evidence_tab_widget, updated_evidence)
 
+            num_partitions = len(partitions) if partitions else 0
             self.logger.info("Rescanned partitions for evidence %d: found %d partition(s)",
-                           evidence_id, len(partitions))
+                           evidence_id, num_partitions)
 
             QMessageBox.information(
                 self,
                 "Rescan Complete",
-                f"Found {len(partitions)} partition(s) in {source_path.name}",
+                f"Found {num_partitions} partition(s) in {source_path.name}",
             )
 
         except Exception as exc:
@@ -2646,8 +2662,13 @@ class MainWindow(QMainWindow):
                     )
             else:
                 # Legacy path - result not stored or incomplete
+                validation_result = getattr(dialog, 'validation_result', None)
+                if validation_result and hasattr(validation_result, 'manifest') and validation_result.manifest:
+                    case_id = validation_result.manifest.get('case_id', 'unknown')
+                else:
+                    case_id = 'unknown'
                 self.statusBar().showMessage(
-                    f"Case '{dialog.validation_result.manifest.get('case_id')}' imported successfully",
+                    f"Case '{case_id}' imported successfully",
                     5000
                 )
 
@@ -2698,6 +2719,8 @@ class MainWindow(QMainWindow):
         total_phases = max(1, phases_per_evidence * len(selected_evidences))
 
         # Create and start worker (orchestrates ExtractAndIngestWorker per evidence)
+        # case_data and db_manager already guarded above
+        assert self.case_path is not None
         self._case_wide_worker = CaseWideExtractAndIngestWorker(
             evidence_ids=evidence_ids,
             extractor_names=extractor_names,
@@ -2793,7 +2816,7 @@ def main() -> int:
 
     if getattr(sys, 'frozen', False):
         # Running in a PyInstaller bundle — bundled read-only assets live in _MEIPASS
-        base_dir = Path(sys._MEIPASS)
+        base_dir = Path(getattr(sys, '_MEIPASS', '.'))
     else:
         # Running from source
         base_dir = Path(__file__).resolve().parents[2]
