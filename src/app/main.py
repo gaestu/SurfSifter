@@ -1151,30 +1151,13 @@ class MainWindow(QMainWindow):
             )
             return False
 
-        # Get evidence database connection
+        # Validate database manager is available
         if not self.db_manager:
             self.logger.warning("No database manager - skipping auto file list generation")
             return False
 
-        try:
-            evidence_conn = self.db_manager.get_evidence_conn(evidence_id, evidence_label)
-        except Exception as e:
-            self.logger.warning(f"Could not connect to evidence database: {e}")
-            return False
-
         # Import generator
         from extractors.system.file_list.sleuthkit_generator import SleuthKitFileListGenerator
-
-        # Create generator
-        generator = SleuthKitFileListGenerator(
-            evidence_conn=evidence_conn,
-            evidence_id=evidence_id,
-            ewf_paths=ewf_segments,
-        )
-
-        if not generator.fls_available:
-            evidence_conn.close()
-            return False
 
         # Show progress dialog
         progress = QProgressDialog(
@@ -1190,10 +1173,19 @@ class MainWindow(QMainWindow):
         QApplication.processEvents()
 
         # Run generation in thread
+        # IMPORTANT: The DB connection MUST be created inside the worker thread
+        # to avoid cross-thread SQLite access. DatabaseManager caches connections
+        # per (thread_id, db_path), so creating in the main thread and using in
+        # the worker thread causes the same connection to be shared — which leads
+        # to intermittent "database is locked" or corruption errors when
+        # QApplication.processEvents() triggers other DB access on the main thread.
         class FileListGenerationThread(QThread):
-            def __init__(self, gen, parent=None):
+            def __init__(self, db_manager, evidence_id, evidence_label, ewf_segments, parent=None):
                 super().__init__(parent)
-                self.generator = gen
+                self.db_manager = db_manager
+                self.evidence_id = evidence_id
+                self.evidence_label = evidence_label
+                self.ewf_segments = ewf_segments
                 self.result = None
                 self.error = None
                 self._cancelled = False
@@ -1202,18 +1194,43 @@ class MainWindow(QMainWindow):
                 self._cancelled = True
 
             def run(self):
+                evidence_conn = None
                 try:
+                    # Create thread-local DB connection inside the worker thread
+                    evidence_conn = self.db_manager.get_evidence_conn(
+                        self.evidence_id, self.evidence_label
+                    )
+
+                    generator = SleuthKitFileListGenerator(
+                        evidence_conn=evidence_conn,
+                        evidence_id=self.evidence_id,
+                        ewf_paths=self.ewf_segments,
+                    )
+
+                    if not generator.fls_available:
+                        self.error = RuntimeError("fls not available")
+                        return
+
                     def progress_cb(files: int, part_idx: int, msg: str):
                         if self._cancelled:
                             raise InterruptedError("Cancelled by user")
 
-                    self.result = self.generator.generate(progress_callback=progress_cb)
+                    self.result = generator.generate(progress_callback=progress_cb)
                 except InterruptedError:
                     self.result = None  # Cancelled
                 except Exception as e:
                     self.error = e
+                finally:
+                    # Close thread-local connection in the same thread that created it
+                    if evidence_conn is not None:
+                        try:
+                            evidence_conn.close()
+                        except Exception:
+                            pass
 
-        gen_thread = FileListGenerationThread(generator, self)
+        gen_thread = FileListGenerationThread(
+            self.db_manager, evidence_id, evidence_label, ewf_segments, self
+        )
         gen_thread.start()
 
         # Wait for thread while keeping UI responsive
@@ -1227,7 +1244,6 @@ class MainWindow(QMainWindow):
             gen_thread.wait(100)
 
         progress.close()
-        evidence_conn.close()
 
         # Check results
         if gen_thread.error:
@@ -2717,7 +2733,11 @@ class MainWindow(QMainWindow):
         """Handle progress update from case-wide worker."""
         if hasattr(self, '_case_wide_progress') and self._case_wide_progress:
             self._case_wide_progress.setValue(current)
-            self._case_wide_progress.setLabelText(message)
+            # Re-check: setValue() calls processEvents() internally, which may
+            # deliver a queued batch_finished signal that sets _case_wide_progress
+            # to None before we return here.
+            if self._case_wide_progress is not None:
+                self._case_wide_progress.setLabelText(message)
 
     def _on_case_wide_log(self, evidence_id: int, message: str) -> None:
         """Route log message to appropriate evidence's log tab."""
