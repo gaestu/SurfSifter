@@ -42,21 +42,28 @@ TRANSITION_TYPES = {
 }
 
 
-def get_transition_label(transition: Optional[int]) -> str:
+def get_transition_label(transition) -> str:
     """
-    Convert Chromium transition code to human-readable label.
+    Convert a transition code to a human-readable label.
 
-    The transition value is a bitmask. The core type is in bits 0-7.
-    Higher bits contain qualifiers (e.g., forward/back, redirects).
+    Chromium stores transitions as integer bitmasks (core type in bits 0-7).
+    Safari and Firefox may store them as plain strings (e.g., "link", "typed").
 
     Args:
-        transition: Chromium page transition code
+        transition: Chromium page transition code (int) or label string
 
     Returns:
         Human-readable label (e.g., "link", "typed", "reload")
     """
     if transition is None:
         return ""
+    # Safari/Firefox may store transition_type as a human-readable string.
+    if isinstance(transition, str):
+        # Try converting numeric strings to int for Chromium-style data.
+        try:
+            transition = int(transition)
+        except (ValueError, TypeError):
+            return transition
     # Extract core type (bits 0-7)
     core_type = transition & 0xFF
     return TRANSITION_TYPES.get(core_type, f"unknown_{core_type}")

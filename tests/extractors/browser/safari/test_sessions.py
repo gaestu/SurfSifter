@@ -18,6 +18,9 @@ from extractors.browser.safari._parsers import (
     get_session_stats,
     SafariSessionTab,
     SafariSessionWindow,
+    SafariClosedTab,
+    _flatten_closed_tab_entries,
+    _coerce_datetime,
 )
 from extractors.browser.safari.sessions import SafariSessionsExtractor
 
@@ -187,6 +190,152 @@ class TestSafariSessionParsers:
         assert closed_tabs[0].tab_url == "https://closed.example/"
         assert closed_tabs[0].tab_title == "Closed"
         assert closed_tabs[0].date_closed is not None
+
+    def test_parse_recently_closed_tabs_persistent_states_window(self, tmp_path):
+        """Parse ClosedTabOrWindowPersistentStates with type 1 (closed window)."""
+        plist_path = tmp_path / "RecentlyClosedTabs.plist"
+
+        plist_data = {
+            "ClosedTabOrWindowPersistentStatesVersion": "1",
+            "ClosedTabOrWindowPersistentStates": [
+                {
+                    "PersistentStateType": 1,
+                    "PersistentState": {
+                        "DateClosed": datetime(2023, 10, 4, 19, 30, 33, tzinfo=timezone.utc),
+                        "IsPrivateWindow": False,
+                        "WindowUUID": "E19A6E2F-E7F5-4058-BAFC-7506F02E78F0",
+                        "TabStates": [
+                            {
+                                "TabURL": "http://example.org/",
+                                "TabTitle": "example.org",
+                                "DateClosed": datetime(2023, 10, 4, 19, 30, 33, tzinfo=timezone.utc),
+                                "LastVisitTime": 718140590.319091,
+                                "TabUUID": "EF3C7388-7072-488A-8F7D-5DA4B67AC85A",
+                            },
+                            {
+                                "TabURL": "topsites://",
+                                "TabTitle": "Topsites",
+                                "DateClosed": datetime(2023, 10, 4, 19, 30, 33, tzinfo=timezone.utc),
+                                "TabUUID": "98B70494-17F9-4485-A774-211A699A8A3C",
+                            },
+                        ],
+                    },
+                },
+            ],
+        }
+
+        with open(plist_path, "wb") as f:
+            plistlib.dump(plist_data, f)
+
+        closed_tabs = parse_recently_closed_tabs(plist_path)
+
+        assert len(closed_tabs) == 2
+        assert closed_tabs[0].tab_url == "http://example.org/"
+        assert closed_tabs[0].tab_title == "example.org"
+        assert closed_tabs[0].date_closed == datetime(2023, 10, 4, 19, 30, 33, tzinfo=timezone.utc)
+        assert closed_tabs[1].tab_url == "topsites://"
+
+    def test_parse_recently_closed_tabs_persistent_states_single_tab(self, tmp_path):
+        """Parse ClosedTabOrWindowPersistentStates with type 0 (single tab)."""
+        plist_path = tmp_path / "RecentlyClosedTabs.plist"
+
+        plist_data = {
+            "ClosedTabOrWindowPersistentStates": [
+                {
+                    "PersistentStateType": 0,
+                    "PersistentState": {
+                        "TabURL": "https://single-closed.example/",
+                        "TabTitle": "Single",
+                        "DateClosed": datetime(2024, 5, 1, 12, 0, 0, tzinfo=timezone.utc),
+                    },
+                },
+            ],
+        }
+
+        with open(plist_path, "wb") as f:
+            plistlib.dump(plist_data, f)
+
+        closed_tabs = parse_recently_closed_tabs(plist_path)
+
+        assert len(closed_tabs) == 1
+        assert closed_tabs[0].tab_url == "https://single-closed.example/"
+        assert closed_tabs[0].tab_title == "Single"
+        assert closed_tabs[0].date_closed == datetime(2024, 5, 1, 12, 0, 0, tzinfo=timezone.utc)
+
+    def test_parse_recently_closed_window_inherits_date(self, tmp_path):
+        """Tabs inherit window DateClosed when they lack their own."""
+        plist_path = tmp_path / "RecentlyClosedTabs.plist"
+
+        window_closed = datetime(2024, 6, 15, 8, 0, 0, tzinfo=timezone.utc)
+        plist_data = {
+            "ClosedTabOrWindowPersistentStates": [
+                {
+                    "PersistentStateType": 1,
+                    "PersistentState": {
+                        "DateClosed": window_closed,
+                        "TabStates": [
+                            {
+                                "TabURL": "https://no-date.example/",
+                                "TabTitle": "NoDate",
+                                # No DateClosed on this tab.
+                            },
+                        ],
+                    },
+                },
+            ],
+        }
+
+        with open(plist_path, "wb") as f:
+            plistlib.dump(plist_data, f)
+
+        closed_tabs = parse_recently_closed_tabs(plist_path)
+
+        assert len(closed_tabs) == 1
+        assert closed_tabs[0].date_closed == window_closed
+
+    def test_coerce_datetime_from_datetime(self):
+        """_coerce_datetime handles datetime objects from plistlib."""
+        dt = datetime(2023, 10, 4, 19, 30, 33, tzinfo=timezone.utc)
+        assert _coerce_datetime(dt) == dt
+
+    def test_coerce_datetime_from_naive_datetime(self):
+        """_coerce_datetime adds UTC to naive datetimes."""
+        dt = datetime(2023, 10, 4, 19, 30, 33)
+        result = _coerce_datetime(dt)
+        assert result.tzinfo == timezone.utc
+
+    def test_coerce_datetime_from_cocoa_float(self):
+        """_coerce_datetime handles Cocoa timestamp floats."""
+        result = _coerce_datetime(60.0)
+        assert result is not None
+        assert result.year == 2001
+
+    def test_coerce_datetime_none(self):
+        """_coerce_datetime returns None for None."""
+        assert _coerce_datetime(None) is None
+
+    def test_flatten_closed_tab_entries_legacy_format(self):
+        """_flatten_closed_tab_entries passes through legacy flat entries."""
+        entries = [{"TabURL": "https://a.example/", "TabTitle": "A"}]
+        result = _flatten_closed_tab_entries(entries)
+        assert len(result) == 1
+        assert result[0]["TabURL"] == "https://a.example/"
+
+    def test_flatten_closed_tab_entries_window_type(self):
+        """_flatten_closed_tab_entries unpacks type-1 window entries."""
+        entries = [
+            {
+                "PersistentStateType": 1,
+                "PersistentState": {
+                    "TabStates": [
+                        {"TabURL": "https://a.example/"},
+                        {"TabURL": "https://b.example/"},
+                    ],
+                },
+            },
+        ]
+        result = _flatten_closed_tab_entries(entries)
+        assert len(result) == 2
 
     def test_get_session_stats(self):
         """Session stats should include counts and date range."""

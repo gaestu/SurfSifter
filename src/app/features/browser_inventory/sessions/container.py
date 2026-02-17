@@ -1,10 +1,11 @@
-"""Sessions container with nested subtabs for Open Tabs and Form Data."""
+"""Sessions container with nested subtabs for Open Tabs, Closed Tabs, and Form Data."""
 from __future__ import annotations
 
 from PySide6.QtWidgets import QLabel, QTabWidget, QVBoxLayout, QWidget
 
 from app.features.browser_inventory._base import SubtabContext
 from app.features.browser_inventory.sessions.open_tabs import OpenTabsSubtab
+from app.features.browser_inventory.sessions.closed_tabs import ClosedTabsSubtab
 from app.features.browser_inventory.sessions.form_data import SessionFormDataSubtab
 
 
@@ -22,7 +23,8 @@ class SessionsContainer(QWidget):
 
         desc_label = QLabel(
             "<b>Browser session restore data:</b> Open Tabs shows tabs that were open "
-            "when the browser was last closed. Form Data shows user-entered form field "
+            "when the browser was last closed. Closed Tabs shows recently closed tabs "
+            "recovered from session restore files. Form Data shows user-entered form field "
             "values captured in Firefox session files (forensically valuable for search "
             "queries, partial entries, and user activity)."
         )
@@ -37,11 +39,13 @@ class SessionsContainer(QWidget):
         self.nested_tabs.currentChanged.connect(self._on_nested_tab_changed)
 
         self._open_tabs = OpenTabsSubtab(self.ctx, parent=self)
+        self._closed_tabs = ClosedTabsSubtab(self.ctx, parent=self)
         self._form_data = SessionFormDataSubtab(self.ctx, parent=self)
 
-        self._subtabs = [self._open_tabs, self._form_data]
+        self._subtabs = [self._open_tabs, self._closed_tabs, self._form_data]
 
         self.nested_tabs.addTab(self._open_tabs, "Open Tabs")
+        self.nested_tabs.addTab(self._closed_tabs, "Closed Tabs")
         self.nested_tabs.addTab(self._form_data, "Form Data")
 
         layout.addWidget(self.nested_tabs)

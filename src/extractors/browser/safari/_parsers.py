@@ -679,6 +679,14 @@ def parse_recently_closed_tabs(file_path: Path) -> List[SafariClosedTab]:
     """
     Parse Safari RecentlyClosedTabs.plist.
 
+    Handles multiple Safari plist formats:
+    - Flat list: ``[{TabURL, TabTitle, DateClosed}, ...]``
+    - Dict with ``RecentlyClosedTabs`` key (older Safari)
+    - Dict with ``ClosedTabOrWindowPersistentStates`` key (Safari 14+):
+      Each entry wraps data in ``PersistentState``.
+      ``PersistentStateType`` 0 = single closed tab,
+      ``PersistentStateType`` 1 = closed window containing ``TabStates``.
+
     Returns:
         List of SafariClosedTab records.
     """
@@ -705,16 +713,16 @@ def parse_recently_closed_tabs(file_path: Path) -> List[SafariClosedTab]:
                     tab_entries = value
                     break
 
-    for entry in tab_entries:
-        if not isinstance(entry, dict):
-            continue
+    # Flatten entries: unwrap ClosedTabOrWindowPersistentStates wrappers.
+    flat_tabs = _flatten_closed_tab_entries(tab_entries)
 
-        tab_url = str(entry.get("TabURL") or "").strip()
+    for tab_dict in flat_tabs:
+        tab_url = str(tab_dict.get("TabURL") or "").strip()
         if not _is_non_blank_url(tab_url):
             continue
 
-        tab_title = str(entry.get("TabTitle") or "").strip()
-        date_closed = cocoa_to_datetime(_coerce_float(entry.get("DateClosed")))
+        tab_title = str(tab_dict.get("TabTitle") or "").strip()
+        date_closed = _coerce_datetime(tab_dict.get("DateClosed"))
 
         closed_tabs.append(
             SafariClosedTab(
@@ -725,6 +733,78 @@ def parse_recently_closed_tabs(file_path: Path) -> List[SafariClosedTab]:
         )
 
     return closed_tabs
+
+
+def _flatten_closed_tab_entries(entries: List[Any]) -> List[dict]:
+    """Flatten ``ClosedTabOrWindowPersistentStates`` wrappers into tab dicts.
+
+    Each wrapper entry may contain ``PersistentState`` with:
+    - ``PersistentStateType`` 1: closed *window* — tabs live inside
+      ``PersistentState.TabStates``, with ``DateClosed`` inherited from
+      the window if individual tabs lack it.
+    - ``PersistentStateType`` 0 (or absent): single closed tab — tab fields
+      live directly inside ``PersistentState``.
+
+    Entries that already carry ``TabURL`` at the top level (legacy flat
+    format) pass through unchanged.
+    """
+    flat: List[dict] = []
+
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+
+        # Legacy flat format: TabURL directly on entry.
+        if entry.get("TabURL"):
+            flat.append(entry)
+            continue
+
+        # ClosedTabOrWindowPersistentStates wrapper.
+        persistent_state = entry.get("PersistentState")
+        if not isinstance(persistent_state, dict):
+            continue
+
+        state_type = _coerce_int(entry.get("PersistentStateType"), default=-1)
+
+        if state_type == 1:
+            # Closed window — iterate TabStates.
+            window_date = persistent_state.get("DateClosed")
+            tab_states = persistent_state.get("TabStates", [])
+            if not isinstance(tab_states, list):
+                continue
+            for tab_data in tab_states:
+                if not isinstance(tab_data, dict):
+                    continue
+                # Inherit window DateClosed if the tab doesn't have its own.
+                if "DateClosed" not in tab_data and window_date is not None:
+                    tab_data = {**tab_data, "DateClosed": window_date}
+                flat.append(tab_data)
+        else:
+            # Single closed tab (type 0 or unknown) — tab data is inside
+            # PersistentState itself, or directly on the entry.
+            if persistent_state.get("TabURL"):
+                flat.append(persistent_state)
+            elif entry.get("TabURL"):
+                flat.append(entry)
+
+    return flat
+
+
+def _coerce_datetime(value: Any) -> Optional[datetime]:
+    """Coerce a value to a UTC datetime.
+
+    Handles:
+    - ``datetime`` (returned by plistlib for ``<date>`` tags)
+    - ``float``/``int`` (Cocoa timestamp — seconds since 2001-01-01)
+    - ``None`` and unsupported types → ``None``
+    """
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        if value.tzinfo is None:
+            return value.replace(tzinfo=timezone.utc)
+        return value
+    return cocoa_to_datetime(_coerce_float(value))
 
 
 def _parse_back_forward_list(tab_dict: dict) -> List[Dict[str, Any]]:

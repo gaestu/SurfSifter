@@ -163,8 +163,8 @@ class TestExtractUrlFromCacheKey:
 
     def test_double_keyed_gambling_site(self):
         """Real-world gambling site URL extraction."""
-        cache_key = "1/0/_dk_https://grandx.org https://grandx.org https://grandx.org/lobby/images/game.png"
-        assert extract_url_from_cache_key(cache_key) == "https://grandx.org/lobby/images/game.png"
+        cache_key = "1/0/_dk_https://example.org https://example.org https://example.org/lobby/images/game.png"
+        assert extract_url_from_cache_key(cache_key) == "https://example.org/lobby/images/game.png"
 
     def test_double_keyed_with_subframe_prefix(self):
         """Double-keyed with s_ subframe prefix should extract URL."""
