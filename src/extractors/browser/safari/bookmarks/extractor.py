@@ -30,7 +30,11 @@ from .._patterns import get_patterns, extract_user_from_path
 from .._parsers import parse_bookmarks, get_bookmark_stats
 
 from core.logging import get_logger
-from core.database import insert_urls
+from core.database import (
+    insert_urls,
+    insert_browser_inventory,
+    update_inventory_ingestion_status,
+)
 
 LOGGER = get_logger("extractors.browser.safari.bookmarks")
 
@@ -285,6 +289,25 @@ class SafariBookmarksExtractor(BaseExtractor):
             user = extract_user_from_path(source_path)
             profile = user or "Default"
 
+            inventory_id = insert_browser_inventory(
+                evidence_conn,
+                evidence_id=evidence_id,
+                browser="safari",
+                artifact_type="bookmarks",
+                run_id=run_id,
+                extracted_path=str(local_path),
+                extraction_status="ok",
+                extraction_timestamp_utc=manifest_data.get("extraction_timestamp_utc", ""),
+                logical_path=source_path,
+                profile=profile,
+                partition_index=file_info.get("partition_index"),
+                fs_type=file_info.get("fs_type"),
+                forensic_path=source_path,
+                file_size_bytes=file_info.get("size_bytes"),
+                file_md5=file_info.get("md5"),
+                file_sha256=file_info.get("sha256"),
+            )
+
             try:
                 from urllib.parse import urlparse
 
@@ -331,11 +354,25 @@ class SafariBookmarksExtractor(BaseExtractor):
 
                 callbacks.on_log(f"Parsed {len(bookmarks)} bookmarks from {profile}", "info")
 
+                update_inventory_ingestion_status(
+                    evidence_conn,
+                    inventory_id=inventory_id,
+                    status="ok",
+                    records_parsed=len(bookmarks),
+                )
+
             except Exception as e:
                 LOGGER.error("Failed to parse %s: %s", local_path, e)
                 callbacks.on_log(f"Parse error: {e}", "error")
                 if collector:
                     collector.report_failed(evidence_id, self.metadata.name, files=1)
+                if "inventory_id" in locals():
+                    update_inventory_ingestion_status(
+                        evidence_conn,
+                        inventory_id=inventory_id,
+                        status="error",
+                        notes=str(e),
+                    )
 
         inserted = 0
         if all_records:

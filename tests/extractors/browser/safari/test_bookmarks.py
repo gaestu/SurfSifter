@@ -210,7 +210,7 @@ class TestSafariBookmarksDualWrite:
 
         source = inspect.getsource(module)
         assert "insert_urls" in source
-        assert "from core.database import insert_urls" in source
+        assert "insert_urls" in source  # multi-line import block
 
     def test_ingestion_collects_url_records(self):
         """Test that run_ingestion collects URLs for dual-write."""

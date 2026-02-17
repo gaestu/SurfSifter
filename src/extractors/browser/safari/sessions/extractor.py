@@ -38,6 +38,8 @@ from core.database import (
     insert_closed_tabs,
     delete_sessions_by_run,
     insert_urls,
+    insert_browser_inventory,
+    update_inventory_ingestion_status,
 )
 
 LOGGER = get_logger("extractors.browser.safari.sessions")
@@ -290,6 +292,25 @@ class SafariSessionsExtractor(BaseExtractor):
             user = extract_user_from_path(source_path)
             profile = user or "Default"
 
+            inventory_id = insert_browser_inventory(
+                evidence_conn,
+                evidence_id=evidence_id,
+                browser="safari",
+                artifact_type="sessions",
+                run_id=run_id,
+                extracted_path=str(local_path),
+                extraction_status="ok",
+                extraction_timestamp_utc=manifest_data.get("extraction_timestamp_utc", ""),
+                logical_path=source_path,
+                profile=profile,
+                partition_index=file_info.get("partition_index"),
+                fs_type=file_info.get("fs_type"),
+                forensic_path=source_path,
+                file_size_bytes=file_info.get("size_bytes"),
+                file_md5=file_info.get("md5"),
+                file_sha256=file_info.get("sha256"),
+            )
+
             try:
                 if artifact_type == "last_session":
                     parsed = parse_session_plist(local_path)
@@ -442,11 +463,30 @@ class SafariSessionsExtractor(BaseExtractor):
 
                     callbacks.on_log(f"Parsed {len(closed_tabs)} recently closed tabs from {profile}", "info")
 
+                file_records = (
+                    len(window_records) + len(tab_records) + len(history_records)
+                    if artifact_type == "last_session"
+                    else len(closed_records)
+                )
+                update_inventory_ingestion_status(
+                    evidence_conn,
+                    inventory_id=inventory_id,
+                    status="ok",
+                    records_parsed=file_records,
+                )
+
             except Exception as e:
                 LOGGER.error("Failed to parse %s: %s", local_path, e)
                 callbacks.on_log(f"Parse error: {e}", "error")
                 if collector:
                     collector.report_failed(evidence_id, self.metadata.name, files=1)
+                if "inventory_id" in locals():
+                    update_inventory_ingestion_status(
+                        evidence_conn,
+                        inventory_id=inventory_id,
+                        status="error",
+                        notes=str(e),
+                    )
 
         if url_records:
             totals["urls"] = insert_urls(evidence_conn, evidence_id, url_records)
