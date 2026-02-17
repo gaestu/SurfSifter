@@ -1251,20 +1251,24 @@ class UrlsTab(QWidget):
 
         if total > 0:
             progress = int((current / total) * 100)
-            self.progress_dialog.setValue(progress)
+            # Set label BEFORE setValue — setValue(100) with autoClose
+            # emits canceled, which nulls self.progress_dialog.
             self.progress_dialog.setLabelText(
                 f"Matching... {progress}%"
             )
+            self.progress_dialog.setValue(progress)
 
     def _match_finished(self, results: Dict[str, int], generation: int = 0) -> None:
         """Handle match completion."""
         if generation != self._match_worker_generation:
             return
 
-        if self.progress_dialog is not None:
-            self.progress_dialog.close()
-            self.progress_dialog.deleteLater()
-            self.progress_dialog = None
+        # Grab local ref: close() emits canceled, which nulls self.progress_dialog.
+        dlg = self.progress_dialog
+        self.progress_dialog = None
+        if dlg is not None:
+            dlg.close()
+            dlg.deleteLater()
         if self.match_worker is not None:
             self.match_worker.deleteLater()
             self.match_worker = None
@@ -1291,10 +1295,12 @@ class UrlsTab(QWidget):
         if generation != self._match_worker_generation:
             return
 
-        if self.progress_dialog is not None:
-            self.progress_dialog.close()
-            self.progress_dialog.deleteLater()
-            self.progress_dialog = None
+        # Grab local ref: close() emits canceled, which nulls self.progress_dialog.
+        dlg = self.progress_dialog
+        self.progress_dialog = None
+        if dlg is not None:
+            dlg.close()
+            dlg.deleteLater()
         if self.match_worker is not None:
             self.match_worker.deleteLater()
             self.match_worker = None

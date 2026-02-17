@@ -1,4 +1,5 @@
 """Reports tab shim - integrates self-contained reports module into main app."""
+from __future__ import annotations
 
 from dataclasses import asdict
 from pathlib import Path
