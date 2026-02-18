@@ -22,6 +22,7 @@ from .cookies import SafariCookiesExtractor
 from .bookmarks import SafariBookmarksExtractor
 from .downloads import SafariDownloadsExtractor
 from .sessions import SafariSessionsExtractor
+from .cache import SafariCacheExtractor
 
 __all__ = [
     "SafariHistoryExtractor",
@@ -29,4 +30,5 @@ __all__ = [
     "SafariBookmarksExtractor",
     "SafariDownloadsExtractor",
     "SafariSessionsExtractor",
+    "SafariCacheExtractor",
 ]
