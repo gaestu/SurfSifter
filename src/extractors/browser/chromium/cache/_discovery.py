@@ -173,36 +173,7 @@ def scan_cache_pattern(
         for file_path in matches:
             path_obj = Path(file_path)
 
-            # Extract profile name
-            # e.g., "Users/john/AppData/Local/Google/Chrome/User Data/Default/Cache/Cache_Data/f_000001"
-            parts = path_obj.parts
-
-            # Find profile (directory before Cache)
-            profile = "Default"
-            try:
-                if "User Data" in parts:
-                    # Chrome/Edge/Brave: User Data/<Profile>/Cache
-                    user_data_idx = parts.index("User Data")
-                    profile = parts[user_data_idx + 1]
-                elif browser == "opera":
-                    # Opera: Opera Software/<variant>/Cache
-                    if "Opera Stable" in file_path:
-                        profile = "Opera Stable"
-                    elif "Opera GX Stable" in file_path:
-                        profile = "Opera GX Stable"
-                    else:
-                        profile = "Default"
-                elif browser == "chrome" and ".config" in parts:
-                    # Linux: ~/.config/google-chrome/<Profile>/Cache
-                    config_idx = parts.index(".config")
-                    profile = parts[config_idx + 2]
-                elif browser == "brave" and ".config" in parts:
-                    # Linux: ~/.config/BraveSoftware/Brave-Browser/<Profile>/Cache
-                    if "Brave-Browser" in parts:
-                        brave_idx = parts.index("Brave-Browser")
-                        profile = parts[brave_idx + 1]
-            except (ValueError, IndexError):
-                pass
+            profile = extract_profile_from_path(file_path, browser)
 
             # Cache directory is parent of file
             cache_dir = str(path_obj.parent)

@@ -809,6 +809,9 @@ class CacheSimpleExtractor(BaseExtractor):
                 for pattern in get_artifact_patterns(browser, "cache"):
                     path_patterns.add(glob_to_sql_like(pattern))
 
+        if not path_patterns:
+            return [None]
+
         result, embedded_roots = discover_artifacts_with_embedded_roots(
             evidence_conn,
             evidence_id,

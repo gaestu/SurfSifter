@@ -15,7 +15,6 @@ from .._patterns import (
     CHROMIUM_BROWSERS,
     get_artifact_patterns,
     get_patterns_for_root,
-    is_flat_profile_browser,
 )
 from .._parsers import extract_profile_from_path as _extract_profile_from_path_shared
 from ._schemas import (
@@ -187,12 +186,7 @@ def _parse_extension_manifest(
         if part == "Extensions" and i + 2 < len(path_parts):
             extension_id = path_parts[i + 1]
             version = path_parts[i + 2]
-        elif part == "User Data" and i + 1 < len(path_parts):
-            profile = path_parts[i + 1]
-
-    # Handle Opera-style flat profiles
-    if is_flat_profile_browser(browser):
-        profile = _extract_opera_profile(path_parts)
+    profile = _extract_profile_from_path_shared(path_str) or "Default"
 
     # Try to extract partition index from path (if available)
     partition_index = _extract_partition_index(path_parts)
@@ -237,25 +231,6 @@ def _parse_extension_manifest(
         ext_info["host_permissions"].extend(host_patterns)
 
     return ext_info
-
-
-def _extract_opera_profile(path_parts: List[str]) -> str:
-    """
-    Extract profile name from Opera-style flat profile path.
-
-    Opera stores profiles directly without Default/ subdirectory.
-
-    Args:
-        path_parts: Path split by separator
-
-    Returns:
-        Profile name (usually "Default" for Opera)
-    """
-    for part in path_parts:
-        if "Opera" in part or "opera" in part:
-            return "Default"
-    return "Default"
-
 
 def _extract_partition_index(path_parts: List[str]) -> Optional[int]:
     """
