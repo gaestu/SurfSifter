@@ -6,11 +6,30 @@ Safari's WebKit NetworkProcess stores cached resources as flat binary files in:
   - WebKit/NetworkCache/Version N/Records/<partition_hash>/Resource/<sha1>
 
 Each record file is a binary structure containing:
-  1. A record header with magic, version, URL, and body/header offsets
-  2. HTTP response headers
-  3. Optionally an inline body (or reference to Blobs/<sha1>-blob)
+  1. A record header with version, partition key, type, and URL
+  2. Record hash + metadata section
+  3. HTTP response section (status text, version, headers)
+  4. Optionally an inline body (or reference to Blobs/<sha1>-blob)
 
 Companion "-blob" files contain the response body when not stored inline.
+
+Binary layout (Version 12):
+  [uint32]          version (e.g. 12)
+  [lf_string]       partition domain (e.g. "grandx.org")
+  [lf_string]       record type (e.g. "Resource")
+  [lf_string]       URL
+  [0xFFFFFFFF]      key hash marker
+  [20 bytes]        SHA1 hash of the cache key
+  [...bytes...]     crypto/metadata block
+  [...bytes...]     second URL copy, MIME type, body size
+  [0xFFFFFFFF]      response section marker
+  [lf_string]       HTTP status text (e.g. "OK")
+  [lf_string]       HTTP version (e.g. "HTTP/1.1")
+  [uint32]          header count
+  [uint32]          unknown/padding
+  [lf_string pairs] header key-value pairs
+
+Where lf_string = [uint32 length] [byte 0x01 flag] [string data].
 
 Reference: WebKit source — NetworkCacheStorage.cpp / NetworkCacheCoders.cpp
 """
@@ -19,8 +38,10 @@ from __future__ import annotations
 
 import struct
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Set
+from typing import Any, Dict, List, Optional, Set, Tuple
 from urllib.parse import urlparse
 
 from core.logging import get_logger
@@ -30,8 +51,51 @@ LOGGER = get_logger("extractors.browser.safari.cache.record_parser")
 # WebKitCache record magic bytes (little-endian uint32)
 _RECORD_MAGIC = 0x4F524543  # "CERO" reversed — "ORECR" / cache record
 
-# Minimum file size to be a valid record (key_length + short URL)
-_MIN_RECORD_SIZE = 12
+# Minimum file size to be a valid record (version + some fields)
+_MIN_RECORD_SIZE = 20
+
+# Response section marker
+_RESPONSE_MARKER = b"\xff\xff\xff\xff"
+
+# Standard HTTP status text to numeric code mapping
+_STATUS_TEXT_TO_CODE = {
+    "continue": 100,
+    "switching protocols": 101,
+    "ok": 200,
+    "created": 201,
+    "accepted": 202,
+    "non-authoritative information": 203,
+    "no content": 204,
+    "reset content": 205,
+    "partial content": 206,
+    "multiple choices": 300,
+    "moved permanently": 301,
+    "found": 302,
+    "see other": 303,
+    "not modified": 304,
+    "temporary redirect": 307,
+    "permanent redirect": 308,
+    "bad request": 400,
+    "unauthorized": 401,
+    "forbidden": 403,
+    "not found": 404,
+    "method not allowed": 405,
+    "not acceptable": 406,
+    "request timeout": 408,
+    "conflict": 409,
+    "gone": 410,
+    "length required": 411,
+    "payload too large": 413,
+    "uri too long": 414,
+    "unsupported media type": 415,
+    "range not satisfiable": 416,
+    "too many requests": 429,
+    "internal server error": 500,
+    "not implemented": 501,
+    "bad gateway": 502,
+    "service unavailable": 503,
+    "gateway timeout": 504,
+}
 
 
 @dataclass
@@ -103,11 +167,15 @@ def _parse_record_flexible(
     """Flexible parser that handles multiple WebKitCache format versions.
 
     Strategy:
-    1. Try structured parsing (key_length + key followed by header block)
-    2. Fall back to scanning for URL patterns and HTTP header patterns
+    1. Try Version 12+ format (version uint32 + lf_string fields)
+    2. Try legacy structured parsing (key_length + URL)
+    3. Fall back to scanning for URL patterns and HTTP header patterns
     """
-    # Try structured approach first
-    result = _try_structured_parse(data)
+    # Try V12+ format first (most common modern format)
+    result = _try_v12_parse(data)
+    if result is None:
+        # Try legacy structured approach
+        result = _try_structured_parse(data)
     if result is None:
         # Fall back to scanning
         result = _try_scan_parse(data)
@@ -117,9 +185,13 @@ def _parse_record_flexible(
 
     url, headers, timestamp_utc, body_offset, body_size = result
 
-    http_status = _extract_status_from_headers(headers)
+    http_status = _extract_status_code(headers)
     content_type = _header_ci(headers, "content-type")
     content_length = _parse_int(_header_ci(headers, "content-length"))
+
+    # Try to extract timestamp from Date header if not found otherwise
+    if not timestamp_utc:
+        timestamp_utc = _date_header_to_utc(headers)
 
     return WebKitCacheRecord(
         record_hash=record_hash,
@@ -138,6 +210,203 @@ def _parse_record_flexible(
         raw_url=url,
         all_header_fields=headers,
     )
+
+
+def _try_v12_parse(
+    data: bytes,
+) -> Optional[Tuple[str, Dict[str, str], Optional[str], Optional[int], Optional[int]]]:
+    """Parse WebKitCache record using Version 12+ binary format.
+
+    Layout:
+      [uint32]    version (e.g. 12)
+      [lf_string] partition domain
+      [lf_string] record type ("Resource", "SubResources")
+      [lf_string] URL
+      [0xFFFFFFFF] key hash marker
+      [... binary metadata ...]
+      [0xFFFFFFFF] response section marker
+      [lf_string] status text ("OK", "Not Found", ...)
+      [lf_string] HTTP version ("HTTP/1.1")
+      [uint32]    header count
+      [uint32]    unknown (typically 0)
+      [header pairs: lf_string key + lf_string value] × count
+
+    Returns (url, headers, timestamp_utc, body_offset, body_size) or None.
+    """
+    if len(data) < _MIN_RECORD_SIZE:
+        return None
+
+    # Read version — e.g. 12 for current format
+    version = struct.unpack_from("<I", data, 0)[0]
+    if version < 1 or version > 50:
+        return None
+
+    off = 4
+
+    # Read partition domain (lf_string)
+    partition_str, off = _read_lf_string(data, off)
+    if partition_str is None:
+        return None
+
+    # Read record type (lf_string, e.g. "Resource")
+    type_str, off = _read_lf_string(data, off)
+    if type_str is None:
+        return None
+
+    # Read URL (lf_string)
+    url, off = _read_lf_string(data, off)
+    if url is None or not _looks_like_url(url):
+        return None
+
+    # After URL: first 0xFFFFFFFF marker followed by SHA1 hash + metadata
+    # Then somewhere later: second 0xFFFFFFFF marker starts response section
+    # Find the response section by searching for the marker that precedes
+    # a valid status_text + "HTTP/x.x" sequence
+    headers, http_status_code, timestamp_utc = _parse_response_section(data, off)
+
+    return url, headers, timestamp_utc, None, None
+
+
+def _read_lf_string(data: bytes, offset: int) -> Tuple[Optional[str], int]:
+    """Read a length-flag-string from binary data.
+
+    Format: [uint32 length] [byte 0x01 flag] [string data].
+    Returns (string_value, new_offset). Returns (None, offset) on failure.
+    """
+    if offset + 5 > len(data):
+        return None, offset
+
+    slen = struct.unpack_from("<I", data, offset)[0]
+    if slen > 16384:
+        return None, offset
+
+    flag = data[offset + 4]
+    if flag != 1:
+        return None, offset
+
+    new_offset = offset + 5 + slen
+    if new_offset > len(data):
+        return None, offset
+
+    try:
+        s = data[offset + 5 : new_offset].decode("utf-8", errors="ignore").strip("\x00")
+    except Exception:
+        return None, offset
+
+    return s, new_offset
+
+
+def _parse_response_section(
+    data: bytes,
+    start_offset: int,
+) -> Tuple[Dict[str, str], Optional[int], Optional[str]]:
+    """Find and parse the HTTP response section in a WebKitCache record.
+
+    Scans for 0xFFFFFFFF markers after start_offset and tries to parse the
+    subsequent data as: status_text, HTTP_version, header_count, headers.
+
+    Returns (headers_dict, http_status_code, timestamp_utc).
+    """
+    headers: Dict[str, str] = {}
+    http_status_code: Optional[int] = None
+    timestamp_utc: Optional[str] = None
+
+    # Search for 0xFFFFFFFF markers after the URL
+    search_from = start_offset
+    while True:
+        marker_pos = data.find(_RESPONSE_MARKER, search_from)
+        if marker_pos < 0:
+            break
+
+        off = marker_pos + 4
+
+        # Try to read status text as lf_string
+        status_text, off2 = _read_lf_string(data, off)
+        if status_text is None:
+            search_from = marker_pos + 1
+            continue
+
+        # Try to read HTTP version string
+        version_str, off3 = _read_lf_string(data, off2)
+        if version_str is None or not version_str.startswith("HTTP/"):
+            search_from = marker_pos + 1
+            continue
+
+        # This is the response section — read header count
+        if off3 + 8 > len(data):
+            break
+
+        header_count = struct.unpack_from("<I", data, off3)[0]
+        off3 += 4
+
+        # Skip unknown/padding uint32
+        off3 += 4
+
+        if header_count > 100:
+            search_from = marker_pos + 1
+            continue
+
+        # Map status text to numeric code and store as pseudo-header
+        http_status_code = _status_text_to_code(status_text)
+        if http_status_code is not None:
+            headers[":status"] = str(http_status_code)
+
+        # Read headers
+        for _ in range(header_count):
+            key, off3 = _read_lf_string(data, off3)
+            val, off3 = _read_lf_string(data, off3)
+            if key is not None and val is not None:
+                headers[key] = val
+            else:
+                break
+
+        break
+
+    return headers, http_status_code, timestamp_utc
+
+
+def _status_text_to_code(text: str) -> Optional[int]:
+    """Map HTTP status text (e.g. 'OK', 'Not Found') to numeric code."""
+    if not text:
+        return None
+    # Try direct mapping
+    code = _STATUS_TEXT_TO_CODE.get(text.lower().strip())
+    if code is not None:
+        return code
+    # Try parsing as a number (some records may store "200" directly)
+    try:
+        val = int(text.strip())
+        if 100 <= val <= 599:
+            return val
+    except (ValueError, TypeError):
+        pass
+    return None
+
+
+def _date_header_to_utc(headers: Dict[str, str]) -> Optional[str]:
+    """Extract and convert the Date header to ISO-8601 UTC string."""
+    date_val = _header_ci(headers, "date")
+    if not date_val:
+        return None
+    try:
+        dt = parsedate_to_datetime(date_val)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt.astimezone(timezone.utc).isoformat()
+    except Exception:
+        return None
+
+
+def _extract_status_code(headers: Dict[str, str]) -> Optional[int]:
+    """Extract HTTP status code from headers or parsed response data.
+
+    Falls back to :status pseudo-header for HTTP/2 records.
+    """
+    # Check for :status pseudo-header (HTTP/2)
+    status = _header_ci(headers, ":status")
+    if status:
+        return _parse_int(status)
+    return None
 
 
 def _try_structured_parse(
@@ -408,15 +677,6 @@ def _header_ci(headers: Dict[str, str], target: str) -> Optional[str]:
     for k, v in headers.items():
         if k.lower() == target_lower:
             return v
-    return None
-
-
-def _extract_status_from_headers(headers: Dict[str, str]) -> Optional[int]:
-    """Extract HTTP status from headers or status line."""
-    # Some records include :status pseudo-header (HTTP/2)
-    status = _header_ci(headers, ":status")
-    if status:
-        return _parse_int(status)
     return None
 
 
