@@ -129,19 +129,28 @@ SAFARI_ARTIFACTS: Dict[str, SafariArtifactInfo] = {
         # Safari cache — multiple storage locations:
         # - Cache.db: SQLite index of cached resources
         # - WebKitCache/Version */Blobs/*: raw cached response bodies
-        # - WebKitCache/Version */Records/*/Resource/*: structured cache records
+        # - WebKitCache/Version */Records/<partition>/<Resource|SubResources>/<hash>: cache records
         # - WebKit/NetworkCache/*: modern NetworkProcess cache
         # - fsCachedData/*: legacy iOS-style cached data (rare on desktop)
+        #
+        # NOTE: Records are 3 levels deep under Records/ so we need
+        # explicit depth globs (not ** which triggers slow full-walk).
         "patterns": [
             "Cache.db",
             "Cache.db-wal",
             "Cache.db-journal",
             "Cache.db-shm",
             "fsCachedData/*",
+            # WebKitCache blobs (response bodies) and salt
             "WebKitCache/Version */Blobs/*",
-            "WebKitCache/Version */Records/*",
+            "WebKitCache/Version */salt",
+            # WebKitCache Records: <partition>/Resource/<sha1> and <partition>/SubResources/<sha1>
+            "WebKitCache/Version */Records/*/*/*",
+            # NetworkCache (same structure)
             "WebKit/NetworkCache/Version */Blobs/*",
-            "WebKit/NetworkCache/Version */Records/*",
+            "WebKit/NetworkCache/Version */salt",
+            "WebKit/NetworkCache/Version */Records/*/*/*",
+            # CacheStorage
             "WebKit/CacheStorage/*",
         ],
         "root_type": "cache",

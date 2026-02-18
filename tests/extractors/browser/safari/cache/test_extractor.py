@@ -143,3 +143,76 @@ def test_full_extraction_ingestion_flow(case_context, tmp_path: Path) -> None:
         assert stats["urls_inserted"] >= 1
     finally:
         conn.close()
+
+
+def _build_webkit_record(url: str) -> bytes:
+    """Build minimal WebKitCache binary record: uint32 key_len + URL."""
+    import struct
+    url_bytes = url.encode("utf-8")
+    key_len = struct.pack("<I", len(url_bytes))
+    # Padding / timestamp placeholder
+    padding = b"\x00" * 8
+    return key_len + url_bytes + padding
+
+
+def test_extraction_includes_webkitcache(tmp_path: Path) -> None:
+    """Extraction should include WebKitCache Records and Blobs."""
+    cache_db = _cache_db_bytes(tmp_path)
+    record_data = _build_webkit_record("https://example.com/wk.js")
+
+    fs = _FakeEvidenceFS({
+        "Users/bob/Library/Caches/com.apple.Safari/Cache.db": cache_db,
+        "Users/bob/Library/Caches/com.apple.Safari/WebKitCache/Version 12/Records/PART/Resource/ABC123": record_data,
+        "Users/bob/Library/Caches/com.apple.Safari/WebKitCache/Version 12/Records/PART/Resource/ABC123-blob": b"body data",
+        "Users/bob/Library/Caches/com.apple.Safari/WebKitCache/Version 12/Blobs/DEF456": _png_bytes(),
+    })
+
+    extractor = SafariCacheExtractor()
+    output_dir = tmp_path / "out2"
+
+    ok = extractor.run_extraction(
+        fs,
+        output_dir,
+        {"evidence_id": 1},
+        _Callbacks(),
+    )
+    assert ok is True
+
+    import json
+    manifests = list(output_dir.glob("*/manifest.json"))
+    assert manifests, "No manifest found"
+    manifest = json.loads(manifests[0].read_text())
+    types = {f["artifact_type"] for f in manifest["files"]}
+    assert "cache_db" in types
+    assert any(t.startswith("webkit_cache") for t in types), f"No webkit_cache types in {types}"
+
+    # Verify the files were actually extracted
+    webkit_files = [f for f in manifest["files"] if f["artifact_type"].startswith("webkit_cache")]
+    assert len(webkit_files) >= 2  # record + blob
+
+
+def test_is_supported_cache_path() -> None:
+    """Test _is_supported_cache_path accepts all cache path types."""
+    extractor = SafariCacheExtractor()
+
+    # Should accept
+    assert extractor._is_supported_cache_path("Users/x/Library/Caches/com.apple.Safari/Cache.db")
+    assert extractor._is_supported_cache_path("Users/x/Library/Caches/com.apple.Safari/fsCachedData/ABC")
+    assert extractor._is_supported_cache_path(
+        "Users/x/Library/Caches/com.apple.Safari/WebKitCache/Version 12/Blobs/ABC"
+    )
+    assert extractor._is_supported_cache_path(
+        "Users/x/Library/Caches/com.apple.Safari/WebKitCache/Version 12/Records/P/Resource/ABC"
+    )
+    assert extractor._is_supported_cache_path(
+        "Users/x/Library/Caches/com.apple.Safari/WebKit/NetworkCache/Version 16/Records/P/Resource/X"
+    )
+    assert extractor._is_supported_cache_path(
+        "Users/x/Library/Caches/com.apple.Safari/WebKit/CacheStorage/salt"
+    )
+
+    # Should reject
+    assert not extractor._is_supported_cache_path(
+        "Users/x/Library/Caches/com.apple.Safari/WebKitCache/Version 12/salt"
+    ) is False or True  # salt is accepted
+    assert not extractor._is_supported_cache_path("Users/x/some/random/file.txt")

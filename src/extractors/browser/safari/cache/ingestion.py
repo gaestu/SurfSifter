@@ -26,6 +26,11 @@ from extractors._shared.extraction_warnings import (
 from ._blob_parser import parse_request_object, parse_response_object
 from ._image_carver import CarvedImage, carve_image_from_cache_entry, carve_orphan_images
 from ._parser import get_cache_db_columns, get_cache_db_tables, parse_cache_db
+from ._record_parser import (
+    WebKitCacheRecord,
+    get_blob_path,
+    parse_webkit_cache_dir,
+)
 from ._schemas import (
     KNOWN_COLUMNS_BLOB_DATA,
     KNOWN_COLUMNS_RECEIVER_DATA,
@@ -60,6 +65,7 @@ class CacheIngestionHandler:
             "urls_inserted": 0,
             "images_inserted": 0,
             "inventory_entries": 0,
+            "webkit_records_parsed": 0,
             "errors": [],
         }
 
@@ -236,12 +242,255 @@ class CacheIngestionHandler:
                     notes=str(exc),
                 )
 
+        # --- WebKitCache / NetworkCache record ingestion ---
+        self._ingest_webkit_cache_records(
+            files=files,
+            run_dir=run_dir,
+            run_id=run_id,
+            manifest=manifest,
+            evidence_conn=evidence_conn,
+            evidence_id=evidence_id,
+            warning_collector=warning_collector,
+            callbacks=callbacks,
+            stats=stats,
+        )
+
         warning_count = warning_collector.flush_to_database(evidence_conn)
         if warning_count:
             stats["warnings"] = warning_count
         evidence_conn.commit()
         callbacks.on_step("Safari cache ingestion complete")
         return stats
+
+    def _ingest_webkit_cache_records(
+        self,
+        *,
+        files: List[Dict[str, Any]],
+        run_dir: Path,
+        run_id: str,
+        manifest: Dict[str, Any],
+        evidence_conn,
+        evidence_id: int,
+        warning_collector,
+        callbacks,
+        stats: Dict[str, Any],
+    ) -> None:
+        """Ingest WebKitCache / NetworkCache records from extracted directories."""
+        # Find extracted group dirs that contain WebKitCache data
+        webkit_dirs = self._find_webkit_cache_dirs(files, run_dir)
+        if not webkit_dirs:
+            return
+
+        for cache_dir, source_root, profile in webkit_dirs:
+            callbacks.on_step(f"Parsing WebKitCache records from {cache_dir.name}")
+
+            inventory_id = insert_browser_inventory(
+                evidence_conn,
+                evidence_id=evidence_id,
+                browser="safari",
+                artifact_type="cache_safari_webkit",
+                run_id=run_id,
+                extracted_path=str(cache_dir),
+                extraction_status="ok",
+                extraction_timestamp_utc=manifest.get("extraction_timestamp_utc", ""),
+                logical_path=source_root or str(cache_dir),
+                profile=profile,
+                partition_index=None,
+                fs_type=None,
+                forensic_path=source_root or str(cache_dir),
+                extraction_tool=f"{self.extractor_name}:{self.extractor_version}",
+                file_size_bytes=None,
+                file_md5=None,
+                file_sha256=None,
+            )
+            stats["inventory_entries"] += 1
+
+            try:
+                records = parse_webkit_cache_dir(cache_dir, source_root=source_root)
+                stats["webkit_records_parsed"] += len(records)
+
+                url_records: List[Dict[str, Any]] = []
+                images_carved = 0
+
+                for record in records:
+                    url_record = _make_webkit_url_record(
+                        record=record,
+                        discovered_by=self.extractor_name,
+                        run_id=run_id,
+                        profile=profile,
+                    )
+                    if url_record:
+                        url_records.append(url_record)
+
+                    # Try to carve images from blob data
+                    carved = self._carve_webkit_blob_image(
+                        record=record,
+                        cache_dir=cache_dir,
+                        run_dir=run_dir,
+                    )
+                    if carved:
+                        self._insert_carved_image(
+                            evidence_conn=evidence_conn,
+                            evidence_id=evidence_id,
+                            run_id=run_id,
+                            carved=carved,
+                            entry_context={
+                                "record_hash": record.record_hash,
+                                "partition": record.partition,
+                                "timestamp_utc": record.timestamp_utc,
+                                "http_status": record.http_status,
+                                "record_type": record.record_type,
+                            },
+                        )
+                        images_carved += 1
+
+                # Also carve Blobs that aren't linked to specific records
+                blobs_dir = cache_dir / "Blobs"
+                if blobs_dir.exists():
+                    from ._image_carver import _save_carved_image
+                    from ....image_signatures import detect_image_type
+
+                    linked_hashes = {r.record_hash for r in records}
+                    for blob_file in sorted(blobs_dir.iterdir()):
+                        if not blob_file.is_file():
+                            continue
+                        if blob_file.name in linked_hashes:
+                            continue  # already processed via record
+                        try:
+                            data = blob_file.read_bytes()
+                        except Exception:
+                            continue
+                        img_type = detect_image_type(data)
+                        if not img_type:
+                            continue
+                        carved = _save_carved_image(
+                            body=data,
+                            image_format=img_type[0],
+                            extension=img_type[1],
+                            run_dir=run_dir,
+                            stem=f"wkblob_{blob_file.name[:16]}",
+                            source_url=None,
+                            source_entry_id=None,
+                            source_type="webkit_blob",
+                            content_type=None,
+                        )
+                        if carved:
+                            self._insert_carved_image(
+                                evidence_conn=evidence_conn,
+                                evidence_id=evidence_id,
+                                run_id=run_id,
+                                carved=carved,
+                                entry_context={"source": "webkit_blob_orphan"},
+                            )
+                            images_carved += 1
+
+                stats["images_inserted"] += images_carved
+
+                if url_records:
+                    stats["urls_inserted"] += insert_urls(evidence_conn, evidence_id, url_records)
+
+                update_inventory_ingestion_status(
+                    evidence_conn,
+                    inventory_id=inventory_id,
+                    status="ok",
+                    urls_parsed=len(url_records),
+                    records_parsed=len(records),
+                )
+            except Exception as exc:
+                LOGGER.error("Failed to ingest WebKitCache %s: %s", cache_dir, exc, exc_info=True)
+                stats["errors"].append(f"WebKitCache {cache_dir}: {exc}")
+                update_inventory_ingestion_status(
+                    evidence_conn,
+                    inventory_id=inventory_id,
+                    status="failed",
+                    notes=str(exc),
+                )
+
+    def _find_webkit_cache_dirs(
+        self,
+        files: List[Dict[str, Any]],
+        run_dir: Path,
+    ) -> List[tuple[Path, str, str]]:
+        """Find extracted WebKitCache Version directories for ingestion.
+
+        Returns list of (local_cache_version_dir, source_root, profile).
+        """
+        seen: set[str] = set()
+        results: List[tuple[Path, str, str]] = []
+
+        for file_entry in files:
+            artifact_type = file_entry.get("artifact_type", "")
+            if not artifact_type.startswith("webkit_cache"):
+                continue
+
+            local_path = file_entry.get("local_path", "")
+            source_path = file_entry.get("source_path", "")
+            profile = file_entry.get("user") or "Default"
+
+            # Find the "Version N" directory in the extracted path
+            version_dir = _find_version_dir(Path(local_path))
+            if version_dir is None:
+                continue
+
+            key = str(version_dir)
+            if key in seen:
+                continue
+            seen.add(key)
+
+            # Reconstruct source root for the Version dir
+            source_version_dir = _find_source_version_root(source_path)
+            results.append((version_dir, source_version_dir, profile))
+
+        return results
+
+    def _carve_webkit_blob_image(
+        self,
+        record: WebKitCacheRecord,
+        cache_dir: Path,
+        run_dir: Path,
+    ) -> Optional[CarvedImage]:
+        """Try to carve an image from a WebKitCache record's blob data."""
+        from ._image_carver import _save_carved_image, extract_body
+        from ....image_signatures import detect_image_type
+
+        content_type = record.content_type
+        if content_type:
+            ct_lower = content_type.lower().split(";")[0].strip()
+            if not ct_lower.startswith("image/") and ct_lower != "application/octet-stream":
+                return None
+
+        blob_path = get_blob_path(cache_dir, record)
+        if blob_path is None or not blob_path.exists():
+            return None
+
+        try:
+            raw_data = blob_path.read_bytes()
+        except Exception:
+            return None
+
+        if not raw_data:
+            return None
+
+        encoding = record.headers.get("Content-Encoding") or _header_ci_dict(
+            record.headers, "content-encoding",
+        )
+        body = extract_body(raw_data, encoding) or raw_data
+
+        img_type = detect_image_type(body)
+        if not img_type:
+            return None
+
+        return _save_carved_image(
+            body=body,
+            image_format=img_type[0],
+            extension=img_type[1],
+            run_dir=run_dir,
+            stem=f"wkrec_{record.record_hash[:16]}_{record.record_type}",
+            source_url=record.url,
+            source_entry_id=None,
+            source_type=f"webkit_{record.record_type.lower()}",
+            content_type=content_type,
+        )
 
     def _find_latest_manifest(self, output_dir: Path) -> Optional[Path]:
         manifests = sorted(output_dir.glob("*/manifest.json"))
@@ -379,6 +628,85 @@ def _resolve_local_path(file_entry: Dict[str, Any], run_dir: Path) -> Optional[P
         if candidate.exists():
             return candidate
     return None
+
+
+def _find_version_dir(local_path: Path) -> Optional[Path]:
+    """Walk up from a file path to find the 'Version N' cache directory."""
+    parts = local_path.parts
+    for i, part in enumerate(parts):
+        if part.startswith("Version ") and i > 0:
+            candidate = Path(*parts[: i + 1])
+            if candidate.exists() and candidate.is_dir():
+                return candidate
+    # Try from the local_path upward
+    current = local_path if local_path.is_dir() else local_path.parent
+    while current != current.parent:
+        if current.name.startswith("Version "):
+            return current
+        current = current.parent
+    return None
+
+
+def _find_source_version_root(source_path: str) -> str:
+    """Extract the source path up to and including 'Version N'."""
+    normalized = source_path.replace("\\", "/")
+    parts = normalized.split("/")
+    for i, part in enumerate(parts):
+        if part.startswith("Version "):
+            return "/".join(parts[: i + 1])
+    return source_path
+
+
+def _header_ci_dict(headers: Dict[str, str], target: str) -> Optional[str]:
+    """Case-insensitive header lookup."""
+    target_lower = target.lower()
+    for k, v in headers.items():
+        if k.lower() == target_lower:
+            return v
+    return None
+
+
+def _make_webkit_url_record(
+    *,
+    record: "WebKitCacheRecord",
+    discovered_by: str,
+    run_id: str,
+    profile: str,
+) -> Optional[Dict[str, Any]]:
+    """Create a URL record from a WebKitCache record."""
+    url = (record.url or "").strip()
+    if not url:
+        return None
+
+    parsed = urlparse(url)
+    scheme = (parsed.scheme or "").lower()
+    if scheme not in {"http", "https"}:
+        return None
+
+    context = {
+        "record_hash": record.record_hash,
+        "record_type": record.record_type,
+        "partition": record.partition,
+        "http_status": record.http_status,
+        "content_type": record.content_type,
+        "profile": profile,
+        "source": "webkit_cache",
+    }
+    return {
+        "url": url,
+        "domain": parsed.hostname,
+        "scheme": scheme,
+        "discovered_by": discovered_by,
+        "run_id": run_id,
+        "source_path": record.source_path,
+        "context": json.dumps(context),
+        "first_seen_utc": record.timestamp_utc,
+        "last_seen_utc": record.timestamp_utc,
+        "cache_key": record.record_hash,
+        "cache_filename": f"WebKitCache/{record.record_type}/{record.record_hash}",
+        "response_code": record.http_status,
+        "content_type": record.content_type,
+    }
 
 
 def _make_url_record(

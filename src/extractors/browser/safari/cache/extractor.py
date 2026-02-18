@@ -23,6 +23,10 @@ LOGGER = get_logger("extractors.browser.safari.cache")
 
 _CACHE_DB_NAMES = {"Cache.db", "Cache.db-wal", "Cache.db-journal", "Cache.db-shm"}
 
+# Subdirectory patterns that identify WebKitCache / NetworkCache artifacts
+_WEBKIT_CACHE_MARKERS = ("/WebKitCache/", "/WebKit/NetworkCache/")
+_CACHE_STORAGE_MARKER = "/WebKit/CacheStorage/"
+
 
 class SafariCacheExtractor(BaseExtractor):
     """Extract Safari cache database and fsCachedData files."""
@@ -78,11 +82,16 @@ class SafariCacheExtractor(BaseExtractor):
             files = manifest.get("files", [])
             cache_db_count = sum(1 for f in files if f.get("artifact_type") == "cache_db")
             fs_count = sum(1 for f in files if f.get("artifact_type") == "fscached_data")
+            webkit_count = sum(
+                1 for f in files
+                if (f.get("artifact_type") or "").startswith("webkit_cache")
+            )
             text = (
                 "Safari Cache\n"
                 f"Run ID: {manifest.get('run_id', 'N/A')}\n"
                 f"Cache DB Files: {cache_db_count}\n"
-                f"fsCachedData Files: {fs_count}"
+                f"fsCachedData Files: {fs_count}\n"
+                f"WebKitCache Files: {webkit_count}"
             )
         except Exception:
             text = "Safari Cache\nFailed to read manifest"
@@ -194,12 +203,24 @@ class SafariCacheExtractor(BaseExtractor):
 
     def _is_supported_cache_path(self, path_str: str) -> bool:
         path = path_str.replace("\\", "/")
-        if "/WebKitCache/" in path or "/WebKit/NetworkCache/" in path or "/WebKit/CacheStorage/" in path:
-            return False
         name = Path(path).name
+        # Cache.db SQLite files
         if name in _CACHE_DB_NAMES:
             return True
+        # fsCachedData blobs
         if "/fsCachedData/" in path:
+            return True
+        # WebKitCache / NetworkCache records and blobs
+        for marker in _WEBKIT_CACHE_MARKERS:
+            if marker in path:
+                # Accept Records (metadata + body companions) and Blobs
+                if "/Records/" in path or "/Blobs/" in path:
+                    return True
+                # salt file — useful for forensic context
+                if name == "salt":
+                    return True
+        # WebKit/CacheStorage entries
+        if _CACHE_STORAGE_MARKER in path:
             return True
         return False
 
@@ -209,7 +230,15 @@ class SafariCacheExtractor(BaseExtractor):
 
         for item in discovered:
             normalized = item.rstrip("/")
+            # fsCachedData blobs under this cache root
             if normalized.startswith(f"{root}/fsCachedData/"):
+                selected.add(item)
+            # WebKitCache and NetworkCache entries under this cache root
+            elif normalized.startswith(f"{root}/WebKitCache/"):
+                selected.add(item)
+            elif normalized.startswith(f"{root}/WebKit/NetworkCache/"):
+                selected.add(item)
+            elif normalized.startswith(f"{root}/WebKit/CacheStorage/"):
                 selected.add(item)
             elif (
                 normalized == cache_db_path
@@ -241,13 +270,9 @@ class SafariCacheExtractor(BaseExtractor):
 
         try:
             source_name = Path(source_path).name
-            if "/fsCachedData/" in source_path.replace("\\", "/"):
-                artifact_type = "fscached_data"
-                rel_dest = Path("fsCachedData") / source_name
-            elif source_name in _CACHE_DB_NAMES:
-                artifact_type = "cache_db"
-                rel_dest = Path(source_name)
-            else:
+            normalized = source_path.replace("\\", "/")
+            artifact_type, rel_dest = self._classify_cache_file(normalized, source_name, source_path)
+            if artifact_type is None or rel_dest is None:
                 return None
 
             dest_path = group_dir / rel_dest
@@ -274,6 +299,37 @@ class SafariCacheExtractor(BaseExtractor):
         except Exception as exc:
             LOGGER.debug("Failed to extract Safari cache file %s: %s", source_path, exc)
             return None
+
+    @staticmethod
+    def _classify_cache_file(
+        normalized: str, source_name: str, source_path: str,
+    ) -> tuple[Optional[str], Optional[Path]]:
+        """Determine artifact_type and relative destination for a cache file."""
+        if "/fsCachedData/" in normalized:
+            return "fscached_data", Path("fsCachedData") / source_name
+        if source_name in _CACHE_DB_NAMES:
+            return "cache_db", Path(source_name)
+
+        # WebKitCache / NetworkCache files — preserve directory structure
+        for marker in _WEBKIT_CACHE_MARKERS:
+            idx = normalized.find(marker)
+            if idx >= 0:
+                # Preserve path relative to marker: e.g. "WebKitCache/Version 12/Blobs/ABC"
+                marker_name = marker.strip("/").split("/")[-1]  # "WebKitCache" or "NetworkCache"
+                rel = normalized[idx + 1:]  # strip leading /
+                if rel.startswith("WebKit/"):
+                    rel = rel[len("WebKit/"):]  # "NetworkCache/Version .../..."
+                return f"webkit_cache_{marker_name.lower()}", Path(rel)
+
+        # CacheStorage
+        if _CACHE_STORAGE_MARKER in normalized:
+            idx = normalized.find(_CACHE_STORAGE_MARKER)
+            rel = normalized[idx + 1:]  # "WebKit/CacheStorage/..."
+            if rel.startswith("WebKit/"):
+                rel = rel[len("WebKit/"):]
+            return "cache_storage", Path(rel)
+
+        return None, None
 
     def _find_latest_manifest(self, output_dir: Path) -> Optional[Path]:
         manifests = sorted(output_dir.glob("*/manifest.json"))
