@@ -36,7 +36,8 @@ def get_cache_entry_count(
         WHERE evidence_id = ?
           AND (discovered_by LIKE 'cache_simple%'
                OR discovered_by LIKE 'cache_firefox%'
-               OR discovered_by LIKE 'cache_blockfile%')
+               OR discovered_by LIKE 'cache_blockfile%'
+               OR discovered_by LIKE 'safari_cache%')
     """
     params: List[Any] = [evidence_id]
 
@@ -93,7 +94,8 @@ def get_cache_entries(
         WHERE evidence_id = ?
           AND (discovered_by LIKE 'cache_simple%'
                OR discovered_by LIKE 'cache_firefox%'
-               OR discovered_by LIKE 'cache_blockfile%')
+               OR discovered_by LIKE 'cache_blockfile%'
+               OR discovered_by LIKE 'safari_cache%')
     """
     params: List[Any] = [evidence_id]
 
@@ -125,6 +127,8 @@ def get_cache_entries(
             browser_name = "chromium"
         elif discovered_by.startswith("cache_firefox"):
             browser_name = "firefox"
+        elif discovered_by.startswith("safari_cache"):
+            browser_name = "safari"
 
         # Try to extract browser from source_path
         source_path = entry.get("source_path", "")
@@ -140,6 +144,8 @@ def get_cache_entries(
                 browser_name = "brave"
             elif "firefox" in path_lower:
                 browser_name = "firefox"
+            elif "safari" in path_lower:
+                browser_name = "safari"
 
         entry["browser"] = browser_name
 
@@ -173,11 +179,12 @@ def get_distinct_cache_browsers(conn: sqlite3.Connection, evidence_id: int) -> L
     """
     rows = conn.execute(
         """
-        SELECT DISTINCT source_path FROM urls
+        SELECT DISTINCT source_path, discovered_by FROM urls
         WHERE evidence_id = ?
           AND (discovered_by LIKE 'cache_simple%'
                OR discovered_by LIKE 'cache_firefox%'
-               OR discovered_by LIKE 'cache_blockfile%')
+               OR discovered_by LIKE 'cache_blockfile%'
+               OR discovered_by LIKE 'safari_cache%')
         """,
         (evidence_id,)
     ).fetchall()
@@ -185,6 +192,7 @@ def get_distinct_cache_browsers(conn: sqlite3.Connection, evidence_id: int) -> L
     browsers = set()
     for row in rows:
         path = row[0] or ""
+        discovered_by = row[1] if len(row) > 1 else ""
         path_lower = path.lower()
         if "chrome" in path_lower:
             browsers.add("chrome")
@@ -196,6 +204,8 @@ def get_distinct_cache_browsers(conn: sqlite3.Connection, evidence_id: int) -> L
             browsers.add("brave")
         elif "firefox" in path_lower:
             browsers.add("firefox")
+        elif "safari" in path_lower or (discovered_by and discovered_by.startswith("safari_cache")):
+            browsers.add("safari")
 
     return sorted(browsers)
 
@@ -214,7 +224,8 @@ def get_cache_content_types(conn: sqlite3.Connection, evidence_id: int) -> List[
           AND content_type IS NOT NULL
           AND (discovered_by LIKE 'cache_simple%'
                OR discovered_by LIKE 'cache_firefox%'
-               OR discovered_by LIKE 'cache_blockfile%')
+               OR discovered_by LIKE 'cache_blockfile%'
+               OR discovered_by LIKE 'safari_cache%')
         ORDER BY content_type
         """,
         (evidence_id,)
@@ -251,9 +262,12 @@ def get_cache_entry_by_id(conn: sqlite3.Connection, entry_id: int) -> Optional[D
 
     entry = dict(row)
 
-    # Parse browser from source_path
+    # Parse browser from source_path and discovered_by
     source_path = entry.get("source_path", "")
+    discovered_by = entry.get("discovered_by", "")
     browser_name = "unknown"
+    if discovered_by.startswith("safari_cache"):
+        browser_name = "safari"
     if source_path:
         path_lower = source_path.lower()
         if "chrome" in path_lower:
@@ -266,6 +280,8 @@ def get_cache_entry_by_id(conn: sqlite3.Connection, entry_id: int) -> Optional[D
             browser_name = "brave"
         elif "firefox" in path_lower:
             browser_name = "firefox"
+        elif "safari" in path_lower:
+            browser_name = "safari"
 
     entry["browser"] = browser_name
 
@@ -294,7 +310,8 @@ def get_cache_stats(conn: sqlite3.Connection, evidence_id: int) -> Dict[str, Any
         WHERE evidence_id = ?
           AND (discovered_by LIKE 'cache_simple%'
                OR discovered_by LIKE 'cache_firefox%'
-               OR discovered_by LIKE 'cache_blockfile%')
+               OR discovered_by LIKE 'cache_blockfile%'
+               OR discovered_by LIKE 'safari_cache%')
         """,
         (evidence_id,)
     ).fetchone()[0]
@@ -306,7 +323,8 @@ def get_cache_stats(conn: sqlite3.Connection, evidence_id: int) -> Dict[str, Any
         WHERE evidence_id = ?
           AND (discovered_by LIKE 'cache_simple%'
                OR discovered_by LIKE 'cache_firefox%'
-               OR discovered_by LIKE 'cache_blockfile%')
+               OR discovered_by LIKE 'cache_blockfile%'
+               OR discovered_by LIKE 'safari_cache%')
         GROUP BY response_code
         ORDER BY cnt DESC
         """,
@@ -321,7 +339,8 @@ def get_cache_stats(conn: sqlite3.Connection, evidence_id: int) -> Dict[str, Any
           AND content_type IS NOT NULL
           AND (discovered_by LIKE 'cache_simple%'
                OR discovered_by LIKE 'cache_firefox%'
-               OR discovered_by LIKE 'cache_blockfile%')
+               OR discovered_by LIKE 'cache_blockfile%'
+               OR discovered_by LIKE 'safari_cache%')
         GROUP BY content_type
         ORDER BY cnt DESC
         LIMIT 10

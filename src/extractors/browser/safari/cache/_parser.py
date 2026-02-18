@@ -12,6 +12,15 @@ from .._parsers import cocoa_to_iso
 
 LOGGER = get_logger("extractors.browser.safari.cache.parser")
 
+# Regex for text-style timestamps stored in newer Safari Cache.db files
+# e.g. '2023-10-04 19:29:21' or '2023-10-04T19:29:21'
+_TEXT_TIMESTAMP_FORMATS = (
+    "%Y-%m-%d %H:%M:%S",
+    "%Y-%m-%dT%H:%M:%S",
+    "%Y-%m-%d %H:%M:%S.%f",
+    "%Y-%m-%dT%H:%M:%S.%f",
+)
+
 
 @dataclass
 class SafariCacheEntry:
@@ -94,11 +103,12 @@ def parse_cache_db(db_path: Path) -> List[SafariCacheEntry]:
             raw_receiver = row["receiver_data"]
             is_data_on_fs = bool(row["is_data_on_fs"]) if row["is_data_on_fs"] is not None else False
             inline_body = None if is_data_on_fs else raw_receiver
+            cocoa_ts, utc_str = _parse_timestamp(row["time_stamp"])
             entry = SafariCacheEntry(
                 entry_id=int(row["entry_id"] or 0),
                 url=str(row["request_key"] or ""),
-                timestamp_cocoa=_coerce_float(row["time_stamp"]),
-                timestamp_utc=cocoa_to_iso(_coerce_float(row["time_stamp"])),
+                timestamp_cocoa=cocoa_ts,
+                timestamp_utc=utc_str,
                 version=int(row["version"] or 0),
                 storage_policy=int(row["storage_policy"] or 0),
                 partition=row["partition"],
@@ -154,6 +164,42 @@ def get_cache_db_columns(
     finally:
         if own_conn:
             conn.close()
+
+
+def _parse_timestamp(value) -> tuple[Optional[float], Optional[str]]:
+    """Parse time_stamp which can be a Cocoa float or a text date string.
+
+    Newer Safari versions store text dates like '2023-10-04 19:29:21'
+    while older versions use Cocoa epoch floats (seconds since 2001-01-01).
+
+    Returns:
+        (cocoa_float_or_none, iso_utc_string_or_none)
+    """
+    if value is None:
+        return None, None
+
+    # Try numeric Cocoa timestamp first
+    cocoa = _coerce_float(value)
+    if cocoa is not None:
+        return cocoa, cocoa_to_iso(cocoa)
+
+    # Try parsing as text date string
+    if isinstance(value, str):
+        text = value.strip()
+        if not text:
+            return None, None
+        for fmt in _TEXT_TIMESTAMP_FORMATS:
+            try:
+                from datetime import datetime, timezone
+                dt = datetime.strptime(text, fmt).replace(tzinfo=timezone.utc)
+                return None, dt.isoformat()
+            except ValueError:
+                continue
+        # If it looks like an ISO-ish string, return it directly
+        if len(text) >= 10 and text[4:5] == "-":
+            return None, text
+
+    return None, None
 
 
 def _coerce_float(value) -> Optional[float]:
