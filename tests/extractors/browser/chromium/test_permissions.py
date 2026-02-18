@@ -374,6 +374,74 @@ class TestHasExistingOutput:
         assert extractor.has_existing_output(tmp_path) is True
 
 
+class TestParsePreferencesIPv6:
+    """Test that malformed IPv6 URLs don't crash _parse_preferences_file."""
+
+    def test_malformed_ipv6_origin_does_not_crash(self, extractor, tmp_path, mock_callbacks):
+        """Regression: urlparse raises ValueError on invalid IPv6 brackets.
+
+        Chromium Preferences may contain origins with malformed IPv6 addresses
+        (e.g. from browser extensions or corrupt data). The parser must skip
+        these gracefully instead of aborting the whole file.
+        """
+        prefs = {
+            "profile": {
+                "content_settings": {
+                    "exceptions": {
+                        "notifications": {
+                            # Valid origin
+                            "https://example.com,*": {
+                                "setting": 1,
+                                "last_modified": "13300000000000000",
+                            },
+                            # Malformed IPv6 — triggers ValueError in urlparse
+                            "https://[malformed::ipv6:,*": {
+                                "setting": 1,
+                                "last_modified": "13300000000000000",
+                            },
+                            # Another valid origin to ensure parsing continues
+                            "https://good.com,*": {
+                                "setting": 2,
+                            },
+                        }
+                    }
+                }
+            }
+        }
+        prefs_file = tmp_path / "Preferences"
+        prefs_file.write_text(json.dumps(prefs))
+
+        mock_conn = MagicMock()
+        file_entry = {
+            "browser": "chrome",
+            "profile": "Default",
+            "logical_path": "Users/test/Chrome/Default/Preferences",
+            "partition_index": 0,
+        }
+
+        with patch(
+            "extractors.browser.chromium.permissions.extractor.insert_permissions",
+            return_value=2,
+        ):
+            count, url_list = extractor._parse_preferences_file(
+                prefs_file,
+                file_entry,
+                run_id="test-run",
+                evidence_id="ev-1",
+                evidence_conn=mock_conn,
+                callbacks=mock_callbacks,
+            )
+
+        # Should not raise — malformed origin skipped, valid ones still parsed
+        assert count >= 0
+        # url_list should contain only entries from valid origins
+        urls = [u["url"] for u in url_list]
+        assert "https://[malformed::ipv6:" not in urls
+        # At least one valid URL should be collected
+        valid_urls = [u for u in urls if "example.com" in u or "good.com" in u]
+        assert len(valid_urls) >= 1
+
+
 class TestGetOutputDir:
     """Test get_output_dir method."""
 

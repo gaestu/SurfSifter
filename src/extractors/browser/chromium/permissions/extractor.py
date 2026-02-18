@@ -770,7 +770,10 @@ class ChromiumPermissionsExtractor(BaseExtractor):
                     skipped_types.add(perm_type)
                     # Still collect URL from skipped entries (engagement, etc.)
                     if origin_url and origin_url.startswith(("http://", "https://")):
-                        parsed = urlparse(origin_url)
+                        try:
+                            parsed = urlparse(origin_url)
+                        except ValueError:
+                            continue
                         url_list.append({
                             "url": origin_url,
                             "domain": parsed.netloc or None,
@@ -822,17 +825,21 @@ class ChromiumPermissionsExtractor(BaseExtractor):
 
                 # Collect origin URL for cross-posting (origin_url already parsed above)
                 if origin_url and origin_url.startswith(("http://", "https://")):
-                    parsed = urlparse(origin_url)
-                    url_list.append({
-                        "url": origin_url,
-                        "domain": parsed.netloc or None,
-                        "scheme": parsed.scheme or None,
-                        "discovered_by": discovered_by,
-                        "run_id": run_id,
-                        "source_path": file_entry["logical_path"],
-                        "context": f"permission:{browser}:{profile}:{normalized_type}",
-                        "first_seen_utc": granted_at_utc,
-                    })
+                    try:
+                        parsed = urlparse(origin_url)
+                    except ValueError:
+                        pass
+                    else:
+                        url_list.append({
+                            "url": origin_url,
+                            "domain": parsed.netloc or None,
+                            "scheme": parsed.scheme or None,
+                            "discovered_by": discovered_by,
+                            "run_id": run_id,
+                            "source_path": file_entry["logical_path"],
+                            "context": f"permission:{browser}:{profile}:{normalized_type}",
+                            "first_seen_utc": granted_at_utc,
+                        })
 
         if skipped_non_permission_entries:
             callbacks.on_log(
