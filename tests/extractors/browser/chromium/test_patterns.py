@@ -22,6 +22,7 @@ from extractors.browser.chromium._patterns import (
     get_artifact_patterns,
     get_stable_browsers,
     is_flat_profile_browser,
+    get_patterns_for_root,
 )
 
 
@@ -325,3 +326,20 @@ class TestHelperFunctions:
         patterns1 = get_patterns("chrome", "history")
         patterns2 = get_artifact_patterns("chrome", "history")
         assert patterns1 == patterns2
+
+    def test_get_patterns_for_root_profiled(self):
+        """Dynamic root pattern generation includes profile variants."""
+        root = "ProgramData/SomeApp/User Data"
+        patterns = get_patterns_for_root(root, "cookies")
+        assert any(p.endswith("Default/Cookies") for p in patterns)
+        assert any(p.endswith("Profile */Network/Cookies") for p in patterns)
+
+    def test_get_patterns_for_root_flat(self):
+        """Flat dynamic root generation skips profile directory variants."""
+        root = "ProgramData/SomeApp/ProfileRoot"
+        patterns = get_patterns_for_root(root, "history", flat_profile=True)
+        assert patterns == [f"{root}/History"]
+
+    def test_transport_security_artifact_has_network_variant(self):
+        """TransportSecurity pattern includes the Network/ prefixed location."""
+        assert "Network/TransportSecurity" in CHROMIUM_ARTIFACTS["transport_security"]

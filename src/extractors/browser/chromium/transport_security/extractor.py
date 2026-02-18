@@ -45,10 +45,15 @@ from ...._shared.file_list_discovery import (
     check_file_list_available,
     discover_from_file_list,
     get_ewf_paths_from_evidence_fs,
+    glob_to_sql_like,
     open_partition_for_extraction,
 )
 from .._parsers import detect_browser_from_path, extract_profile_from_path
 from .._patterns import CHROMIUM_BROWSERS, get_artifact_patterns
+from .._embedded_discovery import (
+    discover_artifacts_with_embedded_roots,
+    get_embedded_root_paths,
+)
 from core.database import (
     delete_hsts_by_run,
     insert_browser_inventory,
@@ -550,26 +555,22 @@ class ChromiumTransportSecurityExtractor(BaseExtractor):
         # Build filename pattern for TransportSecurity
         filename_patterns = ["TransportSecurity"]
 
-        # Build path patterns for all browsers
-        path_patterns = []
+        path_patterns = set()
         for browser_key in browsers:
             if browser_key not in CHROMIUM_BROWSERS:
                 continue
-            browser_info = CHROMIUM_BROWSERS[browser_key]
-            for root in browser_info["profile_roots"]:
-                # Convert glob pattern to SQL LIKE pattern
-                pattern = root.replace("*", "%")
-                path_patterns.append(f"%{pattern}%")
+            for pattern in get_artifact_patterns(browser_key, "transport_security"):
+                path_patterns.add(glob_to_sql_like(pattern))
 
         if not path_patterns:
             return []
 
-        # Query file_list
-        result: FileListDiscoveryResult = discover_from_file_list(
-            evidence_conn=evidence_conn,
-            evidence_id=evidence_id,
+        result, embedded_roots = discover_artifacts_with_embedded_roots(
+            evidence_conn,
+            evidence_id,
+            artifact="transport_security",
             filename_patterns=filename_patterns,
-            path_patterns=path_patterns,
+            path_patterns=sorted(path_patterns),
         )
 
         callbacks.on_log(
@@ -582,18 +583,21 @@ class ChromiumTransportSecurityExtractor(BaseExtractor):
         for partition_idx, matches in result.matches_by_partition.items():
             for match in matches:
                 # Detect browser from path
-                browser = detect_browser_from_path(match.file_path)
+                embedded_paths = get_embedded_root_paths(embedded_roots, partition_idx)
+                browser = detect_browser_from_path(match.file_path, embedded_roots=embedded_paths)
                 if browser is None:
-                    browser = self._detect_browser_fallback(match.file_path)
+                    browser = "chromium"
+                if browser not in browsers and browser != "chromium_embedded":
+                    continue
 
                 profile = extract_profile_from_path(match.file_path) or "Default"
                 user = self._extract_user_from_path(match.file_path)
-                display_name = CHROMIUM_BROWSERS.get(browser, {}).get("display_name", browser)
+                display_name = CHROMIUM_BROWSERS.get(browser, {}).get("display_name", "Embedded Chromium")
 
                 ts_files.append(
                     {
                         "logical_path": match.file_path,
-                        "browser": browser or "unknown",
+                        "browser": browser,
                         "profile": profile,
                         "user": user,
                         "file_type": "chromium",
@@ -611,36 +615,6 @@ class ChromiumTransportSecurityExtractor(BaseExtractor):
                 )
 
         return ts_files
-
-    def _detect_browser_fallback(self, path: str) -> str:
-        """
-        Fallback browser detection using path string matching.
-
-        Used when detect_browser_from_path returns None.
-        """
-        path_lower = path.lower()
-
-        browser_markers = [
-            ("google/chrome", "chrome"),
-            ("google-chrome", "chrome"),
-            ("microsoft/edge", "edge"),
-            ("microsoft-edge", "edge"),
-            ("bravesoftware/brave-browser", "brave"),
-            ("brave-browser", "brave"),
-            ("opera software/opera gx", "opera_gx"),
-            ("opera gx", "opera_gx"),
-            ("opera software/opera", "opera"),
-            ("opera stable", "opera"),
-            ("com.operasoftware.opera", "opera"),
-            (".config/opera", "opera"),
-            ("chromium", "chromium"),
-        ]
-
-        for marker, browser in browser_markers:
-            if marker in path_lower:
-                return browser
-
-        return "unknown"
 
     def _extract_user_from_path(self, path: str) -> Optional[str]:
         """

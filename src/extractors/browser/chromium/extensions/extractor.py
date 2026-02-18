@@ -48,7 +48,19 @@ from PySide6.QtWidgets import QWidget, QLabel
 
 from ....base import BaseExtractor, ExtractorMetadata
 from ....callbacks import ExtractorCallbacks
+from ...._shared.file_list_discovery import (
+    check_file_list_available,
+    glob_to_sql_like,
+    open_partition_for_extraction,
+    get_ewf_paths_from_evidence_fs,
+)
 from .._patterns import CHROMIUM_BROWSERS
+from .._patterns import get_artifact_patterns
+from .._embedded_discovery import (
+    discover_artifacts_with_embedded_roots,
+    discover_embedded_roots,
+    get_embedded_root_paths,
+)
 from ....widgets import BrowserConfigWidget
 from core.logging import get_logger
 from core.statistics_collector import StatisticsCollector
@@ -205,26 +217,61 @@ class ChromiumExtensionsExtractor(BaseExtractor):
         }
 
         browsers_to_search = config.get("browsers") or config.get("selected_browsers", self.SUPPORTED_BROWSERS)
+        scan_all_partitions = config.get("scan_all_partitions", True)
+        evidence_conn = config.get("evidence_conn")
+        ewf_paths = get_ewf_paths_from_evidence_fs(evidence_fs) if scan_all_partitions else None
 
-        # Phase 1: Parse Preferences files for runtime state
-        callbacks.on_step("Parsing Preferences files for extension state")
-        preferences_data = parse_all_preferences(
-            evidence_fs,
-            browsers_to_search,
-            output_dir,
-            callbacks,
-            warning_collector=warning_collector,
-        )
+        partitions: List[Optional[int]] = [None]
+        embedded_roots_all = []
+        if scan_all_partitions and evidence_conn is not None:
+            partitions = self._discover_relevant_partitions(
+                evidence_conn, evidence_id, browsers_to_search
+            )
+            if not partitions:
+                partitions = [None]
+            embedded_roots_all = discover_embedded_roots(evidence_conn, evidence_id)
+
+        preferences_data = {"extensions": {}, "files_parsed": []}
+        extensions: List[Dict[str, Any]] = []
+
+        for partition_index in partitions:
+            with open_partition_for_extraction(
+                ewf_paths if ewf_paths else evidence_fs, partition_index
+            ) as partition_fs:
+                if partition_fs is None:
+                    continue
+
+                partition_embedded_roots = (
+                    get_embedded_root_paths(embedded_roots_all, partition_index)
+                    if embedded_roots_all
+                    else None
+                )
+
+                callbacks.on_step("Parsing Preferences files for extension state")
+                pref_result = parse_all_preferences(
+                    partition_fs,
+                    browsers_to_search,
+                    output_dir,
+                    callbacks,
+                    embedded_roots=partition_embedded_roots,
+                    warning_collector=warning_collector,
+                )
+                preferences_data["extensions"].update(pref_result.get("extensions", {}))
+                preferences_data["files_parsed"].extend(pref_result.get("files_parsed", []))
+
+                callbacks.on_step("Scanning for browser extension manifests")
+                partition_extensions = discover_extensions(
+                    partition_fs,
+                    browsers_to_search,
+                    callbacks,
+                    embedded_roots=partition_embedded_roots,
+                    warning_collector=warning_collector,
+                )
+                for ext in partition_extensions:
+                    ext["partition_index"] = partition_index
+                extensions.extend(partition_extensions)
+
         manifest_data["preferences_files"] = list(preferences_data.get("files_parsed", []))
-
-        # Phase 2: Discover extensions from manifest.json files
-        callbacks.on_step("Scanning for browser extension manifests")
-        extensions = discover_extensions(
-            evidence_fs,
-            browsers_to_search,
-            callbacks,
-            warning_collector=warning_collector,
-        )
 
         # Phase 3: Merge Preferences data with manifest data
         callbacks.on_step("Merging extension data")
@@ -246,15 +293,22 @@ class ChromiumExtensionsExtractor(BaseExtractor):
                     callbacks.on_progress(i + 1, len(extensions), f"Processing {ext_info['browser']} extension")
 
                     # Copy manifest and calculate hashes
-                    ext_info = extract_extension_manifest(evidence_fs, ext_info, output_dir)
+                    ext_partition_index = ext_info.get("partition_index") if scan_all_partitions else None
+                    with open_partition_for_extraction(
+                        ewf_paths if ewf_paths else evidence_fs, ext_partition_index
+                    ) as ext_fs:
+                        if ext_fs is None:
+                            raise RuntimeError(f"Cannot open partition {ext_partition_index}")
 
-                    # Extract script files
-                    ext_output_dir = ext_info.pop("_output_dir", None)
-                    if ext_output_dir:
-                        extracted_scripts = extract_extension_scripts(
-                            evidence_fs, ext_info, ext_output_dir, callbacks
-                        )
-                        ext_info["extracted_scripts"] = extracted_scripts
+                        ext_info = extract_extension_manifest(ext_fs, ext_info, output_dir)
+
+                        # Extract script files
+                        ext_output_dir = ext_info.pop("_output_dir", None)
+                        if ext_output_dir:
+                            extracted_scripts = extract_extension_scripts(
+                                ext_fs, ext_info, ext_output_dir, callbacks
+                            )
+                            ext_info["extracted_scripts"] = extracted_scripts
 
                     manifest_data["extensions"].append(ext_info)
                     if ext_info.get("file_path"):
@@ -282,7 +336,6 @@ class ChromiumExtensionsExtractor(BaseExtractor):
                     manifest_data["status"] = "partial"
 
         # Flush warnings to database
-        evidence_conn = config.get("evidence_conn")
         if evidence_conn:
             try:
                 warning_count = warning_collector.flush_to_database(evidence_conn)
@@ -559,6 +612,43 @@ class ChromiumExtensionsExtractor(BaseExtractor):
     # =========================================================================
     # Helper Methods
     # =========================================================================
+
+    def _discover_relevant_partitions(
+        self,
+        evidence_conn,
+        evidence_id: int,
+        browsers: List[str],
+    ) -> List[Optional[int]]:
+        """Find partitions containing extension manifests or Preferences files."""
+        available, _ = check_file_list_available(evidence_conn, evidence_id)
+        if not available:
+            return [None]
+
+        partitions: set[Optional[int]] = set()
+        for artifact, filenames in (
+            ("preferences", ["Preferences"]),
+            ("extensions", ["manifest.json"]),
+        ):
+            path_patterns = set()
+            for browser in browsers:
+                if browser not in CHROMIUM_BROWSERS:
+                    continue
+                try:
+                    for pattern in get_artifact_patterns(browser, artifact):
+                        path_patterns.add(glob_to_sql_like(pattern))
+                except ValueError:
+                    continue
+
+            result, _ = discover_artifacts_with_embedded_roots(
+                evidence_conn,
+                evidence_id,
+                artifact=artifact,
+                filename_patterns=filenames,
+                path_patterns=sorted(path_patterns) if path_patterns else None,
+            )
+            partitions.update(result.matches_by_partition.keys())
+
+        return sorted(partitions) if partitions else [None]
 
     def _generate_run_id(self) -> str:
         """Generate unique run ID."""

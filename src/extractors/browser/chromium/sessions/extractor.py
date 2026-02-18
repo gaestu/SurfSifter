@@ -63,6 +63,7 @@ from ...._shared.file_list_discovery import (
     open_partition_for_extraction,
     get_ewf_paths_from_evidence_fs,
     check_file_list_available,
+    glob_to_sql_like,
 )
 from ...._shared.extraction_warnings import (
     ExtractionWarningCollector,
@@ -75,6 +76,10 @@ from ...._shared.extraction_warnings import (
 )
 from .._patterns import CHROMIUM_BROWSERS, get_artifact_patterns, get_browser_display_name
 from .._parsers import detect_browser_from_path, extract_profile_from_path
+from .._embedded_discovery import (
+    discover_artifacts_with_embedded_roots,
+    get_embedded_root_paths,
+)
 from core.logging import get_logger
 from core.statistics_collector import StatisticsCollector
 from core.database import (
@@ -586,7 +591,7 @@ class ChromiumSessionsExtractor(BaseExtractor):
             for pattern in patterns:
                 try:
                     for path_str in evidence_fs.iter_paths(pattern):
-                        profile = self._extract_profile_from_path(path_str)
+                        profile = extract_profile_from_path(path_str) or "Default"
                         file_type = self._classify_session_file(path_str)
 
                         session_files.append({
@@ -646,38 +651,17 @@ class ChromiumSessionsExtractor(BaseExtractor):
 
         callbacks.on_log(f"Using file_list discovery ({count:,} files indexed)", "info")
 
-        # Build path patterns for file_list query
-        # Session files can be named: Current Session, Last Session, Session_*, Tabs_*
-        path_patterns = []
+        path_patterns = set()
         for browser in browsers:
             if browser not in CHROMIUM_BROWSERS:
                 continue
-            # Convert browser paths to SQL-friendly patterns
-            if "chrome" in browser.lower():
-                path_patterns.append("%Google%Chrome%User Data%")
-                path_patterns.append("%google-chrome%")  # Linux
-            elif "edge" in browser.lower():
-                path_patterns.append("%Microsoft%Edge%User Data%")
-                path_patterns.append("%microsoft-edge%")  # Linux
-            elif "brave" in browser.lower():
-                path_patterns.append("%BraveSoftware%Brave-Browser%User Data%")
-                path_patterns.append("%Brave-Browser%")  # Linux
-            elif "opera" in browser.lower():
-                path_patterns.append("%Opera%")
-            elif "vivaldi" in browser.lower():
-                path_patterns.append("%Vivaldi%User Data%")
-            elif "chromium" in browser.lower():
-                path_patterns.append("%Chromium%User Data%")
-                path_patterns.append("%chromium%")  # Linux
+            for pattern in get_artifact_patterns(browser, "sessions"):
+                path_patterns.add(glob_to_sql_like(pattern))
 
-        # Remove duplicates
-        path_patterns = list(set(path_patterns))
-
-        # Query file_list for session files
-        # Session files: Current Session, Last Session, Current Tabs, Last Tabs, Session_*, Tabs_*
-        result = discover_from_file_list(
+        result, embedded_roots = discover_artifacts_with_embedded_roots(
             evidence_conn,
             evidence_id,
+            artifact="sessions",
             filename_patterns=[
                 "Current Session",
                 "Last Session",
@@ -686,7 +670,7 @@ class ChromiumSessionsExtractor(BaseExtractor):
                 "Session_*",
                 "Tabs_*",
             ],
-            path_patterns=path_patterns if path_patterns else None,
+            path_patterns=sorted(path_patterns) if path_patterns else None,
         )
 
         if result.is_empty:
@@ -711,24 +695,27 @@ class ChromiumSessionsExtractor(BaseExtractor):
             files_list = []
             for match in matches:
                 # Detect browser from path
-                browser = detect_browser_from_path(match.file_path)
-                if browser and browser not in browsers:
+                embedded_paths = get_embedded_root_paths(embedded_roots, partition_index)
+                browser = detect_browser_from_path(match.file_path, embedded_roots=embedded_paths)
+                if browser and browser not in browsers and browser != "chromium_embedded":
                     continue  # Skip if browser not in selection
 
-                # Use shared profile extraction if available, fallback to local
-                profile = extract_profile_from_path(match.file_path)
-                if not profile:
-                    profile = self._extract_profile_from_path(match.file_path)
+                profile = extract_profile_from_path(match.file_path) or "Default"
+                display_name = (
+                    get_browser_display_name(browser)
+                    if browser in CHROMIUM_BROWSERS
+                    else "Embedded Chromium"
+                )
 
                 file_type = self._classify_session_file(match.file_path)
 
                 files_list.append({
                     "logical_path": match.file_path,
                     "browser": browser or "chromium",
-                    "profile": profile or "Default",
+                    "profile": profile,
                     "artifact_type": "sessions",
                     "file_type": file_type,
-                    "display_name": get_browser_display_name(browser) if browser else "Chromium",
+                    "display_name": display_name,
                     "partition_index": partition_index,
                     "inode": match.inode,
                     "size_bytes": match.size_bytes,
@@ -773,24 +760,6 @@ class ChromiumSessionsExtractor(BaseExtractor):
             return "tabs_timestamped"
         else:
             return "unknown"
-
-    def _extract_profile_from_path(self, path: str) -> str:
-        """Extract browser profile name from file path."""
-        parts = path.replace("\\", "/").split("/")
-
-        try:
-            idx = parts.index("User Data")
-            return parts[idx + 1] if idx + 1 < len(parts) else "Default"
-        except (ValueError, IndexError):
-            pass
-
-        for part in parts:
-            if part.startswith("Profile "):
-                return part
-            if part.lower() == "default":
-                return "Default"
-
-        return "Default"
 
     def _extract_file(
         self,

@@ -15,76 +15,17 @@ from pathlib import Path
 from typing import Dict, Any, List, Optional, Set, TYPE_CHECKING
 
 from .._patterns import CHROMIUM_BROWSERS, get_artifact_patterns, get_patterns
+from .._parsers import detect_browser_from_path, extract_profile_from_path
+from .._embedded_discovery import (
+    discover_artifacts_with_embedded_roots,
+    get_embedded_root_paths,
+)
+from extractors._shared.file_list_discovery import glob_to_sql_like
 
 if TYPE_CHECKING:
     from extractors.callbacks import ExtractorCallbacks
 
 LOGGER = logging.getLogger(__name__)
-
-
-def extract_profile_from_path(path: str) -> str:
-    """
-    Extract browser profile name from file path.
-
-    Handles both standard Chrome/Edge ("User Data/Default/") and
-    Opera flat profiles.
-    """
-    parts = path.replace("\\", "/").split("/")
-
-    try:
-        idx = parts.index("User Data")
-        return parts[idx + 1] if idx + 1 < len(parts) else "Default"
-    except (ValueError, IndexError):
-        pass
-
-    for part in parts:
-        if part.startswith("Profile "):
-            return part
-        if part.lower() == "default":
-            return "Default"
-
-    return "Default"
-
-
-def detect_browser_from_path(path: str) -> Optional[str]:
-    """Detect browser type from file path."""
-    path_lower = path.lower()
-
-    # Check for specific browser paths
-    if "google" in path_lower and "chrome" in path_lower:
-        if "canary" in path_lower or "sxs" in path_lower:
-            return "chrome_canary"
-        if "beta" in path_lower:
-            return "chrome_beta"
-        if "dev" in path_lower or "unstable" in path_lower:
-            return "chrome_dev"
-        return "chrome"
-
-    if "microsoft" in path_lower and "edge" in path_lower:
-        if "canary" in path_lower or "sxs" in path_lower:
-            return "edge_canary"
-        if "beta" in path_lower:
-            return "edge_beta"
-        if "dev" in path_lower:
-            return "edge_dev"
-        return "edge"
-
-    if "bravesoftware" in path_lower or "brave-browser" in path_lower:
-        if "nightly" in path_lower:
-            return "brave_nightly"
-        if "beta" in path_lower:
-            return "brave_beta"
-        return "brave"
-
-    if "opera" in path_lower:
-        if "opera gx" in path_lower or "operagx" in path_lower:
-            return "opera_gx"
-        return "opera"
-
-    if "chromium" in path_lower:
-        return "chromium"
-
-    return None
 
 
 def discover_storage_multi_partition(
@@ -112,11 +53,6 @@ def discover_storage_multi_partition(
     Returns:
         Dict mapping partition_index -> list of storage location dicts
     """
-    from extractors._shared.file_list_discovery import (
-        discover_from_file_list,
-        FileListDiscoveryResult,
-    )
-
     files_by_partition: Dict[int, List[Dict]] = {}
 
     # Storage types to search for
@@ -137,9 +73,10 @@ def discover_storage_multi_partition(
 
         # Query file_list for directories matching storage patterns
         # We look for files INSIDE the storage directories (e.g., MANIFEST, .ldb files)
-        result = discover_from_file_list(
+        result, embedded_roots = discover_artifacts_with_embedded_roots(
             evidence_conn,
             evidence_id,
+            artifact=storage_type,
             filename_patterns=["MANIFEST-*", "*.ldb", "*.log", "CURRENT", "LOCK"],
             path_patterns=combined_patterns if combined_patterns else None,
         )
@@ -161,12 +98,17 @@ def discover_storage_multi_partition(
                 seen_dirs.add(dir_path)
 
                 # Detect browser from path
-                browser = detect_browser_from_path(dir_path)
-                if browser and browser not in browsers:
+                embedded_paths = get_embedded_root_paths(embedded_roots, partition_idx)
+                browser = detect_browser_from_path(dir_path, embedded_roots=embedded_paths)
+                if browser and browser not in browsers and browser != "chromium_embedded":
                     continue  # Skip browsers not in selection
 
-                profile = extract_profile_from_path(dir_path)
-                display_name = CHROMIUM_BROWSERS.get(browser, {}).get("display_name", browser) if browser else "Chromium"
+                profile = extract_profile_from_path(dir_path) or "Default"
+                display_name = (
+                    CHROMIUM_BROWSERS.get(browser, {}).get("display_name", browser)
+                    if browser in CHROMIUM_BROWSERS
+                    else "Embedded Chromium"
+                )
 
                 loc = {
                     "logical_path": dir_path,
@@ -233,18 +175,13 @@ def _build_storage_path_patterns(browsers: List[str], storage_type: str) -> List
             # Use the canonical patterns from _patterns.py
             artifact_patterns = get_patterns(browser, storage_type)
             for pattern in artifact_patterns:
-                # Convert glob pattern to SQL LIKE pattern:
-                # - Replace * with %
-                # - Wrap with % for partial matching
-                sql_pattern = pattern.replace("*", "%")
-                # Ensure we match subdirectories too
-                patterns.add(f"%{sql_pattern}%")
+                patterns.add(glob_to_sql_like(pattern))
         except ValueError:
             # Artifact type not defined for this browser
             LOGGER.debug("No %s patterns defined for %s", storage_type, browser)
             continue
 
-    return list(patterns) if patterns else ["%"]
+    return sorted(patterns)
 
 
 def _discover_storage_filesystem(
@@ -275,7 +212,7 @@ def _discover_storage_filesystem(
                         try:
                             stat_info = evidence_fs.stat(path_str)
                             if stat_info.is_dir:
-                                profile = extract_profile_from_path(path_str)
+                                profile = extract_profile_from_path(path_str) or "Default"
                                 locations.append({
                                     "logical_path": path_str,
                                     "browser": browser_key,
@@ -298,7 +235,7 @@ def _discover_storage_filesystem(
                         try:
                             stat_info = evidence_fs.stat(path_str)
                             if stat_info.is_dir:
-                                profile = extract_profile_from_path(path_str)
+                                profile = extract_profile_from_path(path_str) or "Default"
                                 locations.append({
                                     "logical_path": path_str,
                                     "browser": browser_key,
@@ -321,7 +258,7 @@ def _discover_storage_filesystem(
                         try:
                             stat_info = evidence_fs.stat(path_str)
                             if stat_info.is_dir:
-                                profile = extract_profile_from_path(path_str)
+                                profile = extract_profile_from_path(path_str) or "Default"
                                 locations.append({
                                     "logical_path": path_str,
                                     "browser": browser_key,

@@ -44,17 +44,24 @@ from ....widgets import BrowserConfigWidget
 from ...._shared.sqlite_helpers import safe_sqlite_connect, SQLiteReadError
 from ...._shared.file_list_discovery import (
     discover_from_file_list,
+    check_file_list_available,
+    glob_to_sql_like,
     open_partition_for_extraction,
 )
 from .._patterns import (
     CHROMIUM_BROWSERS,
     get_patterns,
+    get_artifact_patterns,
     get_browser_display_name,
     get_all_browsers,
 )
 from .._parsers import (
     extract_profile_from_path,
     detect_browser_from_path,
+)
+from .._embedded_discovery import (
+    discover_artifacts_with_embedded_roots,
+    get_embedded_root_paths,
 )
 # Use local parsers for cookie-specific handling with schema warnings
 from ._parsers import parse_cookies, get_cookie_stats
@@ -214,15 +221,15 @@ class ChromiumCookiesExtractor(BaseExtractor):
 
         # Determine multi-partition mode
         scan_all_partitions = config.get("scan_all_partitions", True)
-        evidence_db_path = config.get("evidence_db_path")
+        evidence_conn = config.get("evidence_conn")
 
         # Scan for cookie files (multi-partition aware)
         callbacks.on_step("Scanning for Chromium cookie databases")
 
-        if scan_all_partitions and evidence_db_path:
+        if scan_all_partitions and evidence_conn is not None:
             # Use file_list discovery for multi-partition support
             files_by_partition = self._discover_files_multi_partition(
-                evidence_db_path, evidence_id, browsers, callbacks
+                evidence_conn, evidence_id, browsers, callbacks
             )
         else:
             # Single partition fallback
@@ -477,7 +484,7 @@ class ChromiumCookiesExtractor(BaseExtractor):
 
     def _discover_files_multi_partition(
         self,
-        evidence_db_path: str,
+        evidence_conn,
         evidence_id: int,
         browsers: List[str],
         callbacks: ExtractorCallbacks
@@ -489,82 +496,53 @@ class ChromiumCookiesExtractor(BaseExtractor):
             Dict mapping partition_index -> list of (source_path, browser) tuples.
             partition_index=None means use default evidence_fs.
         """
-        # Collect all patterns and map them to browsers
-        all_patterns = []
-        browser_for_pattern: Dict[str, str] = {}
+        available, count = check_file_list_available(evidence_conn, evidence_id)
+        if not available:
+            callbacks.on_log("file_list not available, using single-partition discovery", "warning")
+            return {}
+
+        path_patterns = set()
 
         for browser in browsers:
             if browser not in CHROMIUM_BROWSERS:
                 continue
-            patterns = get_patterns(browser, "cookies")
+            patterns = get_artifact_patterns(browser, "cookies")
             for pattern in patterns:
-                all_patterns.append(pattern)
-                browser_for_pattern[pattern] = browser
+                path_patterns.add(glob_to_sql_like(pattern))
 
-        if not all_patterns:
+        if not path_patterns:
             return {}
 
-        # Query file_list
-        result = discover_from_file_list(
-            evidence_db_path=evidence_db_path,
+        callbacks.on_log(f"Using file_list discovery ({count:,} files indexed)", "info")
+
+        result, embedded_roots = discover_artifacts_with_embedded_roots(
+            evidence_conn,
             evidence_id=evidence_id,
-            patterns=all_patterns,
-            partition_index=None,  # All partitions
+            artifact="cookies",
+            filename_patterns=["Cookies"],
+            path_patterns=sorted(path_patterns),
         )
 
-        callbacks.on_log(f"Multi-partition discovery: {result.total_matches} files across {len(result.by_partition)} partition(s)")
+        callbacks.on_log(
+            f"Multi-partition discovery: {result.total_matches} files across "
+            f"{len(result.partitions_with_matches)} partition(s)",
+            "info",
+        )
 
         # Group by partition with browser info
         files_by_partition: Dict[Optional[int], List[tuple]] = {}
 
-        for match in result.matches:
-            partition = match.partition_index
-            if partition not in files_by_partition:
-                files_by_partition[partition] = []
+        for partition, matches in result.matches_by_partition.items():
+            files_by_partition.setdefault(partition, [])
+            embedded_paths = get_embedded_root_paths(embedded_roots, partition)
 
-            # Improved browser detection using detect_browser_from_path
-            browser = detect_browser_from_path(match.path)
-            if browser is None:
-                # Fallback to pattern-based detection if path detection fails
-                browser = self._detect_browser_from_path_patterns(match.path)
-
-            files_by_partition[partition].append((match.path, browser))
+            for match in matches:
+                browser = detect_browser_from_path(match.file_path, embedded_roots=embedded_paths)
+                if browser and browser not in browsers and browser != "chromium_embedded":
+                    continue
+                files_by_partition[partition].append((match.file_path, browser or "chromium"))
 
         return files_by_partition
-
-    def _detect_browser_from_path_patterns(self, path: str) -> str:
-        """
-        Fallback browser detection using path string matching.
-
-        Args:
-            path: File path from evidence
-
-        Returns:
-            Browser key or "unknown"
-        """
-        path_lower = path.lower()
-
-        # Check for browser-specific path components (case-insensitive)
-        browser_markers = [
-            ("google/chrome", "chrome"),
-            ("google-chrome", "chrome"),
-            ("microsoft/edge", "edge"),
-            ("microsoft-edge", "edge"),
-            ("bravesoftware/brave-browser", "brave"),
-            ("brave-browser", "brave"),
-            ("opera software/opera", "opera"),
-            ("opera stable", "opera"),
-            ("opera gx", "opera_gx"),
-            ("com.operasoftware.opera", "opera"),
-            (".config/opera", "opera"),
-            ("chromium", "chromium"),
-        ]
-
-        for marker, browser in browser_markers:
-            if marker in path_lower:
-                return browser
-
-        return "unknown"
 
     def _extract_file(
         self,
@@ -606,7 +584,7 @@ class ChromiumCookiesExtractor(BaseExtractor):
         sha256_hash = hashlib.sha256(file_content).hexdigest()
 
         # Get profile from path
-        profile = extract_profile_from_path(source_path)
+        profile = extract_profile_from_path(source_path) or "Default"
 
         result = {
             "source_path": source_path,

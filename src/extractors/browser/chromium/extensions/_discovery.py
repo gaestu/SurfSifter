@@ -11,7 +11,13 @@ from __future__ import annotations
 import json
 from typing import Any, Dict, List, Optional, TYPE_CHECKING
 
-from .._patterns import CHROMIUM_BROWSERS, get_artifact_patterns, is_flat_profile_browser
+from .._patterns import (
+    CHROMIUM_BROWSERS,
+    get_artifact_patterns,
+    get_patterns_for_root,
+    is_flat_profile_browser,
+)
+from .._parsers import extract_profile_from_path as _extract_profile_from_path_shared
 from ._schemas import (
     EXTENSION_MANIFEST_PATTERN,
     PATH_SEPARATOR,
@@ -32,6 +38,7 @@ def discover_extensions(
     browsers: List[str],
     callbacks: "ExtractorCallbacks",
     *,
+    embedded_roots: Optional[List[str]] = None,
     warning_collector: Optional["ExtractionWarningCollector"] = None,
 ) -> List[Dict[str, Any]]:
     """
@@ -56,6 +63,18 @@ def discover_extensions(
                 evidence_fs,
                 browser_key,
                 callbacks,
+                embedded_roots=None,
+                warning_collector=warning_collector,
+            )
+        )
+
+    if embedded_roots:
+        extensions.extend(
+            discover_browser_extensions(
+                evidence_fs,
+                "chromium_embedded",
+                callbacks,
+                embedded_roots=embedded_roots,
                 warning_collector=warning_collector,
             )
         )
@@ -68,6 +87,7 @@ def discover_browser_extensions(
     browser: str,
     callbacks: "ExtractorCallbacks",
     *,
+    embedded_roots: Optional[List[str]] = None,
     warning_collector: Optional["ExtractionWarningCollector"] = None,
 ) -> List[Dict[str, Any]]:
     """
@@ -84,9 +104,19 @@ def discover_browser_extensions(
     """
     extensions = []
 
-    try:
-        patterns = get_artifact_patterns(browser, "extensions")
-    except ValueError:
+    patterns: List[str] = []
+    if browser in CHROMIUM_BROWSERS:
+        try:
+            patterns.extend(get_artifact_patterns(browser, "extensions"))
+        except ValueError:
+            pass
+
+    if embedded_roots:
+        for root in embedded_roots:
+            patterns.extend(get_patterns_for_root(root, "extensions", flat_profile=False))
+            patterns.extend(get_patterns_for_root(root, "extensions", flat_profile=True))
+
+    if not patterns:
         return extensions
 
     for pattern in patterns:
@@ -318,16 +348,7 @@ def extract_profile_from_path(path_str: str, browser: str = "") -> str:
     Returns:
         Profile name (e.g., "Default", "Profile 1")
     """
-    path_parts = path_str.split(PATH_SEPARATOR)
-
-    # Look for "User Data" directory followed by profile
-    for i, part in enumerate(path_parts):
-        if part == "User Data" and i + 1 < len(path_parts):
-            return path_parts[i + 1]
-
-    # For Opera-style flat profiles
-    for part in path_parts:
-        if "Opera" in part or "opera" in part:
-            return "Default"
-
+    profile = _extract_profile_from_path_shared(path_str)
+    if profile:
+        return profile
     return "Default"

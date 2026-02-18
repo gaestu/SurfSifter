@@ -47,11 +47,17 @@ from ....base import BaseExtractor, ExtractorMetadata
 from ....callbacks import ExtractorCallbacks
 from ....widgets import BrowserConfigWidget
 from ...._shared.file_list_discovery import (
-    discover_from_file_list,
+    check_file_list_available,
+    glob_to_sql_like,
     open_partition_for_extraction,
     get_ewf_paths_from_evidence_fs,
 )
 from .._patterns import CHROMIUM_BROWSERS, get_artifact_patterns
+from .._parsers import detect_browser_from_path, extract_profile_from_path
+from .._embedded_discovery import (
+    discover_artifacts_with_embedded_roots,
+    get_embedded_root_paths,
+)
 from core.logging import get_logger
 from core.statistics_collector import StatisticsCollector
 from core.database import (
@@ -217,8 +223,23 @@ class ChromiumAutofillExtractor(BaseExtractor):
         callbacks.on_step("Scanning for Chromium autofill databases")
 
         browsers_to_search = config.get("browsers") or config.get("selected_browsers", self.SUPPORTED_BROWSERS)
+        scan_all_partitions = config.get("scan_all_partitions", True)
+        evidence_conn = config.get("evidence_conn")
+        ewf_paths = None
 
-        autofill_files = self._discover_autofill_files(evidence_fs, browsers_to_search, callbacks)
+        if scan_all_partitions and evidence_conn is not None:
+            files_by_partition = self._discover_files_multi_partition(
+                evidence_conn, evidence_id, browsers_to_search, callbacks
+            )
+            ewf_paths = get_ewf_paths_from_evidence_fs(evidence_fs)
+        else:
+            files_by_partition = {
+                None: self._discover_autofill_files(evidence_fs, browsers_to_search, callbacks)
+            }
+
+        autofill_files: List[Dict] = []
+        for partition_files in files_by_partition.values():
+            autofill_files.extend(partition_files)
 
         # Report discovered files (always, even if 0)
         if stats:
@@ -230,25 +251,42 @@ class ChromiumAutofillExtractor(BaseExtractor):
             LOGGER.info("No Chromium autofill files found")
         else:
             callbacks.on_progress(0, len(autofill_files), "Copying autofill databases")
+            file_index = 0
+            for partition_index, partition_files in files_by_partition.items():
+                with open_partition_for_extraction(
+                    ewf_paths if ewf_paths else evidence_fs, partition_index
+                ) as partition_fs:
+                    if partition_fs is None:
+                        manifest_data["notes"].append(f"Failed to open partition {partition_index}")
+                        continue
 
-            for i, file_info in enumerate(autofill_files):
-                if callbacks.is_cancelled():
-                    manifest_data["status"] = "cancelled"
-                    manifest_data["notes"].append("Extraction cancelled by user")
-                    break
+                    for file_info in partition_files:
+                        if callbacks.is_cancelled():
+                            manifest_data["status"] = "cancelled"
+                            manifest_data["notes"].append("Extraction cancelled by user")
+                            break
 
-                try:
-                    callbacks.on_progress(i + 1, len(autofill_files), f"Copying {file_info['browser']} {file_info['file_type']}")
-
-                    extracted_file = self._extract_file(evidence_fs, file_info, output_dir, callbacks)
-                    manifest_data["files"].append(extracted_file)
-
-                except Exception as e:
-                    error_msg = f"Failed to extract {file_info['logical_path']}: {e}"
-                    LOGGER.error(error_msg, exc_info=True)
-                    manifest_data["notes"].append(error_msg)
-                    if stats:
-                        stats.report_failed(evidence_id, self.metadata.name, files=1)
+                        try:
+                            file_index += 1
+                            callbacks.on_progress(
+                                file_index,
+                                len(autofill_files),
+                                f"Copying {file_info['browser']} {file_info['file_type']}",
+                            )
+                            extracted_file = self._extract_file(
+                                partition_fs,
+                                file_info,
+                                output_dir,
+                                callbacks,
+                                partition_index=partition_index,
+                            )
+                            manifest_data["files"].append(extracted_file)
+                        except Exception as e:
+                            error_msg = f"Failed to extract {file_info['logical_path']}: {e}"
+                            LOGGER.error(error_msg, exc_info=True)
+                            manifest_data["notes"].append(error_msg)
+                            if stats:
+                                stats.report_failed(evidence_id, self.metadata.name, files=1)
 
         # Finish statistics (once, at the end)
         if stats:
@@ -483,7 +521,7 @@ class ChromiumAutofillExtractor(BaseExtractor):
                 try:
                     for path_str in evidence_fs.iter_paths(pattern):
                         file_type = self._classify_autofill_file(path_str)
-                        profile = self._extract_profile_from_path(path_str)
+                        profile = extract_profile_from_path(path_str) or "Default"
 
                         autofill_files.append({
                             "logical_path": path_str,
@@ -501,6 +539,64 @@ class ChromiumAutofillExtractor(BaseExtractor):
 
         return autofill_files
 
+    def _discover_files_multi_partition(
+        self,
+        evidence_conn,
+        evidence_id: int,
+        browsers: List[str],
+        callbacks: ExtractorCallbacks,
+    ) -> Dict[Optional[int], List[Dict]]:
+        """Discover Web Data/Login Data files across all partitions."""
+        available, count = check_file_list_available(evidence_conn, evidence_id)
+        if not available:
+            callbacks.on_log("file_list not available, using single-partition discovery", "warning")
+            return {}
+
+        path_patterns = set()
+        for browser in browsers:
+            if browser not in CHROMIUM_BROWSERS:
+                continue
+            for pattern in get_artifact_patterns(browser, "autofill"):
+                path_patterns.add(glob_to_sql_like(pattern))
+
+        if not path_patterns:
+            return {}
+
+        callbacks.on_log(f"Using file_list discovery ({count:,} files indexed)", "info")
+        result, embedded_roots = discover_artifacts_with_embedded_roots(
+            evidence_conn,
+            evidence_id,
+            artifact="autofill",
+            filename_patterns=["Web Data", "Login Data"],
+            path_patterns=sorted(path_patterns),
+        )
+
+        files_by_partition: Dict[Optional[int], List[Dict]] = {}
+        for partition_index, matches in result.matches_by_partition.items():
+            files_by_partition.setdefault(partition_index, [])
+            embedded_paths = get_embedded_root_paths(embedded_roots, partition_index)
+
+            for match in matches:
+                browser = detect_browser_from_path(match.file_path, embedded_roots=embedded_paths)
+                if browser and browser not in browsers and browser != "chromium_embedded":
+                    continue
+
+                files_by_partition[partition_index].append(
+                    {
+                        "logical_path": match.file_path,
+                        "browser": browser or "chromium",
+                        "profile": extract_profile_from_path(match.file_path) or "Default",
+                        "file_type": self._classify_autofill_file(match.file_path),
+                        "artifact_type": "autofill",
+                        "partition_index": partition_index,
+                        "inode": match.inode,
+                        "size_bytes": match.size_bytes,
+                        "display_name": CHROMIUM_BROWSERS.get(browser, {}).get("display_name", "Embedded Chromium"),
+                    }
+                )
+
+        return files_by_partition
+
     def _classify_autofill_file(self, path: str) -> str:
         """Classify autofill file type based on filename."""
         filename = path.split('/')[-1].lower()
@@ -512,27 +608,13 @@ class ChromiumAutofillExtractor(BaseExtractor):
         else:
             return "unknown"
 
-    def _extract_profile_from_path(self, path: str) -> str:
-        """Extract browser profile name from file path."""
-        parts = path.split('/')
-
-        try:
-            idx = parts.index("User Data")
-            return parts[idx + 1] if idx + 1 < len(parts) else "Default"
-        except (ValueError, IndexError):
-            # Opera uses different structure
-            if "Opera Stable" in path:
-                return "Opera Stable"
-            elif "Opera GX Stable" in path:
-                return "Opera GX Stable"
-            return "Default"
-
     def _extract_file(
         self,
         evidence_fs,
         file_info: Dict,
         output_dir: Path,
-        callbacks: ExtractorCallbacks
+        callbacks: ExtractorCallbacks,
+        partition_index: Optional[int] = None,
     ) -> Dict:
         """Copy file from evidence to workspace and collect metadata."""
         try:
@@ -542,7 +624,8 @@ class ChromiumAutofillExtractor(BaseExtractor):
             file_type = file_info["file_type"]
 
             safe_profile = profile.replace(' ', '_').replace('/', '_')
-            filename = f"{browser}_{safe_profile}_{file_type}"
+            partition_suffix = f"_p{partition_index}" if partition_index is not None else ""
+            filename = f"{browser}_{safe_profile}{partition_suffix}_{file_type}"
             dest_path = output_dir / filename
 
             callbacks.on_log(f"Copying {source_path} to {dest_path.name}", "info")
@@ -566,6 +649,7 @@ class ChromiumAutofillExtractor(BaseExtractor):
                 "file_type": file_type,
                 "logical_path": source_path,
                 "artifact_type": "autofill",
+                "partition_index": partition_index,
             }
 
         except Exception as e:
@@ -581,6 +665,7 @@ class ChromiumAutofillExtractor(BaseExtractor):
                 "profile": file_info.get("profile"),
                 "file_type": file_info.get("file_type"),
                 "logical_path": file_info.get("logical_path"),
+                "partition_index": partition_index,
                 "error_message": str(e),
             }
 

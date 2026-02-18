@@ -43,6 +43,7 @@ from ....callbacks import ExtractorCallbacks
 from .._patterns import (
     CHROMIUM_BROWSERS,
     get_patterns,
+    get_artifact_patterns,
     get_all_browsers,
     get_browser_display_name,
 )
@@ -55,6 +56,11 @@ from ...._shared.file_list_discovery import (
     discover_from_file_list,
     check_file_list_available,
     get_ewf_paths_from_evidence_fs,
+    glob_to_sql_like,
+)
+from .._embedded_discovery import (
+    discover_artifacts_with_embedded_roots,
+    get_embedded_root_paths,
 )
 from ...._shared.extraction_warnings import (
     ExtractionWarningCollector,
@@ -685,7 +691,7 @@ class MediaHistoryExtractor(BaseExtractor):
             for pattern in media_patterns:
                 try:
                     for path_str in evidence_fs.iter_paths(pattern):
-                        profile = self._extract_profile_from_path(path_str, browser_key)
+                        profile = extract_profile_from_path(path_str) or "Default"
 
                         media_files.append({
                             "logical_path": path_str,
@@ -744,36 +750,19 @@ class MediaHistoryExtractor(BaseExtractor):
 
         callbacks.on_log(f"Using file_list discovery ({count:,} files indexed)", "info")
 
-        # Build path patterns for file_list query
-        # We look for "Media History" files in paths containing browser-specific strings
-        path_patterns = []
+        path_patterns = set()
         for browser in browsers:
             if browser not in CHROMIUM_BROWSERS:
                 continue
-            # Convert browser paths to SQL-friendly patterns
-            if "chrome" in browser.lower():
-                path_patterns.append("%Google%Chrome%User Data%")
-                path_patterns.append("%chrome%")  # Linux
-            elif "edge" in browser.lower():
-                path_patterns.append("%Microsoft%Edge%User Data%")
-            elif "brave" in browser.lower():
-                path_patterns.append("%BraveSoftware%Brave-Browser%User Data%")
-            elif "opera" in browser.lower():
-                path_patterns.append("%Opera%")
-            elif "vivaldi" in browser.lower():
-                path_patterns.append("%Vivaldi%User Data%")
-            elif "chromium" in browser.lower():
-                path_patterns.append("%Chromium%User Data%")
+            for pattern in get_artifact_patterns(browser, "media_history"):
+                path_patterns.add(glob_to_sql_like(pattern))
 
-        # Remove duplicates
-        path_patterns = list(set(path_patterns))
-
-        # Query file_list
-        result = discover_from_file_list(
+        result, embedded_roots = discover_artifacts_with_embedded_roots(
             evidence_conn,
             evidence_id,
+            artifact="media_history",
             filename_patterns=["Media History"],
-            path_patterns=path_patterns if path_patterns else None,
+            path_patterns=sorted(path_patterns) if path_patterns else None,
         )
 
         if result.is_empty:
@@ -798,11 +787,17 @@ class MediaHistoryExtractor(BaseExtractor):
             files_list = []
             for match in matches:
                 # Detect browser from path
-                browser = detect_browser_from_path(match.file_path)
-                if browser and browser not in browsers:
+                embedded_paths = get_embedded_root_paths(embedded_roots, partition_index)
+                browser = detect_browser_from_path(match.file_path, embedded_roots=embedded_paths)
+                if browser and browser not in browsers and browser != "chromium_embedded":
                     continue  # Skip if browser not in selection
 
-                profile = extract_profile_from_path(match.file_path)
+                profile = extract_profile_from_path(match.file_path) or "Default"
+                display_name = (
+                    get_browser_display_name(browser)
+                    if browser in CHROMIUM_BROWSERS
+                    else "Embedded Chromium"
+                )
 
                 files_list.append({
                     "logical_path": match.file_path,
@@ -810,7 +805,7 @@ class MediaHistoryExtractor(BaseExtractor):
                     "profile": profile,
                     "artifact_type": "media_history",
                     "file_type": "media_history",
-                    "display_name": get_browser_display_name(browser) if browser else "Chromium",
+                    "display_name": display_name,
                     "partition_index": partition_index,
                     "inode": match.inode,
                     "size_bytes": match.size_bytes,
@@ -825,39 +820,6 @@ class MediaHistoryExtractor(BaseExtractor):
                 files_by_partition[partition_index] = files_list
 
         return files_by_partition
-
-    def _extract_profile_from_path(self, path: str, browser: str) -> str:
-        """Extract browser profile name from file path.
-
-        Handles both standard Chromium browsers (Default/Profile * structure)
-        and Opera's flat profile structure.
-        """
-        from .._patterns import is_flat_profile_browser
-
-        parts = path.split('/')
-
-        # Opera-style browsers have flat profile structure
-        if is_flat_profile_browser(browser):
-            # For Opera, the profile root IS the profile name
-            if "Opera Stable" in path:
-                return "Opera Stable"
-            elif "Opera GX Stable" in path:
-                return "Opera GX Stable"
-            return "Default"
-
-        # Standard Chromium browsers: look for "User Data" marker
-        try:
-            idx = parts.index("User Data")
-            return parts[idx + 1] if idx + 1 < len(parts) else "Default"
-        except (ValueError, IndexError):
-            pass
-
-        # Linux/macOS without "User Data" - look for Default/Profile pattern
-        for i, part in enumerate(parts):
-            if part == "Default" or part.startswith("Profile "):
-                return part
-
-        return "Default"
 
     def _extract_file(
         self,

@@ -48,6 +48,7 @@ import time
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
+from types import SimpleNamespace
 from typing import TYPE_CHECKING, Dict, Any, Optional, List, Tuple
 from urllib.parse import urlparse
 
@@ -58,12 +59,23 @@ from PySide6.QtWidgets import (
 
 from ....base import BaseExtractor, ExtractorMetadata
 from ....callbacks import ExtractorCallbacks
+from ...._shared.file_list_discovery import (
+    check_file_list_available,
+    glob_to_sql_like,
+    open_partition_for_extraction,
+)
 from .._patterns import (
     CHROMIUM_BROWSERS,
     get_patterns,
+    get_artifact_patterns,
     get_all_browsers,
     get_browser_display_name,
     get_stable_browsers,
+)
+from .._embedded_discovery import (
+    discover_artifacts_with_embedded_roots,
+    discover_embedded_roots,
+    get_embedded_root_paths,
 )
 from ....widgets import BrowserConfigWidget
 from ...._shared.extraction_warnings import (
@@ -523,7 +535,11 @@ class CacheSimpleExtractor(BaseExtractor):
         if incomplete:
             run_id = incomplete["run_id"]
             run_output = incomplete["run_dir"]
-            already_copied = {f["source_path"] for f in incomplete["files"]}
+            already_copied = {
+                (f.get("partition_index"), f.get("source_path"))
+                for f in incomplete["files"]
+                if f.get("source_path")
+            }
             manifest_files = incomplete["files"]
             extraction_stats = incomplete["stats"]
             hash_mode = incomplete.get("hash_mode", hash_mode)
@@ -550,15 +566,80 @@ class CacheSimpleExtractor(BaseExtractor):
         if collector:
             collector.start_run(evidence_id, evidence_label, self.metadata.name, run_id)
 
-        # Scan for cache directories using discovery module
+        # Scan for cache directories using partition-aware discovery.
         callbacks.on_step("Scanning for cache directories")
-        cache_dirs = discover_cache_directories(
-            evidence_fs, browsers, callbacks,
-            include_cache_storage=include_cache_storage,
-            include_disk_cache=include_disk_cache,
-        )
+        evidence_conn = merged_config.get("evidence_conn")
+        scan_all_partitions = merged_config.get("scan_all_partitions", True)
 
-        if not cache_dirs:
+        discovered_embedded_roots = []
+        if evidence_conn is not None:
+            try:
+                discovered_embedded_roots = discover_embedded_roots(evidence_conn, evidence_id)
+            except Exception as e:
+                LOGGER.debug("Embedded root discovery failed for cache extractor: %s", e)
+
+        partition_indices: List[Optional[int]] = [None]
+        if scan_all_partitions and evidence_conn is not None:
+            try:
+                partition_indices = self._discover_cache_partitions(
+                    evidence_conn=evidence_conn,
+                    evidence_id=evidence_id,
+                    browsers=browsers,
+                    include_disk_cache=include_disk_cache,
+                )
+            except Exception as e:
+                LOGGER.debug("Cache partition discovery failed, falling back to active partition: %s", e)
+                partition_indices = [None]
+
+        if any(idx is not None for idx in partition_indices) and not (hasattr(evidence_fs, "ewf_paths") and evidence_fs.ewf_paths):
+            partition_indices = [None]
+
+        discovered_by_partition: Dict[Optional[int], List[Dict[str, Any]]] = {}
+        for partition_index in partition_indices:
+            with open_partition_for_extraction(
+                evidence_fs.ewf_paths if partition_index is not None and hasattr(evidence_fs, "ewf_paths") else evidence_fs,
+                partition_index,
+            ) as partition_fs:
+                if partition_fs is None:
+                    continue
+
+                effective_partition = partition_index
+                if effective_partition is None:
+                    effective_partition = getattr(partition_fs, "partition_index", 0)
+
+                embedded_roots = get_embedded_root_paths(
+                    discovered_embedded_roots,
+                    partition_index=effective_partition,
+                )
+
+                dirs = discover_cache_directories(
+                    partition_fs,
+                    browsers,
+                    callbacks,
+                    include_cache_storage=include_cache_storage,
+                    include_disk_cache=include_disk_cache,
+                    embedded_roots=embedded_roots,
+                )
+
+                dedup_seen: set[tuple] = set()
+                normalized_dirs: List[Dict[str, Any]] = []
+                for item in dirs:
+                    item["partition_index"] = effective_partition
+                    dedup_key = (
+                        item.get("partition_index"),
+                        item.get("path"),
+                        item.get("browser"),
+                        item.get("cache_type"),
+                    )
+                    if dedup_key in dedup_seen:
+                        continue
+                    dedup_seen.add(dedup_key)
+                    normalized_dirs.append(item)
+
+                if normalized_dirs:
+                    discovered_by_partition[effective_partition] = normalized_dirs
+
+        if not discovered_by_partition:
             callbacks.on_log("No cache directories found")
             if collector:
                 collector.report_discovered(evidence_id, self.metadata.name, files=0)
@@ -572,22 +653,30 @@ class CacheSimpleExtractor(BaseExtractor):
             )
             return True
 
-        # Count total files
-        all_files = []
-        for cache_dir_info in cache_dirs:
-            for file_info in cache_dir_info["files"]:
-                if file_info["path"] not in already_copied:
-                    all_files.append((file_info, cache_dir_info))
+        # Build extraction work grouped by partition.
+        all_files_by_partition: Dict[Optional[int], List[Tuple[Dict, Dict]]] = {}
+        total_pending = 0
+        for partition_index, cache_dirs in discovered_by_partition.items():
+            partition_files: List[Tuple[Dict, Dict]] = []
+            for cache_dir_info in cache_dirs:
+                for file_info in cache_dir_info["files"]:
+                    key = (partition_index, file_info["path"])
+                    if key in already_copied or (None, file_info["path"]) in already_copied:
+                        continue
+                    partition_files.append((file_info, cache_dir_info))
+            if partition_files:
+                all_files_by_partition[partition_index] = partition_files
+                total_pending += len(partition_files)
 
-        extraction_stats["cache_files_discovered"] = len(all_files) + len(already_copied)
+        extraction_stats["cache_files_discovered"] = total_pending + len(already_copied)
         extraction_stats["cache_files_skipped"] = len(already_copied)
 
         if collector:
             collector.report_discovered(evidence_id, self.metadata.name, files=extraction_stats["cache_files_discovered"])
 
-        callbacks.on_log(f"Total files to extract: {len(all_files)} (skipping {len(already_copied)} already copied)")
+        callbacks.on_log(f"Total files to extract: {total_pending} (skipping {len(already_copied)} already copied)")
 
-        if not all_files:
+        if total_pending == 0:
             callbacks.on_log("All files already extracted")
             if collector:
                 collector.finish_run(evidence_id, self.metadata.name, status="success")
@@ -600,19 +689,53 @@ class CacheSimpleExtractor(BaseExtractor):
             )
             return True
 
-        # Choose extraction method
-        if self._can_use_concurrent_extraction(evidence_fs):
-            callbacks.on_log(f"Using concurrent extraction with {worker_count} workers")
-            self._run_concurrent_extraction(
-                evidence_fs, all_files, output_dir, run_id, evidence_id,
-                worker_count, hash_mode, manifest_files, extraction_stats, callbacks
-            )
-        else:
-            callbacks.on_log("Using sequential extraction (non-E01 source)")
-            self._run_sequential_extraction(
-                evidence_fs, all_files, run_output, run_id, evidence_id,
-                hash_mode, manifest_files, extraction_stats, callbacks
-            )
+        # Extract per partition.
+        for partition_index, partition_files in all_files_by_partition.items():
+            if not partition_files:
+                continue
+
+            if partition_index is not None and hasattr(evidence_fs, "ewf_paths") and evidence_fs.ewf_paths:
+                callbacks.on_log(
+                    f"Extracting partition {partition_index} with {worker_count} workers",
+                    "info",
+                )
+                partition_fs_context = SimpleNamespace(
+                    ewf_paths=evidence_fs.ewf_paths,
+                    partition_index=partition_index,
+                    source_path=getattr(evidence_fs, "source_path", None),
+                    fs_type=getattr(evidence_fs, "fs_type", "unknown"),
+                )
+                self._run_concurrent_extraction(
+                    partition_fs_context,
+                    partition_files,
+                    output_dir,
+                    run_id,
+                    evidence_id,
+                    worker_count,
+                    hash_mode,
+                    manifest_files,
+                    extraction_stats,
+                    callbacks,
+                )
+            else:
+                callbacks.on_log(
+                    f"Extracting partition {partition_index if partition_index is not None else 'current'} sequentially",
+                    "info",
+                )
+                with open_partition_for_extraction(evidence_fs, partition_index) as partition_fs:
+                    if partition_fs is None:
+                        continue
+                    self._run_sequential_extraction(
+                        partition_fs,
+                        partition_files,
+                        run_output,
+                        run_id,
+                        evidence_id,
+                        hash_mode,
+                        manifest_files,
+                        extraction_stats,
+                        callbacks,
+                    )
 
         # Determine final status
         status = "ok"
@@ -665,6 +788,40 @@ class CacheSimpleExtractor(BaseExtractor):
             collector.finish_run(evidence_id, self.metadata.name, status=final_status)
 
         return status != "error"
+
+    def _discover_cache_partitions(
+        self,
+        evidence_conn,
+        evidence_id: int,
+        browsers: List[str],
+        include_disk_cache: bool,
+    ) -> List[Optional[int]]:
+        """Discover partitions that likely contain Chromium cache artifacts."""
+        available, _ = check_file_list_available(evidence_conn, evidence_id)
+        if not available:
+            return [None]
+
+        path_patterns = set()
+        if include_disk_cache:
+            for browser in browsers:
+                if browser not in CHROMIUM_BROWSERS:
+                    continue
+                for pattern in get_artifact_patterns(browser, "cache"):
+                    path_patterns.add(glob_to_sql_like(pattern))
+
+        result, embedded_roots = discover_artifacts_with_embedded_roots(
+            evidence_conn,
+            evidence_id,
+            artifact="cache",
+            filename_patterns=["index", "the-real-index", "f_*", "data_*"],
+            path_patterns=sorted(path_patterns) if path_patterns else None,
+        )
+
+        partitions = set(result.matches_by_partition.keys())
+        partitions.update(root.partition_index for root in embedded_roots if root.partition_index is not None)
+        if not partitions:
+            return [None]
+        return sorted(partitions)
 
     # -------------------------------------------------------------------------
     # Resume Detection & Handling
@@ -907,6 +1064,7 @@ class CacheSimpleExtractor(BaseExtractor):
 
             browser = cache_dir_info["browser"]
             profile = cache_dir_info.get("profile", "Default")
+            partition_index = cache_dir_info.get("partition_index", getattr(evidence_fs, "partition_index", 0))
             source_path = file_info["path"]
             filename = file_info["filename"]
 
@@ -914,7 +1072,7 @@ class CacheSimpleExtractor(BaseExtractor):
             entry_hash = _get_entry_hash_from_filename(filename)
 
             try:
-                profile_dir = run_output / f"{browser}_{profile}"
+                profile_dir = run_output / f"p{partition_index}_{browser}_{profile}"
                 profile_dir.mkdir(parents=True, exist_ok=True)
 
                 dest_path = profile_dir / filename
@@ -931,7 +1089,7 @@ class CacheSimpleExtractor(BaseExtractor):
                     "source_path": source_path,
                     "logical_path": source_path,
                     "forensic_path": forensic_path,
-                    "partition_index": e01_context.get("partition_index", 0),
+                    "partition_index": partition_index,
                     "fs_type": e01_context.get("fs_type", "unknown"),
                     "extracted_path": str(dest_path.relative_to(run_output.parent)),
                     "size_bytes": size_bytes,

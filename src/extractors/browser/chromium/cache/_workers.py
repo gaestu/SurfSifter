@@ -186,7 +186,7 @@ def extraction_worker(
                 entry_hash = get_entry_hash_from_filename(filename)
 
                 # Create profile-specific subdirectory
-                profile_dir = output_dir / run_id / f"{browser}_{profile}"
+                profile_dir = output_dir / run_id / f"p{partition_index}_{browser}_{profile}"
                 profile_dir.mkdir(parents=True, exist_ok=True)
 
                 # Destination path

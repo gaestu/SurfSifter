@@ -35,9 +35,20 @@ from PySide6.QtWidgets import QWidget, QLabel
 
 from ....base import BaseExtractor, ExtractorMetadata
 from ....callbacks import ExtractorCallbacks
+from ...._shared.file_list_discovery import (
+    check_file_list_available,
+    glob_to_sql_like,
+    open_partition_for_extraction,
+    get_ewf_paths_from_evidence_fs,
+)
 from .._patterns import (
     CHROMIUM_BROWSERS,
     get_artifact_patterns,
+)
+from .._parsers import detect_browser_from_path, extract_profile_from_path
+from .._embedded_discovery import (
+    discover_artifacts_with_embedded_roots,
+    get_embedded_root_paths,
 )
 from ....widgets import BrowserConfigWidget
 from core.logging import get_logger
@@ -170,6 +181,9 @@ class ChromiumFaviconsExtractor(BaseExtractor):
         }
 
         browsers_to_search = config.get("browsers") or config.get("selected_browsers", self.SUPPORTED_BROWSERS)
+        scan_all_partitions = config.get("scan_all_partitions", True)
+        evidence_conn = config.get("evidence_conn")
+        ewf_paths = get_ewf_paths_from_evidence_fs(evidence_fs) if scan_all_partitions else None
 
         favicon_db_count = 0
         top_sites_db_count = 0
@@ -178,7 +192,14 @@ class ChromiumFaviconsExtractor(BaseExtractor):
 
         # Discover and copy favicon databases
         favicon_dbs = self._discover_and_copy_databases(
-            evidence_fs, output_dir, browsers_to_search, "favicons", callbacks
+            evidence_fs,
+            output_dir,
+            browsers_to_search,
+            "favicons",
+            callbacks,
+            evidence_conn=evidence_conn if scan_all_partitions else None,
+            evidence_id=evidence_id if scan_all_partitions else None,
+            ewf_paths=ewf_paths,
         )
         manifest_data["files"].extend(favicon_dbs)
         favicon_db_count = len(favicon_dbs)
@@ -187,7 +208,14 @@ class ChromiumFaviconsExtractor(BaseExtractor):
 
         # Discover and copy top sites databases
         top_sites_dbs = self._discover_and_copy_databases(
-            evidence_fs, output_dir, browsers_to_search, "top_sites", callbacks
+            evidence_fs,
+            output_dir,
+            browsers_to_search,
+            "top_sites",
+            callbacks,
+            evidence_conn=evidence_conn if scan_all_partitions else None,
+            evidence_id=evidence_id if scan_all_partitions else None,
+            ewf_paths=ewf_paths,
         )
         manifest_data["files"].extend(top_sites_dbs)
         top_sites_db_count = len(top_sites_dbs)
@@ -444,10 +472,77 @@ class ChromiumFaviconsExtractor(BaseExtractor):
         output_dir: Path,
         browsers: List[str],
         artifact_type: str,
-        callbacks: ExtractorCallbacks
+        callbacks: ExtractorCallbacks,
+        evidence_conn=None,
+        evidence_id: Optional[int] = None,
+        ewf_paths=None,
     ) -> List[Dict]:
         """Discover and copy databases for a given artifact type."""
         copied_files = []
+        copied_paths: set[str] = set()
+
+        filename_patterns = ["Favicons"] if artifact_type == "favicons" else ["Top Sites"]
+
+        if evidence_conn is not None and evidence_id is not None:
+            available, count = check_file_list_available(evidence_conn, evidence_id)
+            if available:
+                callbacks.on_log(f"Using file_list discovery ({count:,} files indexed)", "info")
+                path_patterns = set()
+                for browser in browsers:
+                    if browser not in CHROMIUM_BROWSERS:
+                        continue
+                    try:
+                        for pattern in get_artifact_patterns(browser, artifact_type):
+                            path_patterns.add(glob_to_sql_like(pattern))
+                    except ValueError:
+                        continue
+
+                result, embedded_roots = discover_artifacts_with_embedded_roots(
+                    evidence_conn,
+                    evidence_id,
+                    artifact=artifact_type,
+                    filename_patterns=filename_patterns,
+                    path_patterns=sorted(path_patterns) if path_patterns else None,
+                )
+
+                for partition_index, matches in result.matches_by_partition.items():
+                    with open_partition_for_extraction(
+                        ewf_paths if ewf_paths else evidence_fs, partition_index
+                    ) as partition_fs:
+                        if partition_fs is None:
+                            continue
+
+                        embedded_paths = get_embedded_root_paths(embedded_roots, partition_index)
+                        for match in matches:
+                            path_str = match.file_path
+                            if path_str in copied_paths:
+                                continue
+                            if "-journal" in path_str or "-wal" in path_str or "-shm" in path_str:
+                                continue
+
+                            browser = detect_browser_from_path(path_str, embedded_roots=embedded_paths)
+                            if browser and browser not in browsers and browser != "chromium_embedded":
+                                continue
+
+                            file_info = self._copy_database(
+                                partition_fs,
+                                path_str,
+                                output_dir,
+                                browser or "chromium",
+                                artifact_type,
+                                callbacks,
+                                partition_index=partition_index,
+                            )
+                            if file_info:
+                                copied_paths.add(path_str)
+                                copied_files.append(file_info)
+                                callbacks.on_log(
+                                    f"Copied {file_info['browser']} {artifact_type} (partition {partition_index}): {path_str}",
+                                    "info",
+                                )
+
+                if copied_files:
+                    return copied_files
 
         for browser in browsers:
             if browser not in CHROMIUM_BROWSERS:
@@ -497,14 +592,15 @@ class ChromiumFaviconsExtractor(BaseExtractor):
         output_dir: Path,
         browser: str,
         artifact_type: str,
-        callbacks: ExtractorCallbacks
+        callbacks: ExtractorCallbacks,
+        partition_index: Optional[int] = None,
     ) -> Optional[Dict]:
         """Copy a single database file and its journal files."""
         try:
             content = evidence_fs.read_file(source_path)
 
             # Extract profile from path
-            profile = self._extract_profile(source_path, browser)
+            profile = extract_profile_from_path(source_path) or "Default"
 
             # Generate safe filename
             safe_browser = re.sub(r'[^a-zA-Z0-9_-]', '_', browser)
@@ -512,7 +608,8 @@ class ChromiumFaviconsExtractor(BaseExtractor):
 
             # Determine original filename
             original_name = Path(source_path).name
-            filename = f"{safe_browser}_{safe_profile}_{original_name}"
+            partition_suffix = f"_p{partition_index}" if partition_index is not None else ""
+            filename = f"{safe_browser}_{safe_profile}{partition_suffix}_{original_name}"
 
             dest_path = output_dir / filename
             dest_path.write_bytes(content)
@@ -539,6 +636,7 @@ class ChromiumFaviconsExtractor(BaseExtractor):
                 "browser": browser,
                 "profile": profile,
                 "artifact_type": artifact_type,
+                "partition_index": partition_index,
                 "md5": md5,
                 "sha256": sha256,
                 "size_bytes": len(content),
@@ -550,15 +648,7 @@ class ChromiumFaviconsExtractor(BaseExtractor):
             return None
 
     def _extract_profile(self, path: str, browser: str) -> str:
-        """Extract profile name from path."""
-        parts = path.split('/')
-
-        # Chromium-style: .../User Data/Default/... or .../User Data/Profile 1/...
-        for i, part in enumerate(parts):
-            if part == "User Data" and i + 1 < len(parts):
-                return parts[i + 1]
-            # Opera: directly under Opera Stable
-            if part in ("Opera Stable", "Opera GX Stable") and i + 1 < len(parts):
-                return parts[i + 1] if parts[i + 1] not in ("Favicons", "Top Sites") else "Default"
-
-        return "Default"
+        """Compatibility wrapper for tests/callers."""
+        if browser in ("opera", "opera_gx"):
+            return "Default"
+        return extract_profile_from_path(path) or "Default"

@@ -36,12 +36,18 @@ from ....callbacks import ExtractorCallbacks
 from ....widgets import BrowserConfigWidget
 from ...._shared.file_list_discovery import (
     discover_from_file_list,
+    check_file_list_available,
+    glob_to_sql_like,
     open_partition_for_extraction,
 )
 from ...._shared.timestamps import webkit_to_datetime
 from ...._shared.extraction_warnings import ExtractionWarningCollector
 from .._patterns import CHROMIUM_BROWSERS, get_artifact_patterns
-from .._parsers import detect_browser_from_path
+from .._parsers import detect_browser_from_path, extract_profile_from_path
+from .._embedded_discovery import (
+    discover_artifacts_with_embedded_roots,
+    get_embedded_root_paths,
+)
 from ._schemas import (
     ENGAGEMENT_SETTING_KEYS,
     SITE_ENGAGEMENT_SETTING_FIELDS,
@@ -158,7 +164,7 @@ class ChromiumSiteEngagementExtractor(BaseExtractor):
 
         # Determine multi-partition mode
         scan_all_partitions = config.get("scan_all_partitions", True)
-        evidence_db_path = config.get("evidence_db_path")
+        evidence_conn = config.get("evidence_conn")
 
         manifest_data = {
             "extractor": self.metadata.name,
@@ -183,10 +189,10 @@ class ChromiumSiteEngagementExtractor(BaseExtractor):
 
         # Scan for Preferences files (multi-partition aware)
         # Note: We re-use permissions artifact pattern since both read Preferences
-        if scan_all_partitions and evidence_db_path:
+        if scan_all_partitions and evidence_conn is not None:
             # Use file_list discovery for multi-partition support
             files_by_partition = self._discover_files_multi_partition(
-                evidence_db_path, evidence_id, browsers_to_search, callbacks
+                evidence_conn, evidence_id, browsers_to_search, callbacks
             )
         else:
             # Single partition fallback
@@ -510,7 +516,7 @@ class ChromiumSiteEngagementExtractor(BaseExtractor):
                         if filename != "preferences":
                             continue
 
-                        profile = self._extract_profile_from_path(path_str, browser_key)
+                        profile = extract_profile_from_path(path_str) or "Default"
 
                         preference_files.append({
                             "logical_path": path_str,
@@ -525,7 +531,7 @@ class ChromiumSiteEngagementExtractor(BaseExtractor):
 
     def _discover_files_multi_partition(
         self,
-        evidence_db_path: str,
+        evidence_conn,
         evidence_id: int,
         browsers: List[str],
         callbacks: ExtractorCallbacks
@@ -533,63 +539,59 @@ class ChromiumSiteEngagementExtractor(BaseExtractor):
         """Discover Preferences files across partitions using file_list."""
         files_by_partition: Dict[Optional[int], List[Dict]] = {}
 
-        # Build filename patterns for Preferences
-        filename_patterns = ["Preferences"]
+        available, count = check_file_list_available(evidence_conn, evidence_id)
+        if not available:
+            callbacks.on_log("file_list not available, using single-partition discovery", "warning")
+            return files_by_partition
 
-        # Build path patterns for each browser
-        path_patterns = []
+        path_patterns = set()
         for browser_key in browsers:
             if browser_key not in CHROMIUM_BROWSERS:
                 continue
-            browser_info = CHROMIUM_BROWSERS[browser_key]
-            for path_template in browser_info.get("profile_paths", []):
-                # Convert template to a match pattern
-                # e.g., "Users/*/AppData/Local/Google/Chrome/User Data/*"
-                path_patterns.append(path_template.replace("*", "%"))
+            for pattern in get_artifact_patterns(browser_key, "preferences"):
+                path_patterns.add(glob_to_sql_like(pattern))
 
-        discovered = discover_from_file_list(
-            evidence_db_path=evidence_db_path,
-            evidence_id=evidence_id,
-            filename_patterns=filename_patterns,
-            path_like_patterns=path_patterns,
+        if not path_patterns:
+            return files_by_partition
+
+        callbacks.on_log(f"Using file_list discovery ({count:,} files indexed)", "info")
+
+        discovered, embedded_roots = discover_artifacts_with_embedded_roots(
+            evidence_conn,
+            evidence_id,
+            artifact="preferences",
+            filename_patterns=["Preferences"],
+            path_patterns=sorted(path_patterns),
         )
 
-        for entry in discovered:
-            partition_index = entry.get("partition_index")
-            if partition_index not in files_by_partition:
-                files_by_partition[partition_index] = []
+        for partition_index, matches in discovered.matches_by_partition.items():
+            files_by_partition.setdefault(partition_index, [])
+            embedded_paths = get_embedded_root_paths(embedded_roots, partition_index)
 
-            path_str = entry.get("logical_path", "")
-            browser = detect_browser_from_path(path_str)
-            if browser not in browsers:
-                continue
+            for match in matches:
+                path_str = match.file_path
+                browser = detect_browser_from_path(path_str, embedded_roots=embedded_paths)
+                if browser and browser not in browsers and browser != "chromium_embedded":
+                    continue
+                browser = browser or "chromium"
 
-            profile = self._extract_profile_from_path(path_str, browser)
+                profile = extract_profile_from_path(path_str) or "Default"
 
-            files_by_partition[partition_index].append({
-                "logical_path": path_str,
-                "browser": browser,
-                "profile": profile,
-                "file_type": "preferences",
-                "partition_index": partition_index,
-                "fs_type": entry.get("fs_type"),
-                "forensic_path": entry.get("forensic_path"),
-            })
+                files_by_partition[partition_index].append({
+                    "logical_path": path_str,
+                    "browser": browser,
+                    "profile": profile,
+                    "file_type": "preferences",
+                    "partition_index": partition_index,
+                    "inode": match.inode,
+                    "size_bytes": match.size_bytes,
+                })
 
         return files_by_partition
 
     def _extract_profile_from_path(self, path: str, browser: str) -> str:
         """Extract profile name from Preferences path."""
-        parts = path.replace("\\", "/").split("/")
-
-        # Look for "User Data" or browser-specific profile markers
-        for i, part in enumerate(parts):
-            if part.lower() == "user data" and i + 1 < len(parts):
-                return parts[i + 1]
-            if part.lower() == "profiles" and i + 1 < len(parts):
-                return parts[i + 1]
-
-        return "Default"
+        return extract_profile_from_path(path) or "Default"
 
     def _extract_file(
         self,

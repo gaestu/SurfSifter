@@ -8,14 +8,16 @@ Scans evidence filesystems to find Chromium browser cache directories
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Dict, List, TYPE_CHECKING
+from typing import Any, Dict, List, Optional, TYPE_CHECKING
 
 from core.logging import get_logger
 from .._patterns import (
     CHROMIUM_BROWSERS,
     get_patterns,
+    get_patterns_for_root,
     get_browser_display_name,
 )
+from .._parsers import extract_profile_from_path as _extract_profile_from_path_shared
 
 if TYPE_CHECKING:
     from ....callbacks import ExtractorCallbacks
@@ -29,6 +31,7 @@ def discover_cache_directories(
     callbacks: "ExtractorCallbacks",
     include_cache_storage: bool = False,
     include_disk_cache: bool = True,
+    embedded_roots: Optional[List[str]] = None,
 ) -> List[Dict[str, Any]]:
     """
     Scan evidence for Chromium browser cache directories.
@@ -79,6 +82,19 @@ def discover_cache_directories(
                     evidence_fs, pattern, browser, "disk_cache", callbacks
                 )
                 cache_directories.extend(dirs)
+
+        if include_disk_cache and embedded_roots:
+            for root in embedded_roots:
+                for pattern in get_patterns_for_root(root, "cache", flat_profile=False):
+                    dirs = scan_cache_pattern(
+                        evidence_fs, pattern, "chromium_embedded", "disk_cache", callbacks
+                    )
+                    cache_directories.extend(dirs)
+                for pattern in get_patterns_for_root(root, "cache", flat_profile=True):
+                    dirs = scan_cache_pattern(
+                        evidence_fs, pattern, "chromium_embedded", "disk_cache", callbacks
+                    )
+                    cache_directories.extend(dirs)
 
         # Scan CacheStorage if enabled - use legacy browser_patterns for now
         # TODO: Add cache_storage to chromium/_patterns.CHROMIUM_ARTIFACTS
@@ -355,31 +371,5 @@ def discover_cache_storage_directories(
 
 
 def extract_profile_from_path(file_path: str, browser: str) -> str:
-    """Extract profile name from cache file path."""
-    parts = Path(file_path).parts
-    profile = "Default"
-
-    try:
-        if "User Data" in parts:
-            # Chrome/Edge/Brave: User Data/<Profile>/...
-            user_data_idx = parts.index("User Data")
-            profile = parts[user_data_idx + 1]
-        elif browser == "opera":
-            if "Opera Stable" in file_path:
-                profile = "Opera Stable"
-            elif "Opera GX Stable" in file_path:
-                profile = "Opera GX Stable"
-        elif browser == "chrome" and ".config" in parts:
-            # Linux: ~/.config/google-chrome/<Profile>/...
-            config_idx = parts.index(".config")
-            if len(parts) > config_idx + 2:
-                profile = parts[config_idx + 2]
-        elif browser == "brave" and ".config" in parts:
-            if "Brave-Browser" in parts:
-                brave_idx = parts.index("Brave-Browser")
-                if len(parts) > brave_idx + 1:
-                    profile = parts[brave_idx + 1]
-    except (ValueError, IndexError):
-        pass
-
-    return profile
+    """Extract profile name from cache file path using shared Chromium parser."""
+    return _extract_profile_from_path_shared(file_path) or "Default"

@@ -13,7 +13,8 @@ import re
 from pathlib import Path
 from typing import Any, Dict, List, Optional, TYPE_CHECKING
 
-from .._patterns import CHROMIUM_BROWSERS, get_artifact_patterns
+from .._patterns import CHROMIUM_BROWSERS, get_artifact_patterns, get_patterns_for_root
+from .._parsers import extract_profile_from_path
 from ._schemas import (
     PATH_SEPARATOR,
     KNOWN_PREFERENCES_FIELDS,
@@ -38,6 +39,7 @@ def parse_all_preferences(
     output_dir: Path,
     callbacks: "ExtractorCallbacks",
     *,
+    embedded_roots: Optional[List[str]] = None,
     warning_collector: Optional["ExtractionWarningCollector"] = None,
 ) -> Dict[str, Any]:
     """
@@ -69,10 +71,23 @@ def parse_all_preferences(
             browser_key,
             output_dir,
             callbacks,
+            embedded_roots=None,
             warning_collector=warning_collector,
         )
         result["extensions"].update(browser_result.get("extensions", {}))
         result["files_parsed"].extend(browser_result.get("files_parsed", []))
+
+    if embedded_roots:
+        embedded_result = parse_browser_preferences(
+            evidence_fs,
+            "chromium_embedded",
+            output_dir,
+            callbacks,
+            embedded_roots=embedded_roots,
+            warning_collector=warning_collector,
+        )
+        result["extensions"].update(embedded_result.get("extensions", {}))
+        result["files_parsed"].extend(embedded_result.get("files_parsed", []))
 
     LOGGER.info(
         "Parsed %d Preferences files, found %d extension settings",
@@ -88,6 +103,7 @@ def parse_browser_preferences(
     output_dir: Path,
     callbacks: "ExtractorCallbacks",
     *,
+    embedded_roots: Optional[List[str]] = None,
     warning_collector: Optional["ExtractionWarningCollector"] = None,
 ) -> Dict[str, Any]:
     """
@@ -108,10 +124,19 @@ def parse_browser_preferences(
         "files_parsed": [],
     }
 
-    try:
-        # Get patterns for Preferences file (reuse permissions patterns)
-        patterns = get_artifact_patterns(browser, "permissions")
-    except ValueError:
+    patterns: List[str] = []
+    if browser in CHROMIUM_BROWSERS:
+        try:
+            patterns.extend(get_artifact_patterns(browser, "permissions"))
+        except ValueError:
+            pass
+
+    if embedded_roots:
+        for root in embedded_roots:
+            patterns.extend(get_patterns_for_root(root, "preferences", flat_profile=False))
+            patterns.extend(get_patterns_for_root(root, "preferences", flat_profile=True))
+
+    if not patterns:
         return result
 
     for pattern in patterns:
@@ -315,19 +340,7 @@ def _extract_profile_from_preferences_path(path_str: str) -> str:
     Returns:
         Profile name (e.g., "Default", "Profile 1")
     """
-    path_parts = path_str.split(PATH_SEPARATOR)
-
-    # Look for "User Data" directory followed by profile
-    for i, part in enumerate(path_parts):
-        if part == "User Data" and i + 1 < len(path_parts):
-            return path_parts[i + 1]
-
-    # For Opera-style flat profiles, use profile root name
-    for part in path_parts:
-        if "Opera" in part or "opera" in part:
-            return "Default"
-
-    return "Default"
+    return extract_profile_from_path(path_str) or "Default"
 
 
 def _check_unknown_preferences_fields(

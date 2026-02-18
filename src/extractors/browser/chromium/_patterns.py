@@ -378,6 +378,7 @@ CHROMIUM_ARTIFACTS: Dict[str, List[str]] = {
     ],
     "transport_security": [
         "TransportSecurity",
+        "Network/TransportSecurity",
     ],
     "cache": [
         # Modern Simple Cache format (Cache_Data/)
@@ -386,6 +387,44 @@ CHROMIUM_ARTIFACTS: Dict[str, List[str]] = {
         "Cache",
     ],
 }
+
+
+def get_patterns_for_root(root_path: str, artifact: str, flat_profile: bool = False) -> List[str]:
+    """
+    Generate artifact glob patterns anchored to an arbitrary profile root.
+
+    This is primarily used for embedded Chromium discovery where the root path
+    is discovered dynamically from file_list records instead of static browser
+    definitions.
+
+    Args:
+        root_path: Dynamic root path (for example ".../SomeApp/User Data")
+        artifact: Artifact key (history, cookies, bookmarks, etc.)
+        flat_profile: If True, artifacts are resolved directly under root_path
+            (flat profile layout). If False, patterns include PROFILE_PATTERNS.
+
+    Returns:
+        List of glob patterns anchored under root_path.
+    """
+    if artifact not in CHROMIUM_ARTIFACTS:
+        raise ValueError(f"Unknown artifact: {artifact}. Valid: {list(CHROMIUM_ARTIFACTS.keys())}")
+
+    normalized_root = str(root_path).replace("\\", "/").rstrip("/")
+    if not normalized_root:
+        return []
+
+    artifact_paths = CHROMIUM_ARTIFACTS[artifact]
+    patterns: List[str] = []
+
+    if flat_profile:
+        for artifact_path in artifact_paths:
+            patterns.append(f"{normalized_root}/{artifact_path}")
+    else:
+        for profile_pattern in PROFILE_PATTERNS:
+            for artifact_path in artifact_paths:
+                patterns.append(f"{normalized_root}/{profile_pattern}/{artifact_path}")
+
+    return patterns
 
 
 def get_patterns(browser: str, artifact: str) -> List[str]:

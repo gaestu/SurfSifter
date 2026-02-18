@@ -40,6 +40,8 @@ from ....callbacks import ExtractorCallbacks
 from ....widgets import BrowserConfigWidget
 from ...._shared.file_list_discovery import (
     discover_from_file_list,
+    check_file_list_available,
+    glob_to_sql_like,
     open_partition_for_extraction,
     get_ewf_paths_from_evidence_fs,
 )
@@ -47,12 +49,17 @@ from ...._shared.extraction_warnings import ExtractionWarningCollector
 from .._patterns import (
     CHROMIUM_BROWSERS,
     get_patterns,
+    get_artifact_patterns,
     get_browser_display_name,
     get_all_browsers,
 )
 from .._parsers import (
     extract_profile_from_path,
     detect_browser_from_path,
+)
+from .._embedded_discovery import (
+    discover_artifacts_with_embedded_roots,
+    get_embedded_root_paths,
 )
 # Local parser with schema warning support
 from ._parser import parse_bookmarks_json, get_bookmark_stats
@@ -203,10 +210,23 @@ class ChromiumBookmarksExtractor(BaseExtractor):
 
         # Determine which browsers to search
         browsers = config.get("browsers") or config.get("selected_browsers") or get_all_browsers()
+        scan_all_partitions = config.get("scan_all_partitions", True)
+        evidence_conn = config.get("evidence_conn")
+        ewf_paths = None
 
         # Scan for bookmark files
         callbacks.on_step("Scanning for Chromium bookmark files")
-        bookmark_files = self._discover_files(evidence_fs, browsers, callbacks)
+        if scan_all_partitions and evidence_conn is not None:
+            files_by_partition = self._discover_files_multi_partition(
+                evidence_conn, evidence_id, browsers, callbacks
+            )
+            ewf_paths = get_ewf_paths_from_evidence_fs(evidence_fs)
+        else:
+            files_by_partition = {None: self._discover_files(evidence_fs, browsers, callbacks)}
+
+        bookmark_files: List[tuple] = []
+        for partition_files in files_by_partition.values():
+            bookmark_files.extend(partition_files)
 
         # Report discovered files
         if stats_collector:
@@ -215,24 +235,39 @@ class ChromiumBookmarksExtractor(BaseExtractor):
         callbacks.on_log(f"Found {len(bookmark_files)} bookmark file(s)")
 
         # Extract each file
-        for i, (source_path, browser) in enumerate(bookmark_files):
-            if callbacks.is_cancelled():
-                manifest_data["status"] = "cancelled"
-                manifest_data["notes"].append("Extraction cancelled by user")
-                break
+        file_index = 0
+        for partition_index, partition_files in files_by_partition.items():
+            with open_partition_for_extraction(
+                ewf_paths if ewf_paths else evidence_fs, partition_index
+            ) as partition_fs:
+                if partition_fs is None:
+                    manifest_data["notes"].append(f"Failed to open partition {partition_index}")
+                    continue
 
-            callbacks.on_progress(i + 1, len(bookmark_files), f"Extracting {source_path}")
+                for source_path, browser in partition_files:
+                    if callbacks.is_cancelled():
+                        manifest_data["status"] = "cancelled"
+                        manifest_data["notes"].append("Extraction cancelled by user")
+                        break
 
-            try:
-                file_info = self._extract_file(
-                    evidence_fs, source_path, output_dir, browser, run_id
-                )
-                manifest_data["files"].append(file_info)
-            except Exception as e:
-                LOGGER.warning("Failed to extract %s: %s", source_path, e)
-                manifest_data["notes"].append(f"Failed: {source_path}: {e}")
-                if stats_collector:
-                    stats_collector.report_failed(evidence_id, self.metadata.name, files=1)
+                    file_index += 1
+                    callbacks.on_progress(file_index, len(bookmark_files), f"Extracting {source_path}")
+
+                    try:
+                        file_info = self._extract_file(
+                            partition_fs,
+                            source_path,
+                            output_dir,
+                            browser,
+                            run_id,
+                            partition_index=partition_index,
+                        )
+                        manifest_data["files"].append(file_info)
+                    except Exception as e:
+                        LOGGER.warning("Failed to extract %s: %s", source_path, e)
+                        manifest_data["notes"].append(f"Failed: {source_path}: {e}")
+                        if stats_collector:
+                            stats_collector.report_failed(evidence_id, self.metadata.name, files=1)
 
         # Finish statistics
         if stats_collector:
@@ -414,7 +449,7 @@ class ChromiumBookmarksExtractor(BaseExtractor):
             if browser not in CHROMIUM_BROWSERS:
                 continue
 
-            patterns = get_patterns(browser, "bookmarks")
+            patterns = get_artifact_patterns(browser, "bookmarks")
 
             for pattern in patterns:
                 try:
@@ -426,13 +461,59 @@ class ChromiumBookmarksExtractor(BaseExtractor):
 
         return found_files
 
+    def _discover_files_multi_partition(
+        self,
+        evidence_conn,
+        evidence_id: int,
+        browsers: List[str],
+        callbacks: ExtractorCallbacks,
+    ) -> Dict[Optional[int], List[tuple]]:
+        """Discover bookmark files across all partitions via file_list."""
+        available, count = check_file_list_available(evidence_conn, evidence_id)
+        if not available:
+            callbacks.on_log("file_list not available, using single-partition discovery", "warning")
+            return {}
+
+        path_patterns = set()
+        for browser in browsers:
+            if browser not in CHROMIUM_BROWSERS:
+                continue
+            for pattern in get_artifact_patterns(browser, "bookmarks"):
+                path_patterns.add(glob_to_sql_like(pattern))
+
+        if not path_patterns:
+            return {}
+
+        callbacks.on_log(f"Using file_list discovery ({count:,} files indexed)", "info")
+        result, embedded_roots = discover_artifacts_with_embedded_roots(
+            evidence_conn,
+            evidence_id,
+            artifact="bookmarks",
+            filename_patterns=["Bookmarks"],
+            path_patterns=sorted(path_patterns),
+        )
+
+        files_by_partition: Dict[Optional[int], List[tuple]] = {}
+        for partition_index, matches in result.matches_by_partition.items():
+            files_by_partition.setdefault(partition_index, [])
+            embedded_paths = get_embedded_root_paths(embedded_roots, partition_index)
+
+            for match in matches:
+                browser = detect_browser_from_path(match.file_path, embedded_roots=embedded_paths)
+                if browser and browser not in browsers and browser != "chromium_embedded":
+                    continue
+                files_by_partition[partition_index].append((match.file_path, browser or "chromium"))
+
+        return files_by_partition
+
     def _extract_file(
         self,
         evidence_fs,
         source_path: str,
         output_dir: Path,
         browser: str,
-        run_id: str
+        run_id: str,
+        partition_index: Optional[int] = None,
     ) -> Dict[str, Any]:
         """
         Extract a single bookmark file from evidence.
@@ -442,7 +523,8 @@ class ChromiumBookmarksExtractor(BaseExtractor):
         """
         # Generate safe local filename
         safe_name = source_path.replace("/", "_").replace("\\", "_")
-        local_filename = f"{browser}_{safe_name}"
+        partition_prefix = f"p{partition_index}_" if partition_index is not None else ""
+        local_filename = f"{partition_prefix}{browser}_{safe_name}"
         local_path = output_dir / local_filename
 
         # Copy file from evidence using EvidenceFS API
@@ -454,7 +536,7 @@ class ChromiumBookmarksExtractor(BaseExtractor):
         sha256_hash = hashlib.sha256(content).hexdigest()
 
         # Get profile from path
-        profile = extract_profile_from_path(source_path)
+        profile = extract_profile_from_path(source_path) or "Default"
 
         return {
             "source_path": source_path,
@@ -465,6 +547,7 @@ class ChromiumBookmarksExtractor(BaseExtractor):
             "sha256": sha256_hash,
             "size_bytes": len(content),
             "extracted_at": datetime.now(timezone.utc).isoformat(),
+            "partition_index": partition_index,
         }
 
     def _ingest_file(

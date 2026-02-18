@@ -38,6 +38,7 @@ from ...._shared.file_list_discovery import (
     get_ewf_paths_from_evidence_fs,
     open_partition_for_extraction,
     FileListDiscoveryResult,
+    glob_to_sql_like,
 )
 from ...._shared.extraction_warnings import (
     ExtractionWarningCollector,
@@ -48,8 +49,13 @@ from ...._shared.extraction_warnings import (
 from .._patterns import (
     CHROMIUM_BROWSERS,
     get_patterns,
+    get_artifact_patterns,
     get_browser_display_name,
     get_all_browsers,
+)
+from .._embedded_discovery import (
+    discover_artifacts_with_embedded_roots,
+    get_embedded_root_paths,
 )
 from .._parsers import (
     parse_history_visits,
@@ -678,36 +684,21 @@ class ChromiumHistoryExtractor(BaseExtractor):
 
         callbacks.on_log(f"Using file_list discovery ({count:,} files indexed)", "info")
 
-        # Build path patterns for file_list query
-        # We look for "History" files in paths containing browser-specific strings
-        path_patterns = []
+        # Build path patterns for file_list query from canonical browser patterns.
+        path_patterns = set()
         for browser in browsers:
             if browser not in CHROMIUM_BROWSERS:
                 continue
-            # Get patterns and convert to SQL LIKE patterns
-            patterns = get_patterns(browser, "history")
+            patterns = get_artifact_patterns(browser, "history")
             for pattern in patterns:
-                # Convert glob to SQL-friendly pattern
-                # e.g., "Users/*/AppData/Local/Google/Chrome/*/History" -> "%Chrome%History"
-                # We'll use a simpler approach - look for key path components
-                if "Chrome" in pattern:
-                    path_patterns.append("%Google%Chrome%User Data%")
-                elif "Edge" in pattern:
-                    path_patterns.append("%Microsoft%Edge%User Data%")
-                elif "Brave" in pattern:
-                    path_patterns.append("%BraveSoftware%Brave-Browser%User Data%")
-                elif "Opera" in pattern:
-                    path_patterns.append("%Opera%")
+                path_patterns.add(glob_to_sql_like(pattern))
 
-        # Remove duplicates
-        path_patterns = list(set(path_patterns))
-
-        # Query file_list
-        result = discover_from_file_list(
+        result, embedded_roots = discover_artifacts_with_embedded_roots(
             evidence_conn,
             evidence_id,
+            artifact="history",
             filename_patterns=["History"],
-            path_patterns=path_patterns if path_patterns else None,
+            path_patterns=sorted(path_patterns) if path_patterns else None,
         )
 
         if result.is_empty:
@@ -732,18 +723,24 @@ class ChromiumHistoryExtractor(BaseExtractor):
             files_list = []
             for match in matches:
                 # Detect browser from path
-                browser = detect_browser_from_path(match.file_path)
-                if browser and browser not in browsers:
+                embedded_paths = get_embedded_root_paths(embedded_roots, partition_index)
+                browser = detect_browser_from_path(match.file_path, embedded_roots=embedded_paths)
+                if browser and browser not in browsers and browser != "chromium_embedded":
                     continue  # Skip if browser not in selection
 
-                profile = extract_profile_from_path(match.file_path)
+                profile = extract_profile_from_path(match.file_path) or "Default"
+                display_name = (
+                    get_browser_display_name(browser)
+                    if browser in CHROMIUM_BROWSERS
+                    else "Embedded Chromium"
+                )
 
                 files_list.append({
                     "logical_path": match.file_path,
                     "browser": browser or "chromium",
                     "profile": profile,
                     "artifact_type": "history",
-                    "display_name": get_browser_display_name(browser) if browser else "Chromium",
+                    "display_name": display_name,
                     "partition_index": partition_index,
                     "inode": match.inode,
                     "size_bytes": match.size_bytes,

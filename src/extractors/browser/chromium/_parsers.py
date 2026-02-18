@@ -35,10 +35,10 @@ from ..._shared.timestamps import webkit_to_datetime, webkit_to_iso
 # Path Utilities (Chromium-wide)
 # ===========================================================================
 
-from typing import Optional as _Optional
+_PROFILE_MARKERS = {"default", "guest profile", "system profile"}
 
 
-def detect_browser_from_path(path) -> _Optional[str]:
+def detect_browser_from_path(path, embedded_roots: Optional[List[str]] = None) -> Optional[str]:
     """
     Detect which Chromium browser a file belongs to based on path.
 
@@ -46,28 +46,65 @@ def detect_browser_from_path(path) -> _Optional[str]:
         path: Full path to a file (str or Path)
 
     Returns:
-        Browser key (chrome, edge, brave, opera, opera_gx, vivaldi) or None if not recognized
+        Browser key (chrome family variants, edge family variants, brave
+        family variants, chromium, opera/opera_gx) or None if not recognized.
+        Returns "chromium_embedded" when embedded_roots are provided and path
+        falls under one of those roots.
     """
     path_lower = str(path).lower().replace("\\", "/")
+    while "//" in path_lower:
+        path_lower = path_lower.replace("//", "/")
 
-    # Check for browser-specific path components
+    # Chrome channels
+    if "/google/chrome sxs/" in path_lower or "/google/chrome canary/" in path_lower or "google-chrome-canary" in path_lower:
+        return "chrome_canary"
+    if "/google/chrome beta/" in path_lower or "google-chrome-beta" in path_lower:
+        return "chrome_beta"
+    if "/google/chrome dev/" in path_lower or "google-chrome-unstable" in path_lower:
+        return "chrome_dev"
     if "/google/chrome/" in path_lower or "google-chrome" in path_lower:
         return "chrome"
-    elif "/microsoft/edge/" in path_lower or "microsoft-edge" in path_lower:
+
+    # Edge channels
+    if "/microsoft/edge sxs/" in path_lower or "/microsoft/edge canary/" in path_lower or "microsoft-edge-canary" in path_lower:
+        return "edge_canary"
+    if "/microsoft/edge beta/" in path_lower or "microsoft-edge-beta" in path_lower:
+        return "edge_beta"
+    if "/microsoft/edge dev/" in path_lower or "microsoft-edge-dev" in path_lower:
+        return "edge_dev"
+    if "/microsoft/edge/" in path_lower or "microsoft-edge" in path_lower:
         return "edge"
-    elif "/bravesoftware/brave-browser/" in path_lower or "/brave-browser" in path_lower:
+
+    # Brave channels
+    if "/bravesoftware/brave-browser-nightly/" in path_lower or "brave-browser-nightly" in path_lower:
+        return "brave_nightly"
+    if "/bravesoftware/brave-browser-beta/" in path_lower or "brave-browser-beta" in path_lower:
+        return "brave_beta"
+    if "/bravesoftware/brave-browser/" in path_lower or "/brave-browser" in path_lower:
         return "brave"
-    elif "opera gx" in path_lower or "operagx" in path_lower:
+
+    if "opera gx" in path_lower or "operagx" in path_lower or "com.operasoftware.operagx" in path_lower:
         return "opera_gx"
-    elif "/opera software/" in path_lower or "/.config/opera" in path_lower or "com.operasoftware.opera" in path_lower:
+    if "/opera software/" in path_lower or "/.config/opera" in path_lower or "com.operasoftware.opera" in path_lower:
         return "opera"
-    elif "/vivaldi/" in path_lower or "vivaldi" in path_lower:
+    if "/chromium/" in path_lower or "appdata/local/chromium/user data" in path_lower or "/.config/chromium/" in path_lower:
+        return "chromium"
+    if "/vivaldi/" in path_lower or "vivaldi" in path_lower:
         return "vivaldi"
+
+    if embedded_roots:
+        normalized_path = path_lower.strip("/")
+        for root in embedded_roots:
+            root_norm = str(root).lower().replace("\\", "/").strip("/")
+            if not root_norm:
+                continue
+            if normalized_path == root_norm or normalized_path.startswith(f"{root_norm}/"):
+                return "chromium_embedded"
 
     return None
 
 
-def extract_profile_from_path(path: str) -> _Optional[str]:
+def extract_profile_from_path(path: str) -> Optional[str]:
     """
     Extract Chromium profile name from a file path.
 
@@ -83,9 +120,31 @@ def extract_profile_from_path(path: str) -> _Optional[str]:
         >>> extract_profile_from_path("home/user/.config/google-chrome/Default/History")
         "Default"
     """
-    # Convert Path to string if needed
     path_str = str(path).replace("\\", "/")
+    while "//" in path_str:
+        path_str = path_str.replace("//", "/")
+
     parts = path_str.split("/")
+    lower_parts = [part.lower() for part in parts]
+    artifact_markers = {
+        "history",
+        "cookies",
+        "bookmarks",
+        "preferences",
+        "web data",
+        "login data",
+        "transportsecurity",
+        "sync data",
+        "media history",
+        "extensions",
+        "cache",
+        "network",
+        "local storage",
+        "session storage",
+        "indexeddb",
+        "favicons",
+        "top sites",
+    }
 
     # Look for browser-specific markers and extract profile
     try:
@@ -93,57 +152,55 @@ def extract_profile_from_path(path: str) -> _Optional[str]:
         if "User Data" in parts:
             idx = parts.index("User Data")
             if idx + 1 < len(parts):
-                return parts[idx + 1]
-
-        # Linux Chrome: ".config/google-chrome/Default/History"
-        if "google-chrome" in parts:
-            idx = parts.index("google-chrome")
-            if idx + 1 < len(parts):
-                return parts[idx + 1]
-
-        # Linux Edge: ".config/microsoft-edge/Default/History"
-        if "microsoft-edge" in parts:
-            idx = parts.index("microsoft-edge")
-            if idx + 1 < len(parts):
-                return parts[idx + 1]
-
-        # Linux Brave: ".config/BraveSoftware/Brave-Browser/Default/History"
-        if "Brave-Browser" in parts:
-            idx = parts.index("Brave-Browser")
-            if idx + 1 < len(parts):
-                return parts[idx + 1]
-
-        # Linux Opera: ".config/opera/Default/History"
-        if "opera" in parts:
-            idx = parts.index("opera")
-            if idx + 1 < len(parts):
-                return parts[idx + 1]
-
-        # macOS Chrome: "Google/Chrome/Default/History"
-        if "Chrome" in parts:
-            idx = parts.index("Chrome")
-            if idx + 1 < len(parts):
-                return parts[idx + 1]
-
-        # macOS Edge: "Microsoft Edge/Default/History"
-        if "Microsoft Edge" in parts:
-            idx = parts.index("Microsoft Edge")
-            if idx + 1 < len(parts):
-                return parts[idx + 1]
-
-        # Windows Opera: "Opera Stable/History" or "Opera GX Stable/History"
-        for opera_dir in ["Opera Stable", "Opera GX Stable"]:
-            if opera_dir in parts:
-                return opera_dir
-
-        # macOS Opera: "com.operasoftware.Opera/History" or "com.operasoftware.OperaGX/History"
-        # These are single-profile browsers, so return "Default"
-        for opera_bundle in ["com.operasoftware.Opera", "com.operasoftware.OperaGX"]:
-            if opera_bundle in parts:
-                return "Default"
+                candidate = parts[idx + 1]
+                if candidate.lower() in artifact_markers:
+                    return "Default"
+                return candidate
 
     except (ValueError, IndexError):
         pass
+
+    for idx, part in enumerate(parts):
+        lower_part = lower_parts[idx]
+        if lower_part in _PROFILE_MARKERS or lower_part.startswith("profile "):
+            return part
+
+    linux_profile_roots = {
+        "google-chrome",
+        "google-chrome-beta",
+        "google-chrome-unstable",
+        "google-chrome-canary",
+        "microsoft-edge",
+        "microsoft-edge-beta",
+        "microsoft-edge-dev",
+        "microsoft-edge-canary",
+        "chromium",
+        "brave-browser",
+        "brave-browser-beta",
+        "brave-browser-nightly",
+        "opera",
+        "opera-gx",
+    }
+    for idx, lower_part in enumerate(lower_parts):
+        if lower_part not in linux_profile_roots:
+            continue
+        if idx + 1 >= len(parts):
+            continue
+        candidate = parts[idx + 1]
+        if candidate.lower() in artifact_markers:
+            return "Default"
+        return candidate
+
+    for opera_dir in ("Opera Stable", "Opera GX Stable"):
+        if opera_dir in parts:
+            return opera_dir
+
+    for opera_bundle in ("com.operasoftware.Opera", "com.operasoftware.OperaGX"):
+        if opera_bundle in parts:
+            return "Default"
+
+    if any(marker in lower_parts for marker in artifact_markers):
+        return "Default"
 
     return None
 
@@ -358,4 +415,3 @@ def get_download_stats(conn: sqlite3.Connection) -> Dict[str, int]:
     stats["dangerous_count"] = rows[0]["cnt"] if rows else 0
 
     return stats
-

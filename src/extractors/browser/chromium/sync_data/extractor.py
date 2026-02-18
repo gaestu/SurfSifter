@@ -65,6 +65,11 @@ from ...._shared.file_list_discovery import (
 )
 from ...._shared.extraction_warnings import ExtractionWarningCollector
 from .._patterns import CHROMIUM_BROWSERS, get_artifact_patterns
+from .._parsers import detect_browser_from_path, extract_profile_from_path
+from .._embedded_discovery import (
+    discover_artifacts_with_embedded_roots,
+    get_embedded_root_paths,
+)
 from ._parsers import parse_chromium_sync
 from core.logging import get_logger
 from core.statistics_collector import StatisticsCollector
@@ -614,9 +619,7 @@ class ChromiumSyncDataExtractor(BaseExtractor):
         """
         files_by_partition: Dict[Optional[int], List[Dict]] = {}
 
-        # Build path patterns from browser definitions using get_artifact_patterns
-        path_patterns = []
-        browser_pattern_map: Dict[str, List[str]] = {}  # pattern -> browser_key
+        path_patterns = set()
 
         for browser_key in browsers:
             if browser_key not in CHROMIUM_BROWSERS:
@@ -626,26 +629,19 @@ class ChromiumSyncDataExtractor(BaseExtractor):
             patterns = get_artifact_patterns(browser_key, "preferences")
 
             for pattern in patterns:
-                # Convert glob pattern to SQL LIKE pattern
-                sql_pattern = glob_to_sql_like(pattern)
-                path_patterns.append(sql_pattern)
-
-                # Track which browser this pattern belongs to
-                if sql_pattern not in browser_pattern_map:
-                    browser_pattern_map[sql_pattern] = []
-                browser_pattern_map[sql_pattern].append(browser_key)
+                path_patterns.add(glob_to_sql_like(pattern))
 
         if not path_patterns:
             LOGGER.warning("No path patterns built for browsers: %s", browsers)
             return files_by_partition
 
         try:
-            # Use discover_from_file_list for consistent discovery
-            result = discover_from_file_list(
+            result, embedded_roots = discover_artifacts_with_embedded_roots(
                 evidence_conn,
                 evidence_id,
+                artifact="preferences",
                 filename_patterns=["Preferences"],
-                path_patterns=path_patterns,
+                path_patterns=sorted(path_patterns),
             )
 
             if result.is_empty:
@@ -658,13 +654,16 @@ class ChromiumSyncDataExtractor(BaseExtractor):
             for partition_index, matches in result.matches_by_partition.items():
                 for match in matches:
                     # Determine browser from path
-                    browser_key = self._identify_browser_from_path(match.file_path, browsers)
+                    embedded_paths = get_embedded_root_paths(embedded_roots, partition_index)
+                    browser_key = detect_browser_from_path(match.file_path, embedded_roots=embedded_paths)
                     if not browser_key:
                         LOGGER.debug("Could not identify browser for: %s", match.file_path)
                         continue
+                    if browser_key not in browsers and browser_key != "chromium_embedded":
+                        continue
 
-                    display_name = CHROMIUM_BROWSERS[browser_key]["display_name"]
-                    profile = self._extract_profile_from_path(match.file_path)
+                    display_name = CHROMIUM_BROWSERS.get(browser_key, {}).get("display_name", "Embedded Chromium")
+                    profile = extract_profile_from_path(match.file_path) or "Default"
 
                     file_info = {
                         "logical_path": match.file_path,
@@ -692,33 +691,6 @@ class ChromiumSyncDataExtractor(BaseExtractor):
 
         return files_by_partition
 
-    def _identify_browser_from_path(self, file_path: str, browsers: List[str]) -> Optional[str]:
-        """Identify which browser a file path belongs to.
-
-        Checks path against known profile_roots for each browser.
-        """
-        path_lower = file_path.lower().replace("\\", "/")
-
-        for browser_key in browsers:
-            if browser_key not in CHROMIUM_BROWSERS:
-                continue
-
-            browser_info = CHROMIUM_BROWSERS[browser_key]
-            for profile_root in browser_info.get("profile_roots", []):
-                # Convert profile_root pattern to lowercase for comparison
-                # Remove wildcards for simple containment check
-                check_path = profile_root.lower().replace("*", "").replace("//", "/")
-
-                # Check if key identifiers from the profile root are in the path
-                # e.g., "google/chrome" for Chrome, "microsoft/edge" for Edge
-                path_parts = check_path.split("/")
-                significant_parts = [p for p in path_parts if p and p not in ("users", "home", "appdata", "local", "roaming", "library", "application support", ".config")]
-
-                if all(part in path_lower for part in significant_parts):
-                    return browser_key
-
-        return None
-
     def _discover_preference_files(
         self,
         evidence_fs,
@@ -739,7 +711,7 @@ class ChromiumSyncDataExtractor(BaseExtractor):
             for pattern in patterns:
                 try:
                     for path_str in evidence_fs.iter_paths(pattern):
-                        profile = self._extract_profile_from_path(path_str)
+                        profile = extract_profile_from_path(path_str) or "Default"
 
                         pref_files.append({
                             "logical_path": path_str,
@@ -756,25 +728,6 @@ class ChromiumSyncDataExtractor(BaseExtractor):
                     LOGGER.debug("Pattern %s failed: %s", pattern, e)
 
         return pref_files
-
-    def _extract_profile_from_path(self, path: str) -> str:
-        """Extract browser profile name from file path."""
-        parts = path.replace("\\", "/").split("/")
-
-        try:
-            idx = parts.index("User Data")
-            return parts[idx + 1] if idx + 1 < len(parts) else "Default"
-        except (ValueError, IndexError):
-            pass
-
-        # Opera uses different structure
-        for part in parts:
-            if part.startswith("Profile "):
-                return part
-            if part.lower() == "default":
-                return "Default"
-
-        return "Default"
 
     def _extract_file(
         self,
