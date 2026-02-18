@@ -211,7 +211,13 @@ class SafariCacheExtractor(BaseExtractor):
             normalized = item.rstrip("/")
             if normalized.startswith(f"{root}/fsCachedData/"):
                 selected.add(item)
-            elif normalized == cache_db_path or Path(normalized).name in _CACHE_DB_NAMES and str(Path(normalized).parent) == root:
+            elif (
+                normalized == cache_db_path
+                or (
+                    Path(normalized).name in _CACHE_DB_NAMES
+                    and str(Path(normalized).parent) == root
+                )
+            ):
                 selected.add(item)
 
         # Ensure companion files are attempted even if glob discovery missed them.

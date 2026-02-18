@@ -94,6 +94,31 @@ def test_carve_inline_gzip_image(tmp_path: Path) -> None:
     assert carved.format == "png"
 
 
+def test_carve_inline_gzip_image_with_lowercase_header(tmp_path: Path) -> None:
+    entry = SafariCacheEntry(
+        entry_id=3,
+        url="https://example.com/lc-header.png",
+        timestamp_cocoa=730000000.0,
+        timestamp_utc=None,
+        version=0,
+        storage_policy=0,
+        partition=None,
+        hash_value=1,
+        is_data_on_fs=False,
+        inline_body_size=0,
+        inline_body=gzip.compress(_png_bytes()),
+        response_blob=None,
+        request_blob=None,
+        proto_props_blob=None,
+    )
+
+    meta = _response_meta(content_encoding=None)
+    meta.all_headers["content-encoding"] = "gzip"
+    carved = carve_image_from_cache_entry(entry, meta, tmp_path, tmp_path / "fsCachedData")
+    assert carved is not None
+    assert carved.format == "png"
+
+
 def test_orphan_fscached_detection(tmp_path: Path) -> None:
     fs_dir = tmp_path / "fsCachedData"
     fs_dir.mkdir()

@@ -112,7 +112,10 @@ def carve_image_from_cache_entry(
     if not raw_body:
         return None
 
-    encoding = response_meta.all_headers.get("Content-Encoding") if response_meta else None
+    encoding = _get_header_case_insensitive(
+        response_meta.all_headers,
+        "Content-Encoding",
+    ) if response_meta else None
     body = extract_body(raw_body, encoding) or raw_body
     image_type = detect_image_type(body)
     if not image_type:
@@ -220,6 +223,15 @@ def _content_type_allows_image(content_type: str) -> bool:
     if value.startswith("image/"):
         return True
     return value.startswith("application/octet-stream")
+
+
+def _get_header_case_insensitive(headers: dict[str, str], target: str) -> Optional[str]:
+    """Return header value using case-insensitive key match."""
+    target_lower = target.lower()
+    for key, value in headers.items():
+        if key.lower() == target_lower:
+            return value
+    return None
 
 
 def _get_dimensions(data: bytes) -> tuple[Optional[int], Optional[int]]:
