@@ -125,8 +125,11 @@ class OSArtifactsTab(QWidget):
         self.jl_table = QTableView()
         self.jl_table.horizontalHeader().setStretchLastSection(True)
         self.jl_table.setSelectionBehavior(QTableView.SelectRows)
+        self.jl_table.setSelectionMode(QTableView.ExtendedSelection)
         self.jl_table.setSortingEnabled(True)
         self.jl_table.doubleClicked.connect(self._on_jump_list_double_clicked)
+        self.jl_table.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.jl_table.customContextMenuRequested.connect(self._show_jump_lists_context_menu)
         jump_lists_layout.addWidget(self.jl_table)
 
         self.jl_summary_label = QLabel("No Jump List entries loaded.")
@@ -401,6 +404,61 @@ class OSArtifactsTab(QWidget):
         from app.features.os_artifacts.dialogs import JumpListDetailsDialog
         dialog = JumpListDetailsDialog(row_data, parent=self)
         dialog.exec()
+
+    def _show_jump_lists_context_menu(self, pos) -> None:
+        """Show context menu for Jump Lists table."""
+        index = self.jl_table.indexAt(pos)
+        if not index.isValid():
+            return
+
+        menu = QMenu(self)
+
+        view_action = menu.addAction("View Details")
+        view_action.triggered.connect(lambda: self._on_jump_list_double_clicked(index))
+
+        menu.addSeparator()
+
+        tag_action = menu.addAction("🏷️ Tag Selected…")
+        tag_action.triggered.connect(self._tag_selected_jump_lists)
+
+        menu.exec(self.jl_table.viewport().mapToGlobal(pos))
+
+    def _tag_selected_jump_lists(self) -> None:
+        """Launch tagging dialog for selected Jump List entries."""
+        if not self.case_data or self.evidence_id is None:
+            QMessageBox.warning(self, "Tagging Unavailable", "Case data is not loaded.")
+            return
+
+        if not self.jl_model:
+            return
+
+        selection_model = self.jl_table.selectionModel()
+        if not selection_model:
+            return
+
+        selected_ids: list[int] = []
+        for index in selection_model.selectedRows():
+            row_data = self.jl_model.get_row_data(index.row())
+            if row_data and row_data.get("id") is not None:
+                selected_ids.append(int(row_data["id"]))
+
+        if not selected_ids:
+            QMessageBox.information(self, "No Selection", "Select at least one Jump List entry to tag.")
+            return
+
+        dialog = TagArtifactsDialog(
+            self.case_data, self.evidence_id, self.jl_model.ARTIFACT_TYPE, selected_ids, self
+        )
+        dialog.tags_changed.connect(self._on_jump_list_tags_changed)
+        dialog.exec()
+
+    def _on_jump_list_tags_changed(self) -> None:
+        """Refresh Jump Lists after tag changes."""
+        if self.case_data:
+            self.case_data.invalidate_filter_cache(self.evidence_id)
+        if self.jl_model:
+            self.jl_model.reload()
+        self._update_jump_lists_summary()
 
     def _export_registry_csv(self) -> None:
         """Export registry indicators to CSV."""

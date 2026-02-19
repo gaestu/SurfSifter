@@ -36,6 +36,7 @@ class JumpListsTableModel(QAbstractTableModel):
         "pin_status",
         "appid",
         "jumplist_path",
+        "tags",
     ]
 
     HEADERS = [
@@ -49,6 +50,7 @@ class JumpListsTableModel(QAbstractTableModel):
         "Pin Status",
         "App ID",
         "Jump List Path",
+        "Tags",
     ]
 
     # Column indexes
@@ -62,6 +64,7 @@ class JumpListsTableModel(QAbstractTableModel):
     COL_PIN_STATUS = 7
     COL_APPID = 8
     COL_PATH = 9
+    COL_TAGS = 10
 
     ARTIFACT_TYPE = "jump_list"
 
@@ -90,6 +93,7 @@ class JumpListsTableModel(QAbstractTableModel):
 
         # Data storage
         self._rows: List[Dict[str, Any]] = []
+        self._tag_map: Dict[int, str] = {}
 
         # Filters
         self._browser_filter: str = ""
@@ -145,10 +149,24 @@ class JumpListsTableModel(QAbstractTableModel):
 
             cursor = conn.execute(sql, params)
             self._rows = [dict(row) for row in cursor.fetchall()]
+            self._refresh_tags()
 
         except Exception as e:
             logger.error("Failed to load Jump Lists: %s", e)
             self._rows = []
+            self._tag_map = {}
+
+    def _refresh_tags(self) -> None:
+        """Refresh tag strings for current rows."""
+        if not self.case_data:
+            self._tag_map = {}
+            return
+        ids = [row.get("id") for row in self._rows if row.get("id") is not None]
+        self._tag_map = self.case_data.get_tag_strings_for_artifacts(
+            self.evidence_id,
+            self.ARTIFACT_TYPE,
+            ids,
+        )
 
     def reload(self) -> None:
         """Reload data from database."""
@@ -247,10 +265,9 @@ class JumpListsTableModel(QAbstractTableModel):
             if col == self.COL_URL:
                 return value or ""
             if col == self.COL_TARGET_PATH:
-                # Show just filename for compact display
-                if value:
-                    return value.replace("\\", "/").split("/")[-1]
-                return ""
+                return value or ""
+            if col == self.COL_TAGS:
+                return self._tag_map.get(record.get("id"), "") or ""
 
             return str(value) if value is not None else ""
 
@@ -269,6 +286,8 @@ class JumpListsTableModel(QAbstractTableModel):
                     return target_path
             if col == self.COL_PATH:
                 return record.get("jumplist_path", "")
+            if col == self.COL_TAGS:
+                return self._tag_map.get(record.get("id"), "") or ""
 
         return None
 

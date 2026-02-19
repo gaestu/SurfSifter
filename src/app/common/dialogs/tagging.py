@@ -86,6 +86,8 @@ class TagArtifactsDialog(QDialog):
             'local_storage': 'Local Storage Key',
             'session_storage': 'Session Storage Key',
             'installed_software': 'Installed Application',
+            'jump_list': 'Jump List Entry',
+            'jump_list_entry': 'Jump List Entry',
         }.get(self.artifact_type, 'Artifact')
 
         if count == 1:
