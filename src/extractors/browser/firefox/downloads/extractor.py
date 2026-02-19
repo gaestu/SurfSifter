@@ -955,6 +955,20 @@ class FirefoxDownloadsExtractor(BaseExtractor):
                         "content_type": download.mime_type,
                     })
 
+                # Also backfill referrer URL if present
+                if download.referrer and not download.referrer.startswith(("javascript:", "data:")):
+                    ref_parsed = urlparse(download.referrer)
+                    url_records.append({
+                        "url": download.referrer,
+                        "domain": ref_parsed.netloc or None,
+                        "scheme": ref_parsed.scheme or None,
+                        "discovered_by": discovered_by,
+                        "run_id": run_id,
+                        "source_path": source_path,
+                        "context": f"download_referrer:{browser}:{profile}",
+                        "first_seen_utc": download.start_time_utc,
+                    })
+
             # Cross-post URLs to unified urls table for analysis
             urls_crossposted = 0
             if url_records:
@@ -986,5 +1000,5 @@ class FirefoxDownloadsExtractor(BaseExtractor):
             "total": count,
             "complete": complete_count,
             "dangerous": dangerous_count,
-            "urls_crossposted": urls_crossposted if 'urls_crossposted' in dir() else 0,
+            "urls_crossposted": urls_crossposted,
         }

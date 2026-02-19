@@ -941,6 +941,20 @@ class ChromiumDownloadsExtractor(BaseExtractor):
                                 "context": f"download:{browser}:{profile}",
                                 "first_seen_utc": download.start_time_iso,
                             })
+
+                    # Also backfill referrer URL if present
+                    if download.referrer and not download.referrer.startswith(("javascript:", "data:")):
+                        ref_parsed = urlparse(download.referrer)
+                        url_records.append({
+                            "url": download.referrer,
+                            "domain": ref_parsed.netloc or None,
+                            "scheme": ref_parsed.scheme or None,
+                            "discovered_by": discovered_by,
+                            "run_id": run_id,
+                            "source_path": source_path,
+                            "context": f"download_referrer:{browser}:{profile}",
+                            "first_seen_utc": download.start_time_iso,
+                        })
                 except Exception as e:
                     LOGGER.debug("Failed to insert download: %s", e)
 
