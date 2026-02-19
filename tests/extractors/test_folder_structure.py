@@ -185,3 +185,4 @@ class TestMainExtractorsModuleExports:
         assert hasattr(browser.safari, 'SafariCookiesExtractor')
         assert hasattr(browser.safari, 'SafariBookmarksExtractor')
         assert hasattr(browser.safari, 'SafariDownloadsExtractor')
+        assert hasattr(browser.safari, 'SafariFaviconsExtractor')

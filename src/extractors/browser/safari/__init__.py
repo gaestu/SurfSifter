@@ -14,6 +14,7 @@ Exported Extractors:
 - SafariCookiesExtractor: Cookies from Cookies.binarycookies
 - SafariBookmarksExtractor: Bookmarks from Bookmarks.plist
 - SafariDownloadsExtractor: Downloads from Downloads.plist
+- SafariFaviconsExtractor: Favicons, touch icons, and template icon mappings
 - SafariSessionsExtractor: Open windows/tabs and recently closed tabs
 """
 
@@ -21,6 +22,7 @@ from .history import SafariHistoryExtractor
 from .cookies import SafariCookiesExtractor
 from .bookmarks import SafariBookmarksExtractor
 from .downloads import SafariDownloadsExtractor
+from .favicons import SafariFaviconsExtractor
 from .sessions import SafariSessionsExtractor
 from .cache import SafariCacheExtractor
 
@@ -29,6 +31,7 @@ __all__ = [
     "SafariCookiesExtractor",
     "SafariBookmarksExtractor",
     "SafariDownloadsExtractor",
+    "SafariFaviconsExtractor",
     "SafariSessionsExtractor",
     "SafariCacheExtractor",
 ]

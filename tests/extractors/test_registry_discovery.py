@@ -19,6 +19,7 @@ from extractors.browser.firefox.history import FirefoxHistoryExtractor
 from extractors.browser.safari.bookmarks import SafariBookmarksExtractor
 from extractors.browser.safari.cookies import SafariCookiesExtractor
 from extractors.browser.safari.downloads import SafariDownloadsExtractor
+from extractors.browser.safari.favicons import SafariFaviconsExtractor
 from extractors.browser.safari.history import SafariHistoryExtractor
 from extractors.carvers.bulk_extractor import BulkExtractorExtractor
 
@@ -51,6 +52,7 @@ EXPECTED_SAFARI = {
     "safari_cookies",
     "safari_bookmarks",
     "safari_downloads",
+    "safari_favicons",
 }
 
 REGISTRY_INSTANCES = [
@@ -67,6 +69,7 @@ REGISTRY_INSTANCES = [
     ("safari_bookmarks", SafariBookmarksExtractor),
     ("safari_cookies", SafariCookiesExtractor),
     ("safari_downloads", SafariDownloadsExtractor),
+    ("safari_favicons", SafariFaviconsExtractor),
     ("safari_history", SafariHistoryExtractor),
 ]
 

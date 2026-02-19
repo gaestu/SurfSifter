@@ -181,8 +181,11 @@ SAFARI_ARTIFACTS: Dict[str, SafariArtifactInfo] = {
         # Favicon and touch icon caches
         "patterns": [
             "Favicon Cache/*",
+            "Profiles/*/Favicon Cache/*",
             "Touch Icons Cache/*",
+            "Profiles/*/Touch Icons Cache/*",
             "Template Icons/*",
+            "Profiles/*/Template Icons/*",
         ],
         "root_type": "profile",
     },

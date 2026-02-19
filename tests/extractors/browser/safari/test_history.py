@@ -83,6 +83,13 @@ class TestSafariPatterns:
         assert len(patterns) > 0
         assert any("Downloads.plist" in p for p in patterns)
 
+    def test_get_patterns_favicons_include_profiles(self):
+        """Safari favicon patterns include Safari 17+ multi-profile roots."""
+        patterns = get_patterns("favicons")
+        assert any("Profiles/*/Favicon Cache/*" in p for p in patterns)
+        assert any("Profiles/*/Touch Icons Cache/*" in p for p in patterns)
+        assert any("Profiles/*/Template Icons/*" in p for p in patterns)
+
     def test_get_patterns_invalid_artifact(self):
         """get_patterns raises ValueError for unknown artifact."""
         with pytest.raises(ValueError, match="Unknown Safari artifact"):
