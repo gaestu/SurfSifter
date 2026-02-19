@@ -175,17 +175,26 @@ def _get_key_robust(hive, path: str):
 
     Raises:
         ValueError: If key not found
+
+    Note:
+        Always uses manual traversal for WOW6432Node paths because regipy's
+        hive.get_key() silently redirects WOW6432Node to the non-WOW path
+        (mimicking Windows WOW64 redirection), which is incorrect for forensics.
     """
     # Normalize path separators
     path = path.replace("/", "\\")
 
-    # Try direct access first
-    try:
-        return hive.get_key(path)
-    except Exception:
-        pass
+    # Check if this is a WOW6432Node path - skip fast path due to regipy redirect bug
+    is_wow64_path = path.lower().startswith("wow6432node")
 
-    # Try manual traversal (case-insensitive)
+    # Try direct access first (but not for WOW6432Node paths)
+    if not is_wow64_path:
+        try:
+            return hive.get_key(path)
+        except Exception:
+            pass
+
+    # Use manual traversal (case-insensitive) - required for WOW6432Node
     parts = [p for p in path.split("\\") if p]
     current_key = hive.root
 
