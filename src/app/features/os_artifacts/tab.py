@@ -12,6 +12,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QLineEdit,
+    QMenu,
     QPushButton,
     QTableView,
     QVBoxLayout,
@@ -21,6 +22,7 @@ from PySide6.QtWidgets import (
     QMessageBox,
 )
 
+from app.common.dialogs.tagging import TagArtifactsDialog
 from app.data.case_data import CaseDataAccess
 from app.features.os_artifacts.models import IndicatorsTableModel, JumpListsTableModel, InstalledSoftwareModel
 from core.logging import get_logger
@@ -161,8 +163,11 @@ class OSArtifactsTab(QWidget):
         self.sw_table = QTableView()
         self.sw_table.horizontalHeader().setStretchLastSection(True)
         self.sw_table.setSelectionBehavior(QTableView.SelectRows)
+        self.sw_table.setSelectionMode(QTableView.ExtendedSelection)
         self.sw_table.setSortingEnabled(True)
         self.sw_table.doubleClicked.connect(self._on_software_double_clicked)
+        self.sw_table.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.sw_table.customContextMenuRequested.connect(self._show_software_context_menu)
         software_layout.addWidget(self.sw_table)
 
         self.sw_summary_label = QLabel("No installed software loaded.")
@@ -628,3 +633,59 @@ class OSArtifactsTab(QWidget):
         except Exception as e:
             LOGGER.error(f"Export failed: {e}")
             QMessageBox.critical(self, "Export Error", f"Failed to export: {e}")
+
+    def _show_software_context_menu(self, pos) -> None:
+        """Show context menu for software table."""
+        index = self.sw_table.indexAt(pos)
+        if not index.isValid():
+            return
+
+        menu = QMenu(self)
+
+        # View details action
+        view_action = menu.addAction("View Details")
+        view_action.triggered.connect(lambda: self._on_software_double_clicked(index))
+
+        menu.addSeparator()
+
+        # Tag action
+        tag_action = menu.addAction("🏷️ Tag Selected…")
+        tag_action.triggered.connect(self._tag_selected_software)
+
+        menu.exec(self.sw_table.viewport().mapToGlobal(pos))
+
+    def _tag_selected_software(self) -> None:
+        """Launch tagging dialog for selected software entries."""
+        if not self.case_data or self.evidence_id is None:
+            QMessageBox.warning(self, "Tagging Unavailable", "Case data is not loaded.")
+            return
+
+        if not self.sw_model:
+            return
+
+        # Get selected IDs
+        selection_model = self.sw_table.selectionModel()
+        if not selection_model:
+            return
+
+        selected_ids = []
+        for index in selection_model.selectedRows():
+            row_data = self.sw_model.get_row_data(index.row())
+            if row_data and row_data.get("id") is not None:
+                selected_ids.append(int(row_data["id"]))
+
+        if not selected_ids:
+            QMessageBox.information(self, "No Selection", "Select at least one application to tag.")
+            return
+
+        dialog = TagArtifactsDialog(
+            self.case_data, self.evidence_id, "installed_software", selected_ids, self
+        )
+        dialog.tags_changed.connect(self._on_software_tags_changed)
+        dialog.exec()
+
+    def _on_software_tags_changed(self) -> None:
+        """Refresh after software tag changes."""
+        if self.case_data:
+            self.case_data.invalidate_filter_cache(self.evidence_id)
+        # No model refresh needed since tags don't affect displayed columns

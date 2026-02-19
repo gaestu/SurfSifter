@@ -85,6 +85,7 @@ class TagArtifactsDialog(QDialog):
             'media_playback': 'Media Playback',
             'local_storage': 'Local Storage Key',
             'session_storage': 'Session Storage Key',
+            'installed_software': 'Installed Application',
         }.get(self.artifact_type, 'Artifact')
 
         if count == 1:
