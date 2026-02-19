@@ -1,0 +1,178 @@
+{# Browser Downloads Module Template #}
+<div class="module-browser-downloads{% if shorten_urls %} shorten-urls{% endif %}">
+    {% if section_title %}
+    <h3 class="module-title">{{ section_title }}</h3>
+    {% endif %}
+
+    <table class="browser-downloads-table">
+        <thead>
+            <tr>
+                <th class="col-filename">{{ t.filename | default('Filename') }}</th>
+                <th class="col-url">{{ t.url | default('URL') }}</th>
+                {% if show_browser %}
+                <th class="col-browser">{{ t.browser | default('Browser') }}</th>
+                {% endif %}
+                {% if show_state %}
+                <th class="col-state">{{ t.state | default('State') }}</th>
+                {% endif %}
+                {% if show_size %}
+                <th class="col-size">{{ t.size | default('Size') }}</th>
+                {% endif %}
+                <th class="col-start-time">{{ t.start_time | default('Start Time') }}</th>
+                {% if show_end_time %}
+                <th class="col-end-time">{{ t.end_time | default('End Time') }}</th>
+                {% endif %}
+            </tr>
+        </thead>
+        <tbody>
+            {% for item in downloads %}
+            <tr>
+                <td class="col-filename" title="{{ item.filename }}">{{ item.filename }}</td>
+                <td class="col-url" title="{{ item.url }}">
+                    <span class="url-value">{{ item.url }}</span>
+                </td>
+                {% if show_browser %}
+                <td class="col-browser">{{ item.browser }}</td>
+                {% endif %}
+                {% if show_state %}
+                <td class="col-state">{{ item.state }}</td>
+                {% endif %}
+                {% if show_size %}
+                <td class="col-size">{{ item.size }}</td>
+                {% endif %}
+                <td class="col-start-time">{{ item.start_time }}</td>
+                {% if show_end_time %}
+                <td class="col-end-time">{{ item.end_time }}</td>
+                {% endif %}
+            </tr>
+            {% else %}
+            <tr>
+                <td colspan="{{ 3 + (1 if show_browser else 0) + (1 if show_state else 0) + (1 if show_size else 0) + (1 if show_end_time else 0) }}" class="empty-message">
+                    {{ t.no_downloads_found | default('No browser downloads found matching the filter criteria.') }}
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+
+    {% if is_truncated %}
+    <p class="truncation-info">
+        {{ t.showing_x_of_y | default('showing {shown} of {total}') | replace('{shown}', shown_count|string) | replace('{total}', total_count|string) }} {{ t.downloads | default('downloads') }}
+    </p>
+    {% endif %}
+
+    {% if show_filter_info %}
+    <p class="filter-info">
+        <strong>{{ t.filter | default('Filter') }}:</strong> {{ filter_description }}
+        <span class="entry-count">({{ total_count }} {{ t.downloads | default('downloads') }})</span>
+    </p>
+    {% endif %}
+</div>
+
+<style>
+.module-browser-downloads {
+    margin: 1em 0;
+}
+
+.module-browser-downloads .module-title {
+    margin: 0 0 0.5em 0;
+    font-size: 1.1em;
+    font-weight: 600;
+    color: #333;
+}
+
+.module-browser-downloads .filter-info {
+    margin-bottom: 0.5em;
+    color: #555;
+    font-size: 0.9em;
+}
+
+.module-browser-downloads .entry-count {
+    color: #888;
+}
+
+.module-browser-downloads .truncation-info {
+    margin-top: 0.75em;
+    margin-bottom: 0.5em;
+    color: #666;
+    font-size: 0.85em;
+    font-style: italic;
+}
+
+.browser-downloads-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.85em;
+    table-layout: fixed;
+}
+
+.browser-downloads-table th,
+.browser-downloads-table td {
+    border: 1px solid #ddd;
+    padding: 6px 8px;
+    text-align: left;
+    vertical-align: top;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.browser-downloads-table th {
+    background-color: #f5f5f5;
+    font-weight: 600;
+}
+
+.browser-downloads-table tbody tr:nth-child(even) {
+    background-color: #fafafa;
+}
+
+.browser-downloads-table tbody tr:hover {
+    background-color: #f0f7ff;
+}
+
+.browser-downloads-table .col-filename {
+    width: 18%;
+}
+
+.browser-downloads-table .col-url {
+    width: 34%;
+    word-break: break-all;
+}
+
+.browser-downloads-table .col-browser {
+    width: 8%;
+}
+
+.browser-downloads-table .col-state {
+    width: 10%;
+}
+
+.browser-downloads-table .col-size {
+    width: 8%;
+    white-space: nowrap;
+    text-align: right;
+}
+
+.browser-downloads-table .col-start-time,
+.browser-downloads-table .col-end-time {
+    width: 11%;
+    white-space: nowrap;
+}
+
+.module-browser-downloads.shorten-urls .browser-downloads-table .col-url {
+    word-break: normal;
+}
+
+.module-browser-downloads.shorten-urls .browser-downloads-table .col-url .url-value {
+    display: block;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.browser-downloads-table .empty-message {
+    text-align: center;
+    color: #888;
+    font-style: italic;
+    padding: 2em;
+}
+</style>

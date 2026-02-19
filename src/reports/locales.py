@@ -221,6 +221,15 @@ TRANSLATIONS: Dict[str, TranslationDict] = {
         "no_downloaded_images": "No downloaded images found matching the filter criteria.",
 
         # ===================
+        # Browser Downloads module
+        # ===================
+        "filename": "Filename",
+        "state": "State",
+        "start_time": "Start Time",
+        "end_time": "End Time",
+        "no_downloads_found": "No browser downloads found matching the filter criteria.",
+
+        # ===================
         # Tagged file list module
         # ===================
         "tagged_file_list_title": "File List",
@@ -379,6 +388,8 @@ TRANSLATIONS: Dict[str, TranslationDict] = {
         "sort_last_seen_oldest": "last seen oldest",
         "sort_url_az": "URL A-Z",
         "sort_url_za": "URL Z-A",
+        "sort_largest_first": "largest first",
+        "sort_smallest_first": "smallest first",
         "sort_domain_shortest_first": "domain shortest first",
         "sort_domain_longest_first": "domain longest first",
     },
@@ -585,6 +596,15 @@ TRANSLATIONS: Dict[str, TranslationDict] = {
         "no_downloaded_images": "Keine heruntergeladenen Bilder gefunden, die den Filterkriterien entsprechen.",
 
         # ===================
+        # Browser Downloads module
+        # ===================
+        "filename": "Dateiname",
+        "state": "Status",
+        "start_time": "Startzeit",
+        "end_time": "Endzeit",
+        "no_downloads_found": "Keine Browser-Downloads gefunden, die den Filterkriterien entsprechen.",
+
+        # ===================
         # Tagged file list module
         # ===================
         "tagged_file_list_title": "Dateiliste",
@@ -743,6 +763,8 @@ TRANSLATIONS: Dict[str, TranslationDict] = {
         "sort_last_seen_oldest": "zuletzt gesehen (älteste)",
         "sort_url_az": "URL A-Z",
         "sort_url_za": "URL Z-A",
+        "sort_largest_first": "grösste zuerst",
+        "sort_smallest_first": "kleinste zuerst",
         "sort_domain_shortest_first": "kürzeste Domain zuerst",
         "sort_domain_longest_first": "längste Domain zuerst",
     },

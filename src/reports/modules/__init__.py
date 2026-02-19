@@ -24,6 +24,7 @@ from .activity_summary import ActivitySummaryModule
 from .autofill import AutofillModule
 from .autofill_form_data import AutofillFormDataModule
 from .bookmarks import BookmarksModule
+from .browser_downloads import BrowserDownloadsModule
 from .browser_history import BrowserHistoryModule
 from .credentials import CredentialsModule
 from .downloaded_images import DownloadedImagesModule
@@ -47,6 +48,7 @@ __all__ = [
     "AutofillModule",
     "AutofillFormDataModule",
     "BookmarksModule",
+    "BrowserDownloadsModule",
     "BrowserHistoryModule",
     "CredentialsModule",
     "DownloadedImagesModule",
