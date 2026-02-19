@@ -1,22 +1,31 @@
 """
 System Jump Lists & Recent Items Extractor
 
-Windows Jump Lists and Recent Items extraction with StatisticsCollector integration.
+Windows Jump Lists and Related Shortcuts extraction with multi-partition support.
 
 Jump Lists contain "Recent" and "Frequent" items from taskbar applications:
 - For browsers: visited URLs that may survive history clearing
 - For other apps: recently opened files (Word docs, media files, etc.)
 
-Recent Items are standalone LNK shortcuts created when files are opened.
-
-Supported formats:
+Extracted artifact types:
 - AutomaticDestinations-ms: OLE compound files (recent/frequent items)
 - CustomDestinations-ms: Concatenated LNK files (pinned items)
-- Standalone .lnk files: Individual recent item shortcuts
+- Recent Items: Standalone .lnk files created when files are opened
+- Desktop Shortcuts: User-created or installed shortcuts on desktop
+- Taskbar Pinned: User-pinned applications to taskbar (shows intent)
+- Start Menu Pinned: User-pinned applications to Start Menu
+- Quick Launch: Legacy quick launch items
 
-Location: %APPDATA%/Microsoft/Windows/Recent/AutomaticDestinations/
-          %APPDATA%/Microsoft/Windows/Recent/CustomDestinations/
-          %APPDATA%/Microsoft/Windows/Recent/*.lnk
+Multi-partition support: Uses file_list table for discovery across ALL partitions
+in E01 images, with fallback to filesystem iteration for mounted paths.
+
+Location patterns:
+  %APPDATA%/Microsoft/Windows/Recent/AutomaticDestinations/
+  %APPDATA%/Microsoft/Windows/Recent/CustomDestinations/
+  %APPDATA%/Microsoft/Windows/Recent/*.lnk
+  %USERPROFILE%/Desktop/*.lnk
+  %APPDATA%/Microsoft/Internet Explorer/Quick Launch/User Pinned/TaskBar/*.lnk
+  %APPDATA%/Microsoft/Internet Explorer/Quick Launch/User Pinned/StartMenu/*.lnk
 """
 
 from __future__ import annotations
@@ -40,23 +49,118 @@ from .appid_registry import load_browser_appids, is_browser_jumplist, get_app_na
 from .ole_parser import parse_jumplist_file
 from .lnk_parser import extract_url_from_lnk, parse_lnk_data
 
+# Multi-partition discovery support
+from extractors._shared.file_list_discovery import (
+    discover_from_file_list,
+    open_partition_for_extraction,
+    get_ewf_paths_from_evidence_fs,
+    check_file_list_available,
+)
+
 LOGGER = logging.getLogger(__name__)
 
 
-# Path patterns for Jump List and Recent Item files
+# Source types for forensic categorization (used in pin_status)
+SOURCE_TYPE_JUMPLIST_AUTO = "jump_list_automatic"
+SOURCE_TYPE_JUMPLIST_CUSTOM = "jump_list_custom"
+SOURCE_TYPE_RECENT_ITEM = "recent_item"
+SOURCE_TYPE_DESKTOP = "desktop"
+SOURCE_TYPE_TASKBAR_PINNED = "taskbar_pinned"
+SOURCE_TYPE_START_MENU_PINNED = "start_menu_pinned"
+SOURCE_TYPE_QUICK_LAUNCH = "quick_launch"
+
+
+# Path patterns for Jump List, Recent Item, and other forensically valuable LNK files.
+# Each entry: (glob_pattern, source_type, file_list_path_pattern, file_list_filename_pattern)
+#
 # AutomaticDestinations = recent/frequent items (MRU/MFU)
 # CustomDestinations = user-pinned items (Tasks section)
-# Standalone .lnk = individual recent item shortcuts
+# Standalone .lnk = shortcuts created when files are opened or user-pinned items
 JUMPLIST_PATTERNS = [
+    # === Jump Lists (OLE containers) ===
     # AutomaticDestinations (recent/frequent)
-    "Users/*/AppData/Roaming/Microsoft/Windows/Recent/AutomaticDestinations/*.automaticDestinations-ms",
-    "Documents and Settings/*/Application Data/Microsoft/Windows/Recent/AutomaticDestinations/*.automaticDestinations-ms",
-    # CustomDestinations (pinned tasks) - different OLE structure but same forensic value
-    "Users/*/AppData/Roaming/Microsoft/Windows/Recent/CustomDestinations/*.customDestinations-ms",
-    "Documents and Settings/*/Application Data/Microsoft/Windows/Recent/CustomDestinations/*.customDestinations-ms",
-    # Standalone LNK files (Recent Items - created when any file is opened)
-    "Users/*/AppData/Roaming/Microsoft/Windows/Recent/*.lnk",
-    "Documents and Settings/*/Recent/*.lnk",
+    (
+        "Users/*/AppData/Roaming/Microsoft/Windows/Recent/AutomaticDestinations/*.automaticDestinations-ms",
+        SOURCE_TYPE_JUMPLIST_AUTO,
+        "%/Recent/AutomaticDestinations/%",
+        "%.automaticDestinations-ms",
+    ),
+    (
+        "Documents and Settings/*/Application Data/Microsoft/Windows/Recent/AutomaticDestinations/*.automaticDestinations-ms",
+        SOURCE_TYPE_JUMPLIST_AUTO,
+        "%/Recent/AutomaticDestinations/%",
+        "%.automaticDestinations-ms",
+    ),
+    # CustomDestinations (pinned tasks)
+    (
+        "Users/*/AppData/Roaming/Microsoft/Windows/Recent/CustomDestinations/*.customDestinations-ms",
+        SOURCE_TYPE_JUMPLIST_CUSTOM,
+        "%/Recent/CustomDestinations/%",
+        "%.customDestinations-ms",
+    ),
+    (
+        "Documents and Settings/*/Application Data/Microsoft/Windows/Recent/CustomDestinations/*.customDestinations-ms",
+        SOURCE_TYPE_JUMPLIST_CUSTOM,
+        "%/Recent/CustomDestinations/%",
+        "%.customDestinations-ms",
+    ),
+    
+    # === Recent Items (standalone LNK files) ===
+    # These are created when user opens any file
+    (
+        "Users/*/AppData/Roaming/Microsoft/Windows/Recent/*.lnk",
+        SOURCE_TYPE_RECENT_ITEM,
+        "%/Roaming/Microsoft/Windows/Recent/%.lnk",
+        "%.lnk",
+    ),
+    (
+        "Documents and Settings/*/Recent/*.lnk",
+        SOURCE_TYPE_RECENT_ITEM,
+        "%/Recent/%.lnk",
+        "%.lnk",
+    ),
+    
+    # === Desktop Shortcuts ===
+    # User-created or installed shortcuts on desktop (shows intent)
+    (
+        "Users/*/Desktop/*.lnk",
+        SOURCE_TYPE_DESKTOP,
+        "%/Desktop/%.lnk",
+        "%.lnk",
+    ),
+    (
+        "Users/Public/Desktop/*.lnk",
+        SOURCE_TYPE_DESKTOP,
+        "%/Public/Desktop/%.lnk",
+        "%.lnk",
+    ),
+    
+    # === Taskbar Pinned Items ===
+    # User-pinned applications to taskbar (shows intent)
+    (
+        "Users/*/AppData/Roaming/Microsoft/Internet Explorer/Quick Launch/User Pinned/TaskBar/*.lnk",
+        SOURCE_TYPE_TASKBAR_PINNED,
+        "%/User Pinned/TaskBar/%.lnk",
+        "%.lnk",
+    ),
+    
+    # === Start Menu Pinned Items ===
+    # User-pinned applications to Start Menu (shows intent)
+    (
+        "Users/*/AppData/Roaming/Microsoft/Internet Explorer/Quick Launch/User Pinned/StartMenu/*.lnk",
+        SOURCE_TYPE_START_MENU_PINNED,
+        "%/User Pinned/StartMenu/%.lnk",
+        "%.lnk",
+    ),
+    
+    # === Quick Launch Items ===
+    # Direct Quick Launch items (not in User Pinned subfolders)
+    (
+        "Users/*/AppData/Roaming/Microsoft/Internet Explorer/Quick Launch/*.lnk",
+        SOURCE_TYPE_QUICK_LAUNCH,
+        "%/Quick Launch/%.lnk",
+        "%.lnk",
+    ),
 ]
 
 
@@ -223,7 +327,15 @@ class SystemJumpListsExtractor(BaseExtractor):
 
         try:
             callbacks.on_step("Scanning for Jump List files")
-            jumplist_files = self._discover_jumplist_files(evidence_fs, callbacks)
+            
+            # Get evidence_conn for file_list discovery (multi-partition support)
+            evidence_conn = config.get("evidence_conn")
+            
+            jumplist_files = self._discover_jumplist_files(
+                evidence_fs, callbacks,
+                evidence_conn=evidence_conn,
+                evidence_id=evidence_id,
+            )
 
             if not jumplist_files:
                 manifest_data["status"] = "skipped"
@@ -232,31 +344,51 @@ class SystemJumpListsExtractor(BaseExtractor):
                 status = "success"  # Not finding files is not an error
             else:
                 callbacks.on_progress(0, len(jumplist_files), "Copying Jump List files")
+                
+                # Group files by partition for efficient multi-partition extraction
+                files_by_partition: Dict[int, List[Dict]] = {}
+                for file_info in jumplist_files:
+                    part_idx = file_info.get("partition_index")
+                    files_by_partition.setdefault(part_idx, []).append(file_info)
+                
+                # Get EWF paths for multi-partition support
+                ewf_paths = get_ewf_paths_from_evidence_fs(evidence_fs)
+                
+                file_idx = 0
+                for partition_idx, partition_files in files_by_partition.items():
+                    # Open partition (or use existing evidence_fs if partition_idx is None)
+                    with open_partition_for_extraction(
+                        ewf_paths if ewf_paths and partition_idx is not None else evidence_fs,
+                        partition_idx if ewf_paths else None
+                    ) as fs:
+                        for file_info in partition_files:
+                            if callbacks.is_cancelled():
+                                manifest_data["status"] = "cancelled"
+                                status = "cancelled"
+                                break
 
-                for i, file_info in enumerate(jumplist_files):
+                            try:
+                                file_idx += 1
+                                callbacks.on_progress(
+                                    file_idx, len(jumplist_files), f"Copying {file_info['filename']}"
+                                )
+
+                                extracted_file = self._extract_file(
+                                    fs,
+                                    file_info,
+                                    output_dir,
+                                    callbacks,
+                                )
+                                manifest_data["files"].append(extracted_file)
+
+                            except Exception as e:
+                                error_msg = f"Failed to extract {file_info['logical_path']}: {e}"
+                                LOGGER.error(error_msg, exc_info=True)
+                                manifest_data["notes"].append(error_msg)
+                                manifest_data["status"] = "partial"
+                    
                     if callbacks.is_cancelled():
-                        manifest_data["status"] = "cancelled"
-                        status = "cancelled"
                         break
-
-                    try:
-                        callbacks.on_progress(
-                            i + 1, len(jumplist_files), f"Copying {file_info['filename']}"
-                        )
-
-                        extracted_file = self._extract_file(
-                            evidence_fs,
-                            file_info,
-                            output_dir,
-                            callbacks,
-                        )
-                        manifest_data["files"].append(extracted_file)
-
-                    except Exception as e:
-                        error_msg = f"Failed to extract {file_info['logical_path']}: {e}"
-                        LOGGER.error(error_msg, exc_info=True)
-                        manifest_data["notes"].append(error_msg)
-                        manifest_data["status"] = "partial"
 
                 if manifest_data["status"] != "cancelled":
                     status = "success" if manifest_data["status"] == "ok" else "partial"
@@ -383,9 +515,9 @@ class SystemJumpListsExtractor(BaseExtractor):
                 callbacks.on_progress(i + 1, len(files), f"Parsing {file_entry['filename']}")
 
                 try:
-                    file_path = Path(file_entry["extracted_path"])
-                    if not file_path.is_absolute():
-                        file_path = output_dir / file_path
+                    # Always resolve path relative to output_dir (fixes portability when cases are moved)
+                    extracted_path = file_entry.get("extracted_path", file_entry.get("filename", ""))
+                    file_path = output_dir / Path(extracted_path).name
 
                     # Check if this is a browser Jump List
                     appid = file_entry.get("appid", "")
@@ -395,9 +527,22 @@ class SystemJumpListsExtractor(BaseExtractor):
                     # Log what we're processing
                     filename = file_entry['filename']
                     is_standalone_lnk = filename.lower().endswith('.lnk')
+                    source_type = file_entry.get("source_type", "")
+                    
+                    # Determine source description for logging
+                    source_desc_map = {
+                        SOURCE_TYPE_JUMPLIST_AUTO: f"{app_name} Jump List (Recent)",
+                        SOURCE_TYPE_JUMPLIST_CUSTOM: f"{app_name} Jump List (Pinned)",
+                        SOURCE_TYPE_RECENT_ITEM: "Recent Item",
+                        SOURCE_TYPE_DESKTOP: "Desktop Shortcut",
+                        SOURCE_TYPE_TASKBAR_PINNED: "Taskbar Pinned",
+                        SOURCE_TYPE_START_MENU_PINNED: "Start Menu Pinned",
+                        SOURCE_TYPE_QUICK_LAUNCH: "Quick Launch",
+                    }
+                    source_desc = source_desc_map.get(source_type, "LNK File")
 
                     if is_standalone_lnk:
-                        callbacks.on_log(f"Processing Recent Item: {filename}", "info")
+                        callbacks.on_log(f"Processing {source_desc}: {filename}", "info")
                     else:
                         callbacks.on_log(f"Processing {app_name} Jump List", "info")
 
@@ -458,17 +603,18 @@ class SystemJumpListsExtractor(BaseExtractor):
                             "lnk_modification_time": entry.get("modification_time"),
                             "lnk_access_time": entry.get("access_time"),
                             "access_count": entry.get("access_count"),
-                            "pin_status": entry.get("pin_status", "recent"),
+                            # pin_status: use source_type for LNK files, or entry pin_status for Jump Lists
+                            "pin_status": source_type if is_standalone_lnk else entry.get("pin_status", "recent"),
                             "run_id": run_id,
                             "source_path": file_entry["logical_path"],
                             "discovered_by": discovered_by,
+                            "partition_index": file_entry.get("partition_index"),
                         }
                         jl_records.append(jl_record)
 
                         # Add any valid URLs to the urls table (forensically valuable from any app)
                         if url:
                             domain = self._extract_domain(url)
-                            source_desc = "Recent Item" if is_standalone_lnk else f"{app_name} Jump List"
                             url_records.append({
                                 "url": url,
                                 "domain": domain,
@@ -537,35 +683,159 @@ class SystemJumpListsExtractor(BaseExtractor):
     def _discover_jumplist_files(
         self,
         evidence_fs,
-        callbacks: ExtractorCallbacks
+        callbacks: ExtractorCallbacks,
+        evidence_conn=None,
+        evidence_id: int = 1,
     ) -> List[Dict]:
-        """Scan evidence for Jump List files."""
+        """
+        Scan evidence for Jump List files with multi-partition support.
+        
+        Uses file_list table for fast discovery across ALL partitions.
+        Falls back to iter_paths if file_list is empty (e.g., mounted paths).
+        
+        Args:
+            evidence_fs: Evidence filesystem interface
+            callbacks: Progress callbacks
+            evidence_conn: Evidence database connection (for file_list query)
+            evidence_id: Evidence ID (for file_list query)
+        
+        Returns:
+            List of file info dicts with logical_path, filename, appid, user, 
+            source_type, and partition_index.
+        """
         jumplist_files = []
-
-        for pattern in JUMPLIST_PATTERNS:
+        seen_paths = set()  # Deduplicate across patterns
+        
+        # Try file_list discovery first (enables multi-partition support)
+        use_file_list = False
+        if evidence_conn is not None:
             try:
-                for path_str in evidence_fs.iter_paths(pattern):
-                    filename = path_str.split('/')[-1]
-
-                    # Extract AppID from filename (format: {appid}.automaticDestinations-ms)
-                    appid = filename.split('.')[0]
-
-                    # Extract user from path
-                    user = self._extract_user_from_path(path_str)
-
-                    jumplist_files.append({
-                        "logical_path": path_str,
-                        "filename": filename,
-                        "appid": appid,
-                        "user": user,
-                    })
-
-                    callbacks.on_log(f"Found Jump List: {filename}", "info")
-
+                available, count = check_file_list_available(evidence_conn, evidence_id)
+                if available:
+                    callbacks.on_log(f"Using file_list for discovery ({count} files indexed)", "info")
+                    use_file_list = True
+                else:
+                    callbacks.on_log("file_list empty, using filesystem scan", "info")
             except Exception as e:
-                LOGGER.debug("Pattern %s failed: %s", pattern, e)
-
+                LOGGER.debug("file_list check failed: %s", e)
+        
+        if use_file_list:
+            # Query file_list for each pattern type
+            for pattern, source_type, path_pattern, filename_pattern in JUMPLIST_PATTERNS:
+                try:
+                    result = discover_from_file_list(
+                        evidence_conn,
+                        evidence_id,
+                        filename_patterns=[filename_pattern],
+                        path_patterns=[path_pattern],
+                    )
+                    
+                    for match in result.get_all_matches():
+                        path_str = match.file_path
+                        
+                        # Filter paths more precisely using the glob pattern
+                        # path_pattern is a broad SQL LIKE pattern, need to verify
+                        if not self._matches_source_type(path_str, source_type):
+                            continue
+                        
+                        if path_str in seen_paths:
+                            continue
+                        seen_paths.add(path_str)
+                        
+                        filename = match.file_name
+                        appid = filename.split('.')[0] if not filename.lower().endswith('.lnk') else ""
+                        user = self._extract_user_from_path(path_str)
+                        
+                        jumplist_files.append({
+                            "logical_path": path_str,
+                            "filename": filename,
+                            "appid": appid,
+                            "user": user,
+                            "source_type": source_type,
+                            "partition_index": match.partition_index,
+                            "inode": match.inode,
+                        })
+                        
+                        callbacks.on_log(f"Found {source_type}: {filename}", "debug")
+                        
+                except Exception as e:
+                    LOGGER.debug("file_list query for %s failed: %s", source_type, e)
+            
+            if jumplist_files:
+                # Log partition distribution
+                partitions = set(f["partition_index"] for f in jumplist_files)
+                callbacks.on_log(
+                    f"Discovered {len(jumplist_files)} files across {len(partitions)} partition(s)",
+                    "info"
+                )
+        
+        # Fallback to iter_paths if file_list didn't find anything  
+        if not jumplist_files:
+            callbacks.on_log("Using filesystem scan for discovery", "info")
+            
+            for pattern, source_type, _, _ in JUMPLIST_PATTERNS:
+                try:
+                    for path_str in evidence_fs.iter_paths(pattern):
+                        if path_str in seen_paths:
+                            continue
+                        seen_paths.add(path_str)
+                        
+                        filename = path_str.split('/')[-1]
+                        appid = filename.split('.')[0] if not filename.lower().endswith('.lnk') else ""
+                        user = self._extract_user_from_path(path_str)
+                        
+                        jumplist_files.append({
+                            "logical_path": path_str,
+                            "filename": filename,
+                            "appid": appid,
+                            "user": user,
+                            "source_type": source_type,
+                            "partition_index": None,  # Unknown from iter_paths
+                        })
+                        
+                        callbacks.on_log(f"Found {source_type}: {filename}", "debug")
+                        
+                except Exception as e:
+                    LOGGER.debug("Pattern %s failed: %s", pattern, e)
+        
+        callbacks.on_log(f"Total: {len(jumplist_files)} Jump List files found", "info")
         return jumplist_files
+    
+    def _matches_source_type(self, path: str, source_type: str) -> bool:
+        """
+        Verify a path matches the expected source type.
+        
+        Used to filter file_list results more precisely since SQL LIKE
+        patterns can be overly broad.
+        """
+        path_lower = path.lower()
+        
+        if source_type == SOURCE_TYPE_JUMPLIST_AUTO:
+            return "/automaticdestinations/" in path_lower and path_lower.endswith(".automaticdestinations-ms")
+        elif source_type == SOURCE_TYPE_JUMPLIST_CUSTOM:
+            return "/customdestinations/" in path_lower and path_lower.endswith(".customdestinations-ms")
+        elif source_type == SOURCE_TYPE_RECENT_ITEM:
+            # Recent Items: in Recent folder but NOT in AutomaticDestinations or CustomDestinations
+            return (
+                "/recent/" in path_lower and 
+                path_lower.endswith(".lnk") and
+                "/automaticdestinations/" not in path_lower and
+                "/customdestinations/" not in path_lower
+            )
+        elif source_type == SOURCE_TYPE_DESKTOP:
+            return "/desktop/" in path_lower and path_lower.endswith(".lnk")
+        elif source_type == SOURCE_TYPE_TASKBAR_PINNED:
+            return "/user pinned/taskbar/" in path_lower and path_lower.endswith(".lnk")
+        elif source_type == SOURCE_TYPE_START_MENU_PINNED:
+            return "/user pinned/startmenu/" in path_lower and path_lower.endswith(".lnk")
+        elif source_type == SOURCE_TYPE_QUICK_LAUNCH:
+            # Quick Launch but NOT in User Pinned subfolders
+            return (
+                "/quick launch/" in path_lower and
+                path_lower.endswith(".lnk") and
+                "/user pinned/" not in path_lower
+            )
+        return True
 
     def _extract_user_from_path(self, path: str) -> str:
         """Extract Windows username from path."""
@@ -610,13 +880,16 @@ class SystemJumpListsExtractor(BaseExtractor):
                 "size_bytes": len(file_content),
                 "md5": md5,
                 "sha256": sha256,
-                "extracted_path": str(dest_path),
+                # Store relative path (filename only) for portability - absolute paths break when cases are moved
+                "extracted_path": filename,
                 "filename": filename,
                 "appid": file_info["appid"],
                 "user": file_info["user"],
                 "logical_path": source_path,
                 "is_browser": is_browser,
                 "browser": browser,
+                "source_type": file_info.get("source_type", ""),
+                "partition_index": file_info.get("partition_index"),
             }
 
         except Exception as e:
