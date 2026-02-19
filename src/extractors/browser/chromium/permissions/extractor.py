@@ -34,7 +34,7 @@ from ...._shared.file_list_discovery import (
     discover_from_file_list,
     check_file_list_available,
     glob_to_sql_like,
-    open_partition_for_extraction,
+    get_ewf_paths_from_evidence_fs,
 )
 from ...._shared.timestamps import webkit_to_datetime
 from ...._shared.extraction_warnings import ExtractionWarningCollector
@@ -207,15 +207,30 @@ class ChromiumPermissionsExtractor(BaseExtractor):
         else:
             callbacks.on_progress(0, total_files, "Copying Preferences files")
 
+            # Get EWF paths for opening other partitions
+            ewf_paths = get_ewf_paths_from_evidence_fs(evidence_fs)
+            current_partition = getattr(evidence_fs, 'partition_index', 0)
+
             file_index = 0
             for partition_index, files in files_by_partition.items():
-                # Get partition-specific filesystem
-                with open_partition_for_extraction(evidence_fs, partition_index) as partition_fs:
-                    if partition_fs is None:
-                        LOGGER.warning("Cannot open partition %s", partition_index)
-                        manifest_data["notes"].append(f"Failed to open partition {partition_index}")
+                # Determine which filesystem to use
+                if partition_index is None or partition_index == current_partition or ewf_paths is None:
+                    # Use existing filesystem handle
+                    fs_to_use = evidence_fs
+                    need_close = False
+                else:
+                    # Open partition-specific filesystem
+                    try:
+                        from core.evidence_fs import open_ewf_partition
+                        fs_to_use = open_ewf_partition(ewf_paths, partition_index=partition_index)
+                        need_close = True
+                        callbacks.on_log(f"Opened partition {partition_index} for extraction", "info")
+                    except Exception as e:
+                        LOGGER.warning("Cannot open partition %s: %s", partition_index, e)
+                        manifest_data["notes"].append(f"Failed to open partition {partition_index}: {e}")
                         continue
 
+                try:
                     for file_info in files:
                         if callbacks.is_cancelled():
                             manifest_data["status"] = "cancelled"
@@ -230,7 +245,7 @@ class ChromiumPermissionsExtractor(BaseExtractor):
 
                         try:
                             extracted_file = self._extract_file(
-                                partition_fs,
+                                fs_to_use,
                                 file_info,
                                 output_dir,
                                 callbacks,
@@ -243,6 +258,14 @@ class ChromiumPermissionsExtractor(BaseExtractor):
                             manifest_data["notes"].append(error_msg)
                             if stats:
                                 stats.report_failed(evidence_id, self.metadata.name, files=1)
+                finally:
+                    if need_close and fs_to_use is not None:
+                        try:
+                            close_method = getattr(fs_to_use, 'close', None)
+                            if close_method and callable(close_method):
+                                close_method()
+                        except Exception as e:
+                            LOGGER.debug("Error closing partition %s handle: %s", partition_index, e)
 
                 if callbacks.is_cancelled():
                     break
