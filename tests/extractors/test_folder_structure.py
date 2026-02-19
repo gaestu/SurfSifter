@@ -125,8 +125,10 @@ class TestBrowserFolderStillWorks:
             SafariCookiesExtractor,
             SafariBookmarksExtractor,
             SafariDownloadsExtractor,
+            SafariTopSitesExtractor,
         )
         assert hasattr(SafariHistoryExtractor, 'metadata')
+        assert hasattr(SafariTopSitesExtractor, 'metadata')
 
 
 class TestMainExtractorsModuleExports:
@@ -186,3 +188,4 @@ class TestMainExtractorsModuleExports:
         assert hasattr(browser.safari, 'SafariBookmarksExtractor')
         assert hasattr(browser.safari, 'SafariDownloadsExtractor')
         assert hasattr(browser.safari, 'SafariFaviconsExtractor')
+        assert hasattr(browser.safari, 'SafariTopSitesExtractor')

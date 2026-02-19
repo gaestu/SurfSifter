@@ -544,6 +544,85 @@ def get_download_stats(downloads: List[SafariDownload]) -> Dict[str, Any]:
 
 
 # =============================================================================
+# Top Sites Parsing
+# =============================================================================
+
+@dataclass
+class SafariTopSite:
+    """Safari top site record from TopSites.plist."""
+    url: str
+    title: str
+    rank: int
+    is_built_in: bool
+
+
+def parse_top_sites(file_path: Path) -> List[SafariTopSite]:
+    """
+    Parse Safari TopSites.plist file.
+
+    Supports known plist layouts:
+    - {"TopSites": [ ... ]}
+    - {"BannerList": [ ... ]}
+    - [ ... ] (root list fallback)
+    """
+    sites: List[SafariTopSite] = []
+
+    try:
+        with open(file_path, "rb") as f:
+            plist_data = plistlib.load(f)
+    except Exception:
+        return sites
+
+    entries: List[Any] = []
+    if isinstance(plist_data, dict):
+        for key in ("TopSites", "BannerList"):
+            value = plist_data.get(key)
+            if isinstance(value, list):
+                entries = value
+                break
+    elif isinstance(plist_data, list):
+        entries = plist_data
+
+    for rank, entry in enumerate(entries):
+        if not isinstance(entry, dict):
+            continue
+
+        url = str(entry.get("TopSiteURLString") or entry.get("URLString") or "").strip()
+        if not url:
+            continue
+
+        title = str(entry.get("TopSiteTitle") or entry.get("Title") or "").strip()
+        is_built_in = bool(entry.get("TopSiteIsBuiltIn", False))
+
+        sites.append(
+            SafariTopSite(
+                url=url,
+                title=title,
+                rank=rank,
+                is_built_in=is_built_in,
+            )
+        )
+
+    return sites
+
+
+def get_top_site_stats(sites: List[SafariTopSite]) -> Dict[str, Any]:
+    """Get statistics about parsed Safari top sites."""
+    if not sites:
+        return {
+            "total_sites": 0,
+            "unique_urls": 0,
+            "built_in_count": 0,
+        }
+
+    return {
+        "total_sites": len(sites),
+        "unique_urls": len({site.url for site in sites}),
+        "built_in_count": sum(1 for site in sites if site.is_built_in),
+    }
+
+
+# =============================================================================
 # Sessions Parsing
 # =============================================================================
 
