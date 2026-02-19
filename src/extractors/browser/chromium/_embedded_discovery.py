@@ -41,6 +41,17 @@ _ARTIFACT_SUFFIXES = {
     "cache": ["/cache/cache_data/index", "/cache/index"],
 }
 
+# Artifacts where patterns point to directories containing files
+# (e.g., LevelDB databases, extension folders) rather than single files
+_DIRECTORY_ARTIFACTS = frozenset({
+    "local_storage",
+    "session_storage",
+    "indexeddb",
+    "cache",
+    "extensions",  # Extensions/ directory contains extension subdirectories
+    "sync_data",   # Sync Data/ directory contains LevelDB subdirectory
+})
+
 
 @dataclass(frozen=True)
 class EmbeddedRoot:
@@ -263,11 +274,21 @@ def discover_artifacts_with_embedded_roots(
     Returns:
         Tuple of (merged FileListDiscoveryResult, discovered embedded roots)
     """
+    # For directory-based artifacts, ensure path patterns end with wildcard
+    # so they match files inside the directory
+    normalized_path_patterns = path_patterns
+    if path_patterns and artifact in _DIRECTORY_ARTIFACTS:
+        normalized_path_patterns = []
+        for p in path_patterns:
+            if not p.endswith('%'):
+                p = p.rstrip('/') + '/%'
+            normalized_path_patterns.append(p)
+
     base_result = discover_from_file_list(
         evidence_conn,
         evidence_id,
         filename_patterns=filename_patterns,
-        path_patterns=path_patterns,
+        path_patterns=normalized_path_patterns,
         exclude_deleted=True,
     )
 
@@ -280,7 +301,12 @@ def discover_artifacts_with_embedded_roots(
         embedded_patterns: List[str] = []
         for flat_profile in (False, True):
             for pattern in get_patterns_for_root(root.root_path, artifact, flat_profile=flat_profile):
-                embedded_patterns.append(glob_to_sql_like(pattern))
+                sql_pattern = glob_to_sql_like(pattern)
+                # For directory-based artifacts (storage, cache), ensure pattern
+                # ends with wildcard to match files inside directories
+                if artifact in _DIRECTORY_ARTIFACTS and not sql_pattern.endswith('%'):
+                    sql_pattern = sql_pattern.rstrip('/') + '/%'
+                embedded_patterns.append(sql_pattern)
 
         embedded_patterns = _dedupe_patterns(embedded_patterns)
         if not embedded_patterns:

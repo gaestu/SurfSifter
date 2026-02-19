@@ -175,6 +175,8 @@ def _build_storage_path_patterns(browsers: List[str], storage_type: str) -> List
             # Use the canonical patterns from _patterns.py
             artifact_patterns = get_patterns(browser, storage_type)
             for pattern in artifact_patterns:
+                # Note: trailing wildcard for directory artifacts is handled by
+                # discover_artifacts_with_embedded_roots based on _DIRECTORY_ARTIFACTS
                 patterns.add(glob_to_sql_like(pattern))
         except ValueError:
             # Artifact type not defined for this browser
