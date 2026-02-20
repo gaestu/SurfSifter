@@ -22,6 +22,7 @@ from ..base import (
     FilterType,
     ModuleMetadata,
 )
+from core.image_codecs import ensure_pillow_heif_registered
 from core.database.manager import slugify_label
 from reports.paths import get_module_template_dir
 
@@ -554,6 +555,7 @@ class ImagesModule(BaseReportModule):
             if not image_path or not image_path.exists():
                 return ""
 
+            ensure_pillow_heif_registered()
             # Open and create thumbnail
             with PILImage.open(image_path) as img:
                 # Convert to RGB if necessary (for PNG with transparency)

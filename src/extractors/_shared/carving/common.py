@@ -21,6 +21,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from PIL import Image
 
 from core.hashing import hash_file
+from core.image_codecs import ensure_pillow_heif_registered
 from core.manifest import validate_image_carving_manifest, ManifestValidationError
 from core.logging import get_logger
 
@@ -63,6 +64,7 @@ def verify_image(path: Path) -> Tuple[Optional[bool], Optional[str]]:
     if not path.exists():
         return None, "file missing"
     try:
+        ensure_pillow_heif_registered()
         with Image.open(path) as img:
             img.verify()
         return True, None

@@ -12,6 +12,7 @@ from typing import List, Optional, Set
 
 from PIL import Image
 
+from core.image_codecs import ensure_pillow_heif_registered
 from core.logging import get_logger
 from core.phash import compute_phash
 from ....image_signatures import detect_image_type
@@ -236,6 +237,7 @@ def _get_header_case_insensitive(headers: dict[str, str], target: str) -> Option
 
 def _get_dimensions(data: bytes) -> tuple[Optional[int], Optional[int]]:
     try:
+        ensure_pillow_heif_registered()
         with Image.open(BytesIO(data)) as img:
             return int(img.width), int(img.height)
     except Exception:

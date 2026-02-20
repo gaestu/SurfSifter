@@ -8,6 +8,18 @@ import pytest
 from PIL import Image
 
 from app.services import thumbnailer
+from core import image_codecs
+
+
+@pytest.fixture(autouse=True)
+def _reset_thumbnailer_and_codec_state() -> None:
+    thumbnailer._CACHE_INDEX.clear()
+    image_codecs._HEIF_REGISTERED = False
+    image_codecs._HEIF_INIT_DONE = False
+    yield
+    thumbnailer._CACHE_INDEX.clear()
+    image_codecs._HEIF_REGISTERED = False
+    image_codecs._HEIF_INIT_DONE = False
 
 
 def _write_jpeg(path: Path) -> None:

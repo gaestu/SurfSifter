@@ -969,6 +969,7 @@ class DownloadPostProcessTask(BaseTask):
     def run_task(self) -> Dict[str, Any]:
         import json
         from PIL import Image, UnidentifiedImageError
+        from core.image_codecs import ensure_pillow_heif_registered
         from core.phash import compute_phash
         from extractors._shared.carving.exif import extract_exif
         from app.services.thumbnailer import ensure_thumbnail
@@ -1025,6 +1026,7 @@ class DownloadPostProcessTask(BaseTask):
                 width: Optional[int] = None
                 height: Optional[int] = None
                 try:
+                    ensure_pillow_heif_registered()
                     with Image.open(file_path) as img:
                         width, height = img.size
                 except (UnidentifiedImageError, OSError):

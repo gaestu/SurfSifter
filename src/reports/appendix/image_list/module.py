@@ -18,6 +18,7 @@ from jinja2 import Environment, FileSystemLoader
 from ..base import BaseAppendixModule, FilterField, FilterType, ModuleMetadata
 from ...dates import format_datetime
 from ...paths import get_module_template_dir
+from core.image_codecs import ensure_pillow_heif_registered
 from core.database.manager import slugify_label
 
 # Try to import PIL for thumbnail generation
@@ -412,6 +413,7 @@ class AppendixImageListModule(BaseAppendixModule):
             if not image_path or not image_path.exists():
                 return ""
 
+            ensure_pillow_heif_registered()
             # Open and create thumbnail
             with PILImage.open(image_path) as img:
                 # Convert to RGB if necessary (for PNG with transparency)

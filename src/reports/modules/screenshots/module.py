@@ -24,6 +24,7 @@ from ..base import (
 from ...dates import format_datetime
 from ...locales import get_translations, DEFAULT_LOCALE
 from core.database.helpers import get_screenshots, get_sequences, get_screenshot_count
+from core.image_codecs import ensure_pillow_heif_registered
 from core.database.manager import slugify_label
 from reports.paths import get_module_template_dir
 
@@ -328,6 +329,7 @@ class ScreenshotsModule(BaseReportModule):
             return None
 
         try:
+            ensure_pillow_heif_registered()
             with PILImage.open(image_path) as img:
                 img.thumbnail(self.THUMB_SIZE, PILImage.Resampling.LANCZOS)
 

@@ -14,6 +14,7 @@ try:
 except ImportError:
     IMAGEHASH_AVAILABLE = False
 
+from .image_codecs import ensure_pillow_heif_registered
 from .logging import get_logger
 
 LOGGER = get_logger("core.phash")
@@ -39,6 +40,7 @@ def compute_phash(image_path_or_stream: Path | BinaryIO) -> Optional[str]:
         return None
 
     try:
+        ensure_pillow_heif_registered()
         img = Image.open(image_path_or_stream)
         # Use average hash - good balance of speed and accuracy
         phash = imagehash.average_hash(img)

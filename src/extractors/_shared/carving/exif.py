@@ -6,6 +6,7 @@ from typing import Dict, Optional
 from PIL import Image, UnidentifiedImageError
 from PIL.Image import DecompressionBombError
 
+from core.image_codecs import ensure_pillow_heif_registered
 from core.logging import get_logger
 
 LOGGER = get_logger("extractors._shared.carving.exif")
@@ -15,6 +16,7 @@ def extract_exif(path: Path) -> Dict[str, str]:
     """Extract a subset of EXIF metadata using Pillow."""
     metadata: Dict[str, str] = {}
     try:
+        ensure_pillow_heif_registered()
         with Image.open(path) as img:
             info = img.getexif()
             for tag, value in info.items():
@@ -27,6 +29,7 @@ def extract_exif(path: Path) -> Dict[str, str]:
 def generate_thumbnail(path: Path, out_path: Path, size: tuple[int, int] = (256, 256)) -> Optional[Path]:
     """Generate a thumbnail for the provided image."""
     try:
+        ensure_pillow_heif_registered()
         with Image.open(path) as img:
             img.thumbnail(size)
             img.save(out_path)

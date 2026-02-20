@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
+from core.image_codecs import ensure_pillow_heif_registered
 from core.phash import compute_phash
 
 
@@ -90,6 +91,7 @@ def _parse_raster_dimensions(data: bytes) -> tuple[Optional[int], Optional[int]]
     try:
         from PIL import Image
 
+        ensure_pillow_heif_registered()
         with Image.open(io.BytesIO(data)) as img:
             width, height = img.size
             return int(width), int(height)

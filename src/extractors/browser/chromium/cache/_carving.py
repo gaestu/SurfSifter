@@ -73,7 +73,9 @@ def carve_and_hash_image(
         try:
             from PIL import Image
             import imagehash
+            from core.image_codecs import ensure_pillow_heif_registered
 
+            ensure_pillow_heif_registered()
             img = Image.open(io.BytesIO(body))
             phash = str(imagehash.phash(img))
         except Exception as e:
@@ -141,7 +143,9 @@ def carve_blockfile_image(
         try:
             from PIL import Image
             import imagehash
+            from core.image_codecs import ensure_pillow_heif_registered
 
+            ensure_pillow_heif_registered()
             img = Image.open(io.BytesIO(body))
             phash = str(imagehash.phash(img))
         except Exception as e:

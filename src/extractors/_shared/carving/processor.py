@@ -22,6 +22,7 @@ from PIL import Image, UnidentifiedImageError
 from PIL.Image import DecompressionBombError
 
 from core.hashing import hash_file
+from core.image_codecs import ensure_pillow_heif_registered
 from core.phash import compute_phash
 from core.logging import get_logger
 from .exif import extract_exif, generate_thumbnail
@@ -71,6 +72,7 @@ def safe_probe_image(image_path: Path, max_pixels: int = DEFAULT_MAX_IMAGE_PIXEL
         DecompressionBombError if pixel count exceeds cap or Pillow detects bomb
         UnidentifiedImageError / OSError for unreadable files
     """
+    ensure_pillow_heif_registered()
     with Image.open(image_path) as img:
         width, height = img.size
         pixels = width * height
