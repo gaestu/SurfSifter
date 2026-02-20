@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "surfsifter"
-version = "v0.3.2-beta"
+version = "v0.3.3-beta"
 description = "SurfSifter — cross-platform, rule-driven forensic triage for browser evidence in EWF images."
 authors = ["gaestu <gaestu@users.noreply.github.com>"]
 maintainers = ["gaestu <gaestu@users.noreply.github.com>"]
