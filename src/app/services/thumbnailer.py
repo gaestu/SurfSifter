@@ -7,6 +7,8 @@ from typing import Optional, Tuple
 
 from PIL import Image
 
+from core.image_codecs import ensure_pillow_heif_registered
+
 
 MAX_CACHE_ITEMS = 200
 _CACHE_INDEX: "OrderedDict[str, Path]" = OrderedDict()
@@ -51,6 +53,7 @@ def ensure_thumbnail(image_path: Path, cache_dir: Path, size: Tuple[int, int] = 
             pass
 
     try:
+        ensure_pillow_heif_registered()
         with Image.open(image_path) as img:
             img.thumbnail(size)
             img.convert("RGB").save(thumb_path, format="JPEG")

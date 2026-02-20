@@ -100,13 +100,21 @@ hiddenimports = (
 # cannot trace them automatically.
 for _opt_mod in [
     "brotli", "zstandard", "olefile", "LnkParse3", "binarycookies",
-    "ccl_chromium_reader", "regipy", "tldextract",
+    "ccl_chromium_reader", "regipy", "tldextract", "pillow_heif",
 ]:
     try:
         __import__(_opt_mod)
         hiddenimports += collect_submodules(_opt_mod)
     except ImportError:
         pass
+
+# pillow-heif ships native libs that are needed for HEIC/HEIF decode at runtime.
+try:
+    __import__("pillow_heif")
+    binaries += collect_dynamic_libs("pillow_heif")
+    datas += collect_data_files("pillow_heif")
+except ImportError:
+    pass
 
 # tldextract ships a bundled TLD suffix snapshot as package data.
 try:

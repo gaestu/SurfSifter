@@ -150,7 +150,7 @@ python -m app.main
 - **Bulk extraction:** bulk_extractor for URLs, emails, domains, IPs, phone numbers, Bitcoin/Ethereum addresses
 - **Browser carver:** Deep-scan for carved browser SQLite databases (history/cookies) with raw URL extraction
 - **Image analysis:** Perceptual hash (pHash) clustering, duplicate detection, similarity search
-- **Format support:** JPEG, PNG, GIF, WebP, BMP, ICO, TIFF, SVG, AVIF, HEIC
+- **Format support:** JPEG, PNG, GIF, WebP, BMP, ICO, TIFF, SVG, AVIF, HEIC/HEIF
 - **Metadata:** EXIF extraction, thumbnail generation, sparse file detection
 
 ### System Artifacts
@@ -201,7 +201,7 @@ The installer handles distro package mapping and tool verification.
 
 **Python packages** (auto-installed by Poetry):
 - Python ≥3.10, <3.14
-- PySide6, pytsk3, libewf-python, Pillow, imagehash, WeasyPrint, regipy
+- PySide6, pytsk3, libewf-python, Pillow, pillow-heif, imagehash, WeasyPrint, regipy
 
 ### Bundled Python Dependencies
 All artifact-parsing libraries are installed automatically:
@@ -210,6 +210,10 @@ All artifact-parsing libraries are installed automatically:
 - binarycookies (Safari support)
 - ccl-chromium-reader (browser storage databases)
 - libesedb-python (IE/Edge ESE parsing)
+- pillow-heif (HEIC/HEIF decoding for image thumbnail previews)
+
+If HEIC/HEIF previews are missing, confirm `pillow-heif` can load in your runtime
+environment (especially packaged builds with native codec libraries).
 
 ### External Tools (Optional)
 Discovered automatically on `PATH`:
