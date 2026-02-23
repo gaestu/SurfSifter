@@ -232,3 +232,6 @@ vendor/wheels/*.whl
 
 # Test artifacts
 test_input.txt
+
+#local settings
+config/settings.json

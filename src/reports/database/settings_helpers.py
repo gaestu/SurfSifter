@@ -56,6 +56,15 @@ def _ensure_settings_table(conn: sqlite3.Connection) -> None:
         ("collapsed_branding", "INTEGER NOT NULL DEFAULT 1"),
         ("collapsed_appendix", "INTEGER NOT NULL DEFAULT 1"),
         ("title", "TEXT"),
+        # New fields for title page customization
+        ("branding_department", "TEXT"),
+        ("show_title_case_number", "INTEGER NOT NULL DEFAULT 1"),
+        ("show_title_evidence", "INTEGER NOT NULL DEFAULT 1"),
+        ("show_title_investigator", "INTEGER NOT NULL DEFAULT 1"),
+        ("show_title_date", "INTEGER NOT NULL DEFAULT 1"),
+        ("show_footer_date", "INTEGER NOT NULL DEFAULT 1"),
+        ("footer_evidence_label", "TEXT"),
+        ("hide_appendix_page_numbers", "INTEGER NOT NULL DEFAULT 0"),
     ]
 
     for col_name, col_def in migrations:
@@ -94,6 +103,7 @@ def get_report_settings(
             author_name,
             author_date,
             branding_org_name,
+            branding_department,
             branding_footer_text,
             branding_logo_path,
             locale,
@@ -102,6 +112,13 @@ def get_report_settings(
             collapsed_author,
             collapsed_branding,
             collapsed_appendix,
+            show_title_case_number,
+            show_title_evidence,
+            show_title_investigator,
+            show_title_date,
+            show_footer_date,
+            footer_evidence_label,
+            hide_appendix_page_numbers,
             updated_at_utc
         FROM report_settings
         WHERE evidence_id = ?
@@ -119,15 +136,23 @@ def get_report_settings(
         "author_name": row[2],
         "author_date": row[3],
         "branding_org_name": row[4],
-        "branding_footer_text": row[5],
-        "branding_logo_path": row[6],
-        "locale": row[7],
-        "date_format": row[8],
-        "collapsed_title": bool(row[9]),
-        "collapsed_author": bool(row[10]),
-        "collapsed_branding": bool(row[11]),
-        "collapsed_appendix": bool(row[12]),
-        "updated_at_utc": row[13],
+        "branding_department": row[5],
+        "branding_footer_text": row[6],
+        "branding_logo_path": row[7],
+        "locale": row[8],
+        "date_format": row[9],
+        "collapsed_title": bool(row[10]),
+        "collapsed_author": bool(row[11]),
+        "collapsed_branding": bool(row[12]),
+        "collapsed_appendix": bool(row[13]),
+        "show_title_case_number": bool(row[14]) if row[14] is not None else True,
+        "show_title_evidence": bool(row[15]) if row[15] is not None else True,
+        "show_title_investigator": bool(row[16]) if row[16] is not None else True,
+        "show_title_date": bool(row[17]) if row[17] is not None else True,
+        "show_footer_date": bool(row[18]) if row[18] is not None else True,
+        "footer_evidence_label": row[19],
+        "hide_appendix_page_numbers": bool(row[20]) if row[20] is not None else False,
+        "updated_at_utc": row[21],
     }
 
 
@@ -139,6 +164,7 @@ def save_report_settings(
     author_name: Optional[str] = None,
     author_date: Optional[str] = None,
     branding_org_name: Optional[str] = None,
+    branding_department: Optional[str] = None,
     branding_footer_text: Optional[str] = None,
     branding_logo_path: Optional[str] = None,
     locale: str = "en",
@@ -147,6 +173,13 @@ def save_report_settings(
     collapsed_author: bool = True,
     collapsed_branding: bool = True,
     collapsed_appendix: bool = True,
+    show_title_case_number: bool = True,
+    show_title_evidence: bool = True,
+    show_title_investigator: bool = True,
+    show_title_date: bool = True,
+    show_footer_date: bool = True,
+    footer_evidence_label: Optional[str] = None,
+    hide_appendix_page_numbers: bool = False,
 ) -> None:
     """
     Save report settings for an evidence (upsert).
@@ -159,6 +192,7 @@ def save_report_settings(
         author_name: Author name
         author_date: Author date (ISO format or dd.mm.yyyy)
         branding_org_name: Organization name
+        branding_department: Department name
         branding_footer_text: Footer text
         branding_logo_path: Path to logo (relative to case folder)
         locale: Report locale ("en" or "de")
@@ -167,6 +201,13 @@ def save_report_settings(
         collapsed_author: Whether author section is collapsed
         collapsed_branding: Whether branding section is collapsed
         collapsed_appendix: Whether appendix section is collapsed
+        show_title_case_number: Show case number on title page
+        show_title_evidence: Show evidence on title page
+        show_title_investigator: Show investigator on title page
+        show_title_date: Show date on title page
+        show_footer_date: Show generation date in footer
+        footer_evidence_label: Custom evidence label for footer
+        hide_appendix_page_numbers: Hide page numbers in appendix
     """
     _ensure_settings_table(conn)
 
@@ -182,6 +223,7 @@ def save_report_settings(
             author_name,
             author_date,
             branding_org_name,
+            branding_department,
             branding_footer_text,
             branding_logo_path,
             locale,
@@ -190,8 +232,15 @@ def save_report_settings(
             collapsed_author,
             collapsed_branding,
             collapsed_appendix,
+            show_title_case_number,
+            show_title_evidence,
+            show_title_investigator,
+            show_title_date,
+            show_footer_date,
+            footer_evidence_label,
+            hide_appendix_page_numbers,
             updated_at_utc
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             evidence_id,
@@ -200,6 +249,7 @@ def save_report_settings(
             author_name or None,
             author_date or None,
             branding_org_name or None,
+            branding_department or None,
             branding_footer_text or None,
             branding_logo_path or None,
             locale,
@@ -208,6 +258,13 @@ def save_report_settings(
             int(collapsed_author),
             int(collapsed_branding),
             int(collapsed_appendix),
+            int(show_title_case_number),
+            int(show_title_evidence),
+            int(show_title_investigator),
+            int(show_title_date),
+            int(show_footer_date),
+            footer_evidence_label or None,
+            int(hide_appendix_page_numbers),
             now,
         )
     )

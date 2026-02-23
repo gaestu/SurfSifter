@@ -23,6 +23,7 @@ from PySide6.QtWidgets import (
     QListWidget,
     QListWidgetItem,
     QComboBox,
+    QCheckBox,
     QSizePolicy,
 )
 from PySide6.QtCore import Qt, QDate, Signal
@@ -238,7 +239,7 @@ class ReportTabWidget(QWidget):
         group_layout.addLayout(date_layout)
 
     def _build_branding_section(self, group_layout: QVBoxLayout) -> None:
-        """Build the branding options section (org name, footer, logo).
+        """Build the branding options section (org name, department, footer, logo).
 
         Args:
             group_layout: Layout to add widgets to
@@ -252,9 +253,20 @@ class ReportTabWidget(QWidget):
         org_layout.addWidget(org_label)
 
         self._branding_org_input = QLineEdit()
-        self._branding_org_input.setPlaceholderText("Organization name (appears on title page)...")
+        self._branding_org_input.setPlaceholderText("Organization name (appears on title page, bold)...")
         org_layout.addWidget(self._branding_org_input)
         group_layout.addLayout(org_layout)
+
+        # Department row
+        dept_layout = QHBoxLayout()
+        dept_label = QLabel("Department:")
+        dept_label.setFixedWidth(90)
+        dept_layout.addWidget(dept_label)
+
+        self._branding_dept_input = QLineEdit()
+        self._branding_dept_input.setPlaceholderText("Department name (appears below org, not bold)...")
+        dept_layout.addWidget(self._branding_dept_input)
+        group_layout.addLayout(dept_layout)
 
         # Footer text row
         footer_layout = QHBoxLayout()
@@ -289,6 +301,63 @@ class ReportTabWidget(QWidget):
         logo_layout.addWidget(self._branding_logo_clear_btn)
 
         group_layout.addLayout(logo_layout)
+
+        # --- Separator ---
+        sep = QFrame()
+        sep.setFrameShape(QFrame.HLine)
+        sep.setFrameShadow(QFrame.Sunken)
+        group_layout.addWidget(sep)
+
+        # --- Title Page Field Visibility ---
+        tp_label = QLabel("Title Page Fields:")
+        tp_label.setStyleSheet("font-weight: 600; margin-top: 4px;")
+        group_layout.addWidget(tp_label)
+
+        tp_row1 = QHBoxLayout()
+        self._show_case_number_cb = QCheckBox("Case Number")
+        self._show_case_number_cb.setChecked(True)
+        tp_row1.addWidget(self._show_case_number_cb)
+
+        self._show_evidence_cb = QCheckBox("Evidence")
+        self._show_evidence_cb.setChecked(True)
+        tp_row1.addWidget(self._show_evidence_cb)
+
+        self._show_investigator_cb = QCheckBox("Investigator")
+        self._show_investigator_cb.setChecked(True)
+        tp_row1.addWidget(self._show_investigator_cb)
+
+        self._show_date_cb = QCheckBox("Date")
+        self._show_date_cb.setChecked(True)
+        tp_row1.addWidget(self._show_date_cb)
+        tp_row1.addStretch()
+        group_layout.addLayout(tp_row1)
+
+        # --- Footer & Appendix Options ---
+        opts_label = QLabel("Footer / Appendix:")
+        opts_label.setStyleSheet("font-weight: 600; margin-top: 4px;")
+        group_layout.addWidget(opts_label)
+
+        opts_row = QHBoxLayout()
+        self._show_footer_date_cb = QCheckBox("Show creation date in footer")
+        self._show_footer_date_cb.setChecked(True)
+        opts_row.addWidget(self._show_footer_date_cb)
+
+        self._hide_appendix_pg_cb = QCheckBox("Hide page numbers in appendix")
+        self._hide_appendix_pg_cb.setChecked(False)
+        opts_row.addWidget(self._hide_appendix_pg_cb)
+        opts_row.addStretch()
+        group_layout.addLayout(opts_row)
+
+        # Footer evidence label override
+        ev_layout = QHBoxLayout()
+        ev_label = QLabel("Evidence label\n(header):")
+        ev_label.setFixedWidth(90)
+        ev_layout.addWidget(ev_label)
+
+        self._footer_evidence_input = QLineEdit()
+        self._footer_evidence_input.setPlaceholderText("Override evidence label in page header (optional)...")
+        ev_layout.addWidget(self._footer_evidence_input)
+        group_layout.addLayout(ev_layout)
 
     def _on_browse_logo(self) -> None:
         """Handle logo browse button click - copy logo to workspace."""
@@ -506,13 +575,33 @@ class ReportTabWidget(QWidget):
 
         # Set branding info from UI fields
         branding_org = self._branding_org_input.text().strip()
+        branding_dept = self._branding_dept_input.text().strip()
         branding_footer = self._branding_footer_input.text().strip()
         branding_logo = self._branding_logo_input.text().strip()
 
         builder.set_branding(
             org_name=branding_org if branding_org else None,
+            department=branding_dept if branding_dept else None,
             footer_text=branding_footer if branding_footer else None,
             logo_path=branding_logo if branding_logo else None,
+        )
+
+        # Set title page field visibility
+        builder.set_title_page_options(
+            show_case_number=self._show_case_number_cb.isChecked(),
+            show_evidence=self._show_evidence_cb.isChecked(),
+            show_investigator=self._show_investigator_cb.isChecked(),
+            show_date=self._show_date_cb.isChecked(),
+        )
+
+        # Set footer & appendix options
+        footer_ev = self._footer_evidence_input.text().strip()
+        builder.set_footer_options(
+            show_footer_date=self._show_footer_date_cb.isChecked(),
+            footer_evidence_label=footer_ev if footer_ev else None,
+        )
+        builder.set_appendix_options(
+            hide_page_numbers=self._hide_appendix_pg_cb.isChecked(),
         )
 
         builder.load_sections_from_db()
@@ -1088,8 +1177,20 @@ class ReportTabWidget(QWidget):
 
         # Branding section
         self._branding_org_input.textChanged.connect(self._on_settings_changed)
+        self._branding_dept_input.textChanged.connect(self._on_settings_changed)
         self._branding_footer_input.textChanged.connect(self._on_settings_changed)
         # Logo path changes are handled in _on_browse_logo and _on_clear_logo
+
+        # Title page field visibility checkboxes
+        self._show_case_number_cb.stateChanged.connect(self._on_settings_changed)
+        self._show_evidence_cb.stateChanged.connect(self._on_settings_changed)
+        self._show_investigator_cb.stateChanged.connect(self._on_settings_changed)
+        self._show_date_cb.stateChanged.connect(self._on_settings_changed)
+
+        # Footer / appendix options
+        self._show_footer_date_cb.stateChanged.connect(self._on_settings_changed)
+        self._hide_appendix_pg_cb.stateChanged.connect(self._on_settings_changed)
+        self._footer_evidence_input.textChanged.connect(self._on_settings_changed)
 
         # Preferences
         self._locale_combo.currentIndexChanged.connect(self._on_settings_changed)
@@ -1158,6 +1259,11 @@ class ReportTabWidget(QWidget):
         elif defaults.get("default_org_name"):
             self._branding_org_input.setText(defaults["default_org_name"])
 
+        if settings.get("branding_department"):
+            self._branding_dept_input.setText(settings["branding_department"])
+        elif defaults.get("default_department"):
+            self._branding_dept_input.setText(defaults["default_department"])
+
         if settings.get("branding_footer_text"):
             self._branding_footer_input.setText(settings["branding_footer_text"])
         elif defaults.get("default_footer_text"):
@@ -1178,6 +1284,18 @@ class ReportTabWidget(QWidget):
                     self._branding_logo_input.setText(str(full_path))
             elif Path(logo_path).is_absolute() and Path(logo_path).exists():
                 self._branding_logo_input.setText(logo_path)
+
+        # Title page field visibility
+        self._show_case_number_cb.setChecked(settings.get("show_title_case_number", True))
+        self._show_evidence_cb.setChecked(settings.get("show_title_evidence", True))
+        self._show_investigator_cb.setChecked(settings.get("show_title_investigator", True))
+        self._show_date_cb.setChecked(settings.get("show_title_date", True))
+
+        # Footer / appendix options
+        self._show_footer_date_cb.setChecked(settings.get("show_footer_date", True))
+        self._hide_appendix_pg_cb.setChecked(settings.get("hide_appendix_page_numbers", False))
+        if settings.get("footer_evidence_label"):
+            self._footer_evidence_input.setText(settings["footer_evidence_label"])
 
         # Preferences
         locale = settings.get("locale", DEFAULT_LOCALE)
@@ -1215,6 +1333,8 @@ class ReportTabWidget(QWidget):
         # Branding section
         if defaults.get("default_org_name"):
             self._branding_org_input.setText(defaults["default_org_name"])
+        if defaults.get("default_department"):
+            self._branding_dept_input.setText(defaults["default_department"])
         if defaults.get("default_footer_text"):
             self._branding_footer_input.setText(defaults["default_footer_text"])
         if defaults.get("default_logo_path"):
@@ -1263,6 +1383,7 @@ class ReportTabWidget(QWidget):
             author_name=self._author_name_input.text().strip() or None,
             author_date=author_date if author_date else None,
             branding_org_name=self._branding_org_input.text().strip() or None,
+            branding_department=self._branding_dept_input.text().strip() or None,
             branding_footer_text=self._branding_footer_input.text().strip() or None,
             branding_logo_path=logo_path or None,
             locale=self._locale_combo.currentData() or DEFAULT_LOCALE,
@@ -1271,6 +1392,13 @@ class ReportTabWidget(QWidget):
             collapsed_author=self._author_group.is_collapsed(),
             collapsed_branding=self._branding_group.is_collapsed(),
             collapsed_appendix=self._appendix_group.is_collapsed(),
+            show_title_case_number=self._show_case_number_cb.isChecked(),
+            show_title_evidence=self._show_evidence_cb.isChecked(),
+            show_title_investigator=self._show_investigator_cb.isChecked(),
+            show_title_date=self._show_date_cb.isChecked(),
+            show_footer_date=self._show_footer_date_cb.isChecked(),
+            footer_evidence_label=self._footer_evidence_input.text().strip() or None,
+            hide_appendix_page_numbers=self._hide_appendix_pg_cb.isChecked(),
         )
 
     def _copy_logo_to_workspace(self, source_path: str) -> Optional[str]:

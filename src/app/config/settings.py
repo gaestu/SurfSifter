@@ -95,6 +95,7 @@ class ReportSettings:
 
     # Default branding
     default_org_name: str = ""
+    default_department: str = ""
     default_footer_text: str = ""
     default_logo_path: str = ""  # Relative to config dir (e.g., "branding/logo.png")
 
@@ -146,6 +147,7 @@ class AppSettings:
 
 
 def settings_path(base_dir: Path) -> Path:
+    import shutil
     import sys
     if getattr(sys, 'frozen', False):
         # Frozen binary: write settings to a persistent user config directory,
@@ -154,4 +156,10 @@ def settings_path(base_dir: Path) -> Path:
     else:
         config_dir = base_dir / "config"
     config_dir.mkdir(parents=True, exist_ok=True)
-    return config_dir / "settings.json"
+    settings_file = config_dir / "settings.json"
+    if not settings_file.exists():
+        # Seed from shipped defaults template (tracked in version control)
+        defaults_file = config_dir / "settings.defaults.json"
+        if defaults_file.exists():
+            shutil.copy2(defaults_file, settings_file)
+    return settings_file

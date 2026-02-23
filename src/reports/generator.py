@@ -79,8 +79,19 @@ class ReportData:
     date_format: str = "eu"  # "eu" for dd.mm.yyyy, "us" for mm/dd/yyyy
     # Branding fields
     branding_org_name: Optional[str] = None
+    branding_department: Optional[str] = None
     branding_footer_text: Optional[str] = None
     branding_logo_path: Optional[str] = None
+    # Title page field visibility
+    show_title_case_number: bool = True
+    show_title_evidence: bool = True
+    show_title_investigator: bool = True
+    show_title_date: bool = True
+    # Footer options
+    show_footer_date: bool = True
+    footer_evidence_label: Optional[str] = None  # Override evidence label in footer
+    # Appendix options
+    hide_appendix_page_numbers: bool = False
 
     def __post_init__(self):
         if not self.generation_date:
@@ -146,13 +157,15 @@ class ReportBuilder:
     def set_branding(
         self,
         org_name: Optional[str] = None,
+        department: Optional[str] = None,
         footer_text: Optional[str] = None,
         logo_path: Optional[str] = None,
     ) -> "ReportBuilder":
         """Set branding fields for the report.
 
         Args:
-            org_name: Organization name (displayed on title page)
+            org_name: Organization name (displayed on title page, bold)
+            department: Department name (displayed on title page below org, not bold)
             footer_text: Footer text (displayed on all pages)
             logo_path: Path to logo image file
 
@@ -161,10 +174,70 @@ class ReportBuilder:
         """
         if org_name is not None:
             self._data.branding_org_name = org_name
+        if department is not None:
+            self._data.branding_department = department
         if footer_text is not None:
             self._data.branding_footer_text = footer_text
         if logo_path is not None:
             self._data.branding_logo_path = logo_path
+        return self
+
+    def set_title_page_options(
+        self,
+        show_case_number: bool = True,
+        show_evidence: bool = True,
+        show_investigator: bool = True,
+        show_date: bool = True,
+    ) -> "ReportBuilder":
+        """Set which metadata fields appear on the title page.
+
+        Args:
+            show_case_number: Show case number on title page
+            show_evidence: Show evidence label on title page
+            show_investigator: Show investigator on title page
+            show_date: Show date on title page
+
+        Returns:
+            self for method chaining
+        """
+        self._data.show_title_case_number = show_case_number
+        self._data.show_title_evidence = show_evidence
+        self._data.show_title_investigator = show_investigator
+        self._data.show_title_date = show_date
+        return self
+
+    def set_footer_options(
+        self,
+        show_footer_date: bool = True,
+        footer_evidence_label: Optional[str] = None,
+    ) -> "ReportBuilder":
+        """Set footer display options.
+
+        Args:
+            show_footer_date: Whether to show the generation date in the footer
+            footer_evidence_label: Custom evidence label for footer (overrides default)
+
+        Returns:
+            self for method chaining
+        """
+        self._data.show_footer_date = show_footer_date
+        if footer_evidence_label is not None:
+            self._data.footer_evidence_label = footer_evidence_label
+        return self
+
+    def set_appendix_options(
+        self,
+        hide_page_numbers: bool = False,
+    ) -> "ReportBuilder":
+        """Set appendix display options.
+
+        Args:
+            hide_page_numbers: Hide page numbers on appendix pages
+
+        Returns:
+            self for method chaining
+        """
+        self._data.hide_appendix_page_numbers = hide_page_numbers
         return self
 
     def set_date_format(self, date_format: str) -> "ReportBuilder":
@@ -483,8 +556,19 @@ class ReportBuilder:
             author_date_formatted=self._format_author_date(),
             # Branding
             branding_org_name=self._data.branding_org_name,
+            branding_department=self._data.branding_department,
             branding_footer_text=self._data.branding_footer_text,
             branding_logo_path=self._data.branding_logo_path,
+            # Title page field visibility
+            show_title_case_number=self._data.show_title_case_number,
+            show_title_evidence=self._data.show_title_evidence,
+            show_title_investigator=self._data.show_title_investigator,
+            show_title_date=self._data.show_title_date,
+            # Footer options
+            show_footer_date=self._data.show_footer_date,
+            footer_evidence_label=self._data.footer_evidence_label,
+            # Appendix options
+            hide_appendix_page_numbers=self._data.hide_appendix_page_numbers,
         )
 
     def get_data(self) -> ReportData:
