@@ -29,6 +29,7 @@ from .browser_history import BrowserHistoryModule
 from .credentials import CredentialsModule
 from .downloaded_images import DownloadedImagesModule
 from .images import ImagesModule
+from .jump_lists import JumpListsModule
 from .screenshots import ScreenshotsModule
 from .site_engagement import SiteEngagementModule
 from .system_summary import SystemSummaryModule
@@ -53,6 +54,7 @@ __all__ = [
     "CredentialsModule",
     "DownloadedImagesModule",
     "ImagesModule",
+    "JumpListsModule",
     "ScreenshotsModule",
     "SiteEngagementModule",
     "SystemSummaryModule",

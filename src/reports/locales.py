@@ -36,6 +36,7 @@ TRANSLATIONS: Dict[str, TranslationDict] = {
         "case_number": "Case Number",
         "evidence": "Evidence",
         "investigator": "Investigator",
+        "department": "Department",
         "notes": "Notes",
 
         # Author section
@@ -293,6 +294,20 @@ TRANSLATIONS: Dict[str, TranslationDict] = {
         "no_web_storage_sites": "No web storage sites found matching the filter criteria.",
 
         # ===================
+        # Jump Lists module
+        # ===================
+        "jl_application": "Application",
+        "jl_path": "Path",
+        "jl_title": "Title",
+        "jl_access_time": "Access Time",
+        "jl_creation_time": "Creation Time",
+        "jl_pin_status": "Pin Status",
+        "jl_url": "URL",
+        "jl_jumplist_path": "Jump List Path",
+        "jl_entries": "entries",
+        "no_jump_lists_found": "No jump list entries found matching the filter criteria.",
+
+        # ===================
         # Bookmarks module
         # ===================
         "bookmarks_title": "Bookmarks",
@@ -411,6 +426,7 @@ TRANSLATIONS: Dict[str, TranslationDict] = {
         "case_number": "Fallnummer",
         "evidence": "Asservat",
         "investigator": "Ermittler",
+        "department": "Abteilung",
         "notes": "Notizen",
 
         # Author section
@@ -666,6 +682,20 @@ TRANSLATIONS: Dict[str, TranslationDict] = {
         "web_storage_entries": "Einträge",
         "no_web_storage_entries": "Keine Speichereinträge gefunden.",
         "no_web_storage_sites": "Keine Web-Storage-Seiten gefunden, die den Filterkriterien entsprechen.",
+
+        # ===================
+        # Jump Lists module
+        # ===================
+        "jl_application": "Anwendung",
+        "jl_path": "Pfad",
+        "jl_title": "Titel",
+        "jl_access_time": "Zugriffszeit",
+        "jl_creation_time": "Erstellungszeit",
+        "jl_pin_status": "Anheftstatus",
+        "jl_url": "URL",
+        "jl_jumplist_path": "Sprunglisten-Pfad",
+        "jl_entries": "Einträge",
+        "no_jump_lists_found": "Keine Sprunglisten-Einträge gefunden, die den Filterkriterien entsprechen.",
 
         # ===================
         # Bookmarks module

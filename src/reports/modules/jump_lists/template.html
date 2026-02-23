@@ -1,0 +1,207 @@
+{# Jump Lists Module Template #}
+<div class="module-jump-lists">
+    {% if section_title %}
+    <h3 class="module-title">{{ section_title }}</h3>
+    {% endif %}
+
+    <table class="jump-lists-table">
+        <thead>
+            <tr>
+                <th class="col-app">{{ t.jl_application | default('Application') }}</th>
+                <th class="col-path">{{ t.jl_path | default('Path') }}</th>
+                <th class="col-title">{{ t.jl_title | default('Title') }}</th>
+                <th class="col-access-time">{{ t.jl_access_time | default('Access Time') }}</th>
+                <th class="col-creation-time">{{ t.jl_creation_time | default('Creation Time') }}</th>
+                <th class="col-pin-status">{{ t.jl_pin_status | default('Pin Status') }}</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for entry in entries %}
+            <tr class="entry-main{% if loop.index0 % 2 == 0 %} entry-even{% endif %}">
+                <td class="col-app">{{ entry.application }}</td>
+                <td class="col-path">{{ entry.target_path }}</td>
+                <td class="col-title">{{ entry.title }}</td>
+                <td class="col-access-time">{{ entry.access_time }}</td>
+                <td class="col-creation-time">{{ entry.creation_time }}</td>
+                <td class="col-pin-status">{{ entry.pin_status }}</td>
+            </tr>
+            {% if entry.url or entry.jumplist_path %}
+            <tr class="entry-detail{% if loop.index0 % 2 == 0 %} entry-even{% endif %}">
+                <td colspan="6" class="detail-cell">
+                    {% if entry.url %}
+                    <span class="detail-label">{{ t.jl_url | default('URL') }}:</span>
+                    <span class="detail-value">{{ entry.url }}</span>
+                    {% endif %}
+                    {% if entry.url and entry.jumplist_path %}
+                    <span class="detail-separator">&nbsp;&bull;&nbsp;</span>
+                    {% endif %}
+                    {% if entry.jumplist_path %}
+                    <span class="detail-label">{{ t.jl_jumplist_path | default('Jump List Path') }}:</span>
+                    <span class="detail-value">{{ entry.jumplist_path }}</span>
+                    {% endif %}
+                </td>
+            </tr>
+            {% endif %}
+            {% else %}
+            <tr>
+                <td colspan="6" class="empty-message">
+                    {{ t.no_jump_lists_found | default('No jump list entries found matching the filter criteria.') }}
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+
+    {% if is_truncated %}
+    <p class="truncation-info">
+        {{ t.showing_x_of_y | default('showing {shown} of {total}') | replace('{shown}', shown_count|string) | replace('{total}', total_count|string) }} {{ t.jl_entries | default('entries') }}
+    </p>
+    {% endif %}
+
+    {% if show_filter_info %}
+    <p class="filter-info">
+        <strong>{{ t.filter | default('Filter') }}:</strong> {{ filter_description }}
+        <span class="entry-count">({{ total_count }} {{ t.jl_entries | default('entries') }})</span>
+    </p>
+    {% endif %}
+</div>
+
+<style>
+.module-jump-lists {
+    margin: 1em 0;
+}
+
+.module-jump-lists .module-title {
+    margin: 0 0 0.75em 0;
+    font-size: 1.1em;
+    font-weight: 600;
+    color: #333;
+}
+
+.module-jump-lists .filter-info {
+    margin-bottom: 0.5em;
+    color: #555;
+    font-size: 0.9em;
+}
+
+.module-jump-lists .entry-count {
+    color: #888;
+}
+
+.module-jump-lists .truncation-info {
+    margin-top: 0.75em;
+    margin-bottom: 0.5em;
+    color: #666;
+    font-size: 0.85em;
+    font-style: italic;
+}
+
+.jump-lists-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.85em;
+    table-layout: fixed;
+}
+
+.jump-lists-table th,
+.jump-lists-table td {
+    border: 1px solid #ddd;
+    padding: 6px 8px;
+    text-align: left;
+    vertical-align: top;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.jump-lists-table th {
+    background-color: #f5f5f5;
+    font-weight: 600;
+}
+
+.jump-lists-table tbody tr.entry-main.entry-even {
+    background-color: #fafafa;
+}
+
+.jump-lists-table tbody tr.entry-main:hover {
+    background-color: #f0f7ff;
+}
+
+/* Column widths */
+.jump-lists-table .col-app {
+    width: 22%;
+}
+
+.jump-lists-table .col-path {
+    width: 22%;
+}
+
+.jump-lists-table .col-title {
+    width: 16%;
+}
+
+.jump-lists-table .col-access-time {
+    width: 14%;
+    white-space: nowrap;
+}
+
+.jump-lists-table .col-creation-time {
+    width: 14%;
+    white-space: nowrap;
+}
+
+.jump-lists-table .col-pin-status {
+    width: 12%;
+}
+
+/* Detail row styling */
+.jump-lists-table tr.entry-detail td {
+    border-top: none;
+    padding-top: 2px;
+    padding-bottom: 6px;
+    background-color: #f9f9f9;
+    font-size: 0.92em;
+}
+
+.jump-lists-table tr.entry-detail.entry-even td {
+    background-color: #f3f3f3;
+}
+
+.jump-lists-table .detail-cell {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.jump-lists-table .detail-label {
+    color: #888;
+    font-weight: 500;
+}
+
+.jump-lists-table .detail-value {
+    color: #555;
+    word-break: break-all;
+}
+
+.jump-lists-table .detail-separator {
+    color: #ccc;
+}
+
+/* Empty message */
+.jump-lists-table .empty-message {
+    text-align: center;
+    color: #888;
+    font-style: italic;
+    padding: 2em;
+}
+
+/* Print styles */
+@media print {
+    .jump-lists-table {
+        font-size: 0.8em;
+    }
+
+    .jump-lists-table tr.entry-detail td {
+        font-size: 0.85em;
+    }
+}
+</style>
