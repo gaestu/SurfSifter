@@ -73,9 +73,16 @@ def parse_jumplist_ole(filepath: Path) -> List[Dict[str, Any]]:
                 if lnk_info:
                     lnk_info["entry_id"] = str(stream_id)
 
-                    # Add DestList metadata if available
+                    # Merge DestList metadata if available
                     if stream_id in destlist_data:
-                        lnk_info.update(destlist_data[stream_id])
+                        dl = destlist_data[stream_id]
+                        # Preserve LNK header timestamps separately —
+                        # DestList access_time is the Windows-level "last used" time,
+                        # which is different from the LNK's target file timestamps.
+                        lnk_info["destlist_access_time"] = dl.get("access_time")
+                        lnk_info["access_count"] = dl.get("access_count")
+                        lnk_info["pin_status"] = dl.get("pin_status")
+                        lnk_info["destlist_path"] = dl.get("destlist_path")
 
                     entries.append(lnk_info)
 
@@ -98,7 +105,7 @@ def _parse_destlist(ole) -> Dict[int, Dict[str, Any]]:
     - Offset 8: Number of pinned entries (4 bytes)
     - Offset 12-31: Various counters and unknowns
 
-    Entry record format for Windows 10/11 (version 4-6):
+    Entry record format for Windows 10/11 (version 3+):
     Fixed header is 128 bytes:
     - Checksum (8 bytes) at +0
     - DROID GUIDs (64 bytes) at +8 through +71
@@ -109,7 +116,11 @@ def _parse_destlist(ole) -> Dict[int, Dict[str, Any]]:
     - Pin status (4 bytes) at +108
     - Counter/unknown (4 bytes) at +112
     - Unknown (12 bytes) at +116
-    - Path starts at +128 (UTF-16LE null-terminated)
+    Variable part:
+    - String length in characters (2 bytes uint16 LE) at +128
+    - UTF-16LE path string (str_len * 2 bytes) at +130
+    - Null terminator + trailing (4 bytes) after string
+    Total entry size = 130 + str_len * 2 + 4
 
     Entry record format for Windows 7/8 (version 1-2):
     Fixed header is 130 bytes (different layout).
@@ -151,8 +162,8 @@ def _parse_destlist(ole) -> Dict[int, Dict[str, Any]]:
 
         for _ in range(num_entries):
             if version >= 3:
-                # Windows 10/11 format - 128 byte fixed header
-                if offset + 128 > len(data):
+                # Windows 10/11 format - 128 byte fixed header + variable path
+                if offset + 130 > len(data):
                     break
 
                 entry_id = struct.unpack_from('<I', data, offset + 88)[0]
@@ -160,19 +171,31 @@ def _parse_destlist(ole) -> Dict[int, Dict[str, Any]]:
                 access_filetime = struct.unpack_from('<Q', data, offset + 100)[0]
                 pin_value = struct.unpack_from('<I', data, offset + 108)[0]
 
-                # Find null-terminated path starting at offset + 128
-                path_start = offset + 128
-                path_end = path_start
-                while path_end + 1 < len(data):
-                    if data[path_end:path_end+2] == b'\x00\x00':
-                        break
-                    path_end += 2
+                # String length in characters at offset + 128
+                str_len_chars = struct.unpack_from('<H', data, offset + 128)[0]
 
-                path_len = path_end - path_start
+                # Validate string length to avoid reading garbage
+                max_chars = (len(data) - offset - 130) // 2
+                if str_len_chars > max_chars or str_len_chars > 4096:
+                    LOGGER.warning(
+                        "DestList entry at offset %d has implausible string length %d, stopping",
+                        offset, str_len_chars,
+                    )
+                    break
 
-                # Calculate entry size: 128 byte header + path + 2 null bytes + padding to 4-byte boundary
-                raw_size = 128 + path_len + 2
-                entry_size = (raw_size + 3) & ~3  # Round up to 4-byte boundary
+                # Extract the path string (UTF-16LE) at offset + 130
+                destlist_path = None
+                path_data_len = str_len_chars * 2
+                if str_len_chars > 0:
+                    try:
+                        destlist_path = data[offset + 130:offset + 130 + path_data_len].decode('utf-16-le')
+                    except (UnicodeDecodeError, ValueError):
+                        pass
+
+                # Entry size: 130 (128 header + 2 str_len field)
+                #           + str_len * 2 (path bytes)
+                #           + 4 (null terminator + trailing bytes)
+                entry_size = 130 + path_data_len + 4
 
                 # Convert score to access count (it's a float representing frequency)
                 access_count = int(score) if 0 <= score < 100000 else None
@@ -185,8 +208,16 @@ def _parse_destlist(ole) -> Dict[int, Dict[str, Any]]:
                 access_filetime = struct.unpack_from('<Q', data, offset + 100)[0]
                 pin_value = struct.unpack_from('<I', data, offset + 108)[0]
                 access_count = struct.unpack_from('<I', data, offset + 116)[0]
-                path_len = struct.unpack_from('<H', data, offset + 128)[0]
-                entry_size = 130 + path_len
+                path_len_bytes = struct.unpack_from('<H', data, offset + 128)[0]
+                entry_size = 130 + path_len_bytes
+
+                # Extract path for Win7/8 format
+                destlist_path = None
+                if path_len_bytes > 0:
+                    try:
+                        destlist_path = data[offset + 130:offset + 130 + path_len_bytes].decode('utf-16-le')
+                    except (UnicodeDecodeError, ValueError):
+                        pass
 
             # Convert FILETIME to ISO8601
             access_time = None
@@ -204,6 +235,7 @@ def _parse_destlist(ole) -> Dict[int, Dict[str, Any]]:
                 "access_count": access_count,
                 "access_time": access_time,
                 "pin_status": pin_status,
+                "destlist_path": destlist_path,
             }
 
             offset += entry_size

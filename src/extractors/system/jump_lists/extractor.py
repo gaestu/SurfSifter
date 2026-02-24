@@ -601,7 +601,12 @@ class SystemJumpListsExtractor(BaseExtractor):
                             "title": title,
                             "lnk_creation_time": entry.get("creation_time"),
                             "lnk_modification_time": entry.get("modification_time"),
-                            "lnk_access_time": entry.get("access_time"),
+                            # Prefer DestList access_time (Windows-level "last used")
+                            # when available; fall back to LNK header access_time
+                            "lnk_access_time": (
+                                entry.get("destlist_access_time")
+                                or entry.get("access_time")
+                            ),
                             "access_count": entry.get("access_count"),
                             # pin_status: use source_type for LNK files, or entry pin_status for Jump Lists
                             "pin_status": source_type if is_standalone_lnk else entry.get("pin_status", "recent"),
