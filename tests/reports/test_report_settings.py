@@ -232,26 +232,20 @@ class TestSaveReportSettings:
         save_report_settings(
             db_conn,
             evidence_id=1,
-            collapsed_title=True,
-            collapsed_author=False,
-            collapsed_branding=True,
+            collapsed_settings=True,
             collapsed_appendix=False,
         )
 
         result = get_report_settings(db_conn, evidence_id=1)
-        assert result["collapsed_title"] is True
-        assert result["collapsed_author"] is False
-        assert result["collapsed_branding"] is True
+        assert result["collapsed_settings"] is True
         assert result["collapsed_appendix"] is False
 
     def test_defaults_for_collapsed_states(self, db_conn):
-        """Defaults: title expanded, others collapsed."""
+        """Defaults: settings expanded, appendix collapsed."""
         save_report_settings(db_conn, evidence_id=1)
 
         result = get_report_settings(db_conn, evidence_id=1)
-        assert result["collapsed_title"] is False  # expanded by default
-        assert result["collapsed_author"] is True  # collapsed by default
-        assert result["collapsed_branding"] is True  # collapsed by default
+        assert result["collapsed_settings"] is False  # expanded by default
         assert result["collapsed_appendix"] is True  # collapsed by default
 
     def test_collapsed_states_are_booleans(self, db_conn):
@@ -259,13 +253,12 @@ class TestSaveReportSettings:
         save_report_settings(
             db_conn,
             evidence_id=1,
-            collapsed_title=True,
-            collapsed_author=False,
+            collapsed_settings=True,
         )
 
         result = get_report_settings(db_conn, evidence_id=1)
-        assert isinstance(result["collapsed_title"], bool)
-        assert isinstance(result["collapsed_author"], bool)
+        assert isinstance(result["collapsed_settings"], bool)
+        assert isinstance(result["collapsed_appendix"], bool)
 
 
 class TestDeleteReportSettings:
@@ -359,9 +352,7 @@ class TestTableCreation:
 
         # Should have default collapsed values
         assert result is not None
-        assert result["collapsed_title"] is False  # default 0
-        assert result["collapsed_author"] is True  # default 1
-        assert result["collapsed_branding"] is True  # default 1
+        assert result["collapsed_settings"] is False  # default 0
         assert result["collapsed_appendix"] is True  # default 1
         assert result["author_name"] == "Test"  # existing data preserved
 

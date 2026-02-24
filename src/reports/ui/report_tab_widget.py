@@ -99,33 +99,27 @@ class ReportTabWidget(QWidget):
         self._connect_auto_save_signals()
 
     def _setup_ui(self) -> None:
-        """Setup the report tab UI."""
+        """Setup the report tab UI.
+
+        Three sections:
+        1. Report Settings (collapsible) — title, language, branding, author
+        2. Custom Sections (not collapsible) — main work area
+        3. Appendix (collapsible) — appendix modules
+        """
         layout = QVBoxLayout(self)
         layout.setContentsMargins(16, 16, 16, 16)
         layout.setSpacing(8)
 
-        # Title section (collapsible)
-        self._title_group = CollapsibleGroupBox("Report Title", collapsed=False)
-        self._build_title_section(self._title_group.content_layout())
-        self._title_group.collapsed_changed.connect(self._on_collapse_changed)
-        layout.addWidget(self._title_group)
+        # Report Settings section (collapsible, expanded by default)
+        self._settings_group = CollapsibleGroupBox("Report Settings", collapsed=False)
+        self._build_settings_section(self._settings_group.content_layout())
+        self._settings_group.collapsed_changed.connect(self._on_collapse_changed)
+        layout.addWidget(self._settings_group)
 
         # Custom sections area (NOT collapsible - main work area)
         sections_group = self._build_sections_area()
         sections_group.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         layout.addWidget(sections_group, 1)  # Give it stretch
-
-        # Author/signature section (collapsible, collapsed by default)
-        self._author_group = CollapsibleGroupBox("Report Created By", collapsed=True)
-        self._build_author_section(self._author_group.content_layout())
-        self._author_group.collapsed_changed.connect(self._on_collapse_changed)
-        layout.addWidget(self._author_group)
-
-        # Branding section (collapsible, collapsed by default)
-        self._branding_group = CollapsibleGroupBox("Branding (Optional)", collapsed=True)
-        self._build_branding_section(self._branding_group.content_layout())
-        self._branding_group.collapsed_changed.connect(self._on_collapse_changed)
-        layout.addWidget(self._branding_group)
 
         # Appendix section (collapsible, collapsed by default)
         self._appendix_group = CollapsibleGroupBox("Appendix", collapsed=True)
@@ -137,18 +131,40 @@ class ReportTabWidget(QWidget):
         buttons_layout = self._build_generation_buttons()
         layout.addLayout(buttons_layout)
 
-    def _build_title_section(self, group_layout: QVBoxLayout) -> None:
-        """Build the report title input section with language selector.
+    def _make_sub_heading(self, text: str) -> QLabel:
+        """Create a styled sub-heading label for section groups."""
+        label = QLabel(text)
+        label.setStyleSheet("font-weight: 600; font-size: 10pt; margin-top: 4px;")
+        return label
+
+    def _make_separator(self) -> QFrame:
+        """Create a horizontal separator line."""
+        sep = QFrame()
+        sep.setFrameShape(QFrame.HLine)
+        sep.setFrameShadow(QFrame.Sunken)
+        return sep
+
+    def _build_settings_section(self, group_layout: QVBoxLayout) -> None:
+        """Build the unified report settings section.
+
+        Contains sub-groups separated by horizontal lines:
+        - Title & Language
+        - Branding (org, department, logo, footer)
+        - Report Created By (author info)
+        - Options (title page field visibility, footer/appendix toggles)
 
         Args:
             group_layout: Layout to add widgets to
         """
         group_layout.setSpacing(8)
 
+        # ── Title & Language ──
+        group_layout.addWidget(self._make_sub_heading("Title & Language"))
+
         # Title row
         title_row = QHBoxLayout()
         label = QLabel("Title:")
-        label.setFixedWidth(70)
+        label.setFixedWidth(90)
         title_row.addWidget(label)
 
         self._title_input = QLineEdit()
@@ -159,14 +175,13 @@ class ReportTabWidget(QWidget):
         # Language row
         lang_row = QHBoxLayout()
         lang_label = QLabel("Language:")
-        lang_label.setFixedWidth(70)
+        lang_label.setFixedWidth(90)
         lang_row.addWidget(lang_label)
 
         self._locale_combo = QComboBox()
         for locale_code in SUPPORTED_LOCALES:
             display_name = LOCALE_NAMES.get(locale_code, locale_code)
             self._locale_combo.addItem(display_name, locale_code)
-        # Set default locale
         default_index = self._locale_combo.findData(DEFAULT_LOCALE)
         if default_index >= 0:
             self._locale_combo.setCurrentIndex(default_index)
@@ -179,13 +194,12 @@ class ReportTabWidget(QWidget):
         # Date format row
         date_fmt_row = QHBoxLayout()
         date_fmt_label = QLabel("Date Format:")
-        date_fmt_label.setFixedWidth(70)
+        date_fmt_label.setFixedWidth(90)
         date_fmt_row.addWidget(date_fmt_label)
 
         self._date_format_combo = QComboBox()
         self._date_format_combo.addItem("European (dd.mm.yyyy)", "eu")
         self._date_format_combo.addItem("US (mm/dd/yyyy)", "us")
-        # Default to European
         self._date_format_combo.setCurrentIndex(0)
         self._date_format_combo.setToolTip("Select date format for report")
         self._date_format_combo.setFixedWidth(150)
@@ -193,58 +207,9 @@ class ReportTabWidget(QWidget):
         date_fmt_row.addStretch()
         group_layout.addLayout(date_fmt_row)
 
-    def _build_author_section(self, group_layout: QVBoxLayout) -> None:
-        """Build the Report Created By section with function, name, and date fields.
-
-        Args:
-            group_layout: Layout to add widgets to
-        """
-        group_layout.setSpacing(8)
-
-        # Function row
-        func_layout = QHBoxLayout()
-        func_label = QLabel("Function:")
-        func_label.setFixedWidth(70)
-        func_layout.addWidget(func_label)
-
-        self._author_function_input = QLineEdit()
-        self._author_function_input.setText("Forensic Analyst")
-        self._author_function_input.setPlaceholderText("e.g., Forensic Analyst")
-        func_layout.addWidget(self._author_function_input)
-        group_layout.addLayout(func_layout)
-
-        # Name row
-        name_layout = QHBoxLayout()
-        name_label = QLabel("Name:")
-        name_label.setFixedWidth(70)
-        name_layout.addWidget(name_label)
-
-        self._author_name_input = QLineEdit()
-        self._author_name_input.setPlaceholderText("Enter name...")
-        name_layout.addWidget(self._author_name_input)
-        group_layout.addLayout(name_layout)
-
-        # Date row
-        date_layout = QHBoxLayout()
-        date_label = QLabel("Date:")
-        date_label.setFixedWidth(70)
-        date_layout.addWidget(date_label)
-
-        self._author_date_input = QDateEdit()
-        self._author_date_input.setDate(QDate.currentDate())
-        self._author_date_input.setCalendarPopup(True)
-        self._author_date_input.setDisplayFormat("dd.MM.yyyy")
-        date_layout.addWidget(self._author_date_input)
-        date_layout.addStretch()  # Don't stretch the date field
-        group_layout.addLayout(date_layout)
-
-    def _build_branding_section(self, group_layout: QVBoxLayout) -> None:
-        """Build the branding options section (org name, department, footer, logo).
-
-        Args:
-            group_layout: Layout to add widgets to
-        """
-        group_layout.setSpacing(8)
+        # ── Branding ──
+        group_layout.addWidget(self._make_separator())
+        group_layout.addWidget(self._make_sub_heading("Branding"))
 
         # Org name row
         org_layout = QHBoxLayout()
@@ -267,17 +232,6 @@ class ReportTabWidget(QWidget):
         self._branding_dept_input.setPlaceholderText("Department name (appears below org, not bold)...")
         dept_layout.addWidget(self._branding_dept_input)
         group_layout.addLayout(dept_layout)
-
-        # Footer text row
-        footer_layout = QHBoxLayout()
-        footer_label = QLabel("Footer Text:")
-        footer_label.setFixedWidth(90)
-        footer_layout.addWidget(footer_label)
-
-        self._branding_footer_input = QLineEdit()
-        self._branding_footer_input.setPlaceholderText("Custom footer text (appears on all pages)...")
-        footer_layout.addWidget(self._branding_footer_input)
-        group_layout.addLayout(footer_layout)
 
         # Logo path row
         logo_layout = QHBoxLayout()
@@ -302,41 +256,87 @@ class ReportTabWidget(QWidget):
 
         group_layout.addLayout(logo_layout)
 
-        # --- Separator ---
-        sep = QFrame()
-        sep.setFrameShape(QFrame.HLine)
-        sep.setFrameShadow(QFrame.Sunken)
-        group_layout.addWidget(sep)
+        # Footer text row
+        footer_layout = QHBoxLayout()
+        footer_label = QLabel("Footer Text:")
+        footer_label.setFixedWidth(90)
+        footer_layout.addWidget(footer_label)
 
-        # --- Title Page Field Visibility ---
+        self._branding_footer_input = QLineEdit()
+        self._branding_footer_input.setPlaceholderText("Custom footer text (appears on all pages)...")
+        footer_layout.addWidget(self._branding_footer_input)
+        group_layout.addLayout(footer_layout)
+
+        # ── Report Created By ──
+        group_layout.addWidget(self._make_separator())
+        group_layout.addWidget(self._make_sub_heading("Report Created By"))
+
+        # Function row
+        func_layout = QHBoxLayout()
+        func_label = QLabel("Function:")
+        func_label.setFixedWidth(90)
+        func_layout.addWidget(func_label)
+
+        self._author_function_input = QLineEdit()
+        self._author_function_input.setText("Forensic Analyst")
+        self._author_function_input.setPlaceholderText("e.g., Forensic Analyst")
+        func_layout.addWidget(self._author_function_input)
+        group_layout.addLayout(func_layout)
+
+        # Name row
+        name_layout = QHBoxLayout()
+        name_label = QLabel("Name:")
+        name_label.setFixedWidth(90)
+        name_layout.addWidget(name_label)
+
+        self._author_name_input = QLineEdit()
+        self._author_name_input.setPlaceholderText("Enter name...")
+        name_layout.addWidget(self._author_name_input)
+        group_layout.addLayout(name_layout)
+
+        # Date row
+        date_layout = QHBoxLayout()
+        date_label = QLabel("Date:")
+        date_label.setFixedWidth(90)
+        date_layout.addWidget(date_label)
+
+        self._author_date_input = QDateEdit()
+        self._author_date_input.setDate(QDate.currentDate())
+        self._author_date_input.setCalendarPopup(True)
+        self._author_date_input.setDisplayFormat("dd.MM.yyyy")
+        date_layout.addWidget(self._author_date_input)
+        date_layout.addStretch()
+        group_layout.addLayout(date_layout)
+
+        # ── Options ──
+        group_layout.addWidget(self._make_separator())
+        group_layout.addWidget(self._make_sub_heading("Options"))
+
+        # Title page field visibility
         tp_label = QLabel("Title Page Fields:")
-        tp_label.setStyleSheet("font-weight: 600; margin-top: 4px;")
+        tp_label.setStyleSheet("color: palette(mid); margin-left: 2px;")
         group_layout.addWidget(tp_label)
 
-        tp_row1 = QHBoxLayout()
+        tp_row = QHBoxLayout()
         self._show_case_number_cb = QCheckBox("Case Number")
         self._show_case_number_cb.setChecked(True)
-        tp_row1.addWidget(self._show_case_number_cb)
+        tp_row.addWidget(self._show_case_number_cb)
 
         self._show_evidence_cb = QCheckBox("Evidence")
         self._show_evidence_cb.setChecked(True)
-        tp_row1.addWidget(self._show_evidence_cb)
+        tp_row.addWidget(self._show_evidence_cb)
 
         self._show_investigator_cb = QCheckBox("Investigator")
         self._show_investigator_cb.setChecked(True)
-        tp_row1.addWidget(self._show_investigator_cb)
+        tp_row.addWidget(self._show_investigator_cb)
 
         self._show_date_cb = QCheckBox("Date")
         self._show_date_cb.setChecked(True)
-        tp_row1.addWidget(self._show_date_cb)
-        tp_row1.addStretch()
-        group_layout.addLayout(tp_row1)
+        tp_row.addWidget(self._show_date_cb)
+        tp_row.addStretch()
+        group_layout.addLayout(tp_row)
 
-        # --- Footer & Appendix Options ---
-        opts_label = QLabel("Footer / Appendix:")
-        opts_label.setStyleSheet("font-weight: 600; margin-top: 4px;")
-        group_layout.addWidget(opts_label)
-
+        # Footer & Appendix options
         opts_row = QHBoxLayout()
         self._show_footer_date_cb = QCheckBox("Show creation date in footer")
         self._show_footer_date_cb.setChecked(True)
@@ -1167,15 +1167,15 @@ class ReportTabWidget(QWidget):
 
     def _connect_auto_save_signals(self) -> None:
         """Connect signals for auto-saving report settings."""
-        # Title section
+        # Title
         self._title_input.textChanged.connect(self._on_settings_changed)
 
-        # Author section
+        # Author
         self._author_function_input.textChanged.connect(self._on_settings_changed)
         self._author_name_input.textChanged.connect(self._on_settings_changed)
         self._author_date_input.dateChanged.connect(self._on_settings_changed)
 
-        # Branding section
+        # Branding
         self._branding_org_input.textChanged.connect(self._on_settings_changed)
         self._branding_dept_input.textChanged.connect(self._on_settings_changed)
         self._branding_footer_input.textChanged.connect(self._on_settings_changed)
@@ -1308,10 +1308,8 @@ class ReportTabWidget(QWidget):
         if date_fmt_index >= 0:
             self._date_format_combo.setCurrentIndex(date_fmt_index)
 
-        # Collapsed states (defaults: title expanded, others collapsed)
-        self._title_group.set_collapsed(settings.get("collapsed_title", False))
-        self._author_group.set_collapsed(settings.get("collapsed_author", True))
-        self._branding_group.set_collapsed(settings.get("collapsed_branding", True))
+        # Collapsed states
+        self._settings_group.set_collapsed(settings.get("collapsed_settings", False))
         self._appendix_group.set_collapsed(settings.get("collapsed_appendix", True))
 
     def _apply_global_defaults(self) -> None:
@@ -1388,9 +1386,7 @@ class ReportTabWidget(QWidget):
             branding_logo_path=logo_path or None,
             locale=self._locale_combo.currentData() or DEFAULT_LOCALE,
             date_format=self._date_format_combo.currentData() or "eu",
-            collapsed_title=self._title_group.is_collapsed(),
-            collapsed_author=self._author_group.is_collapsed(),
-            collapsed_branding=self._branding_group.is_collapsed(),
+            collapsed_settings=self._settings_group.is_collapsed(),
             collapsed_appendix=self._appendix_group.is_collapsed(),
             show_title_case_number=self._show_case_number_cb.isChecked(),
             show_title_evidence=self._show_evidence_cb.isChecked(),
