@@ -16,7 +16,9 @@
                 {% endif %}
             </div>
             <div class="image-info">
+                {% if include_filename %}
                 <div class="image-filename" title="{{ image.filename }}">{{ image.filename }}</div>
+                {% endif %}
                 {% if image.md5 %}
                 <div class="image-hash" title="{{ t.md5 | default('MD5') }}: {{ image.md5 }}">
                     <span class="hash-label">{{ t.md5 | default('MD5') }}:</span> 
@@ -51,7 +53,7 @@
     <p class="empty-message">{{ t.no_images_found | default('No images found matching the filter criteria.') }}</p>
     {% endif %}
     
-    {% if shown_count < total_count %}
+    {% if show_image_count and shown_count < total_count %}
     <p class="limit-note">
         {{ t.showing_x_of_y_images | default('Showing {shown} of {total} images') | replace('{shown}', shown_count|string) | replace('{total}', total_count|string) }}
     </p>

@@ -101,6 +101,14 @@ class ImagesModule(BaseReportModule):
                 required=False,
             ),
             FilterField(
+                key="include_filename",
+                label="Include Filename",
+                filter_type=FilterType.CHECKBOX,
+                default=True,
+                help_text="Show the filename under each image (often a hash)",
+                required=False,
+            ),
+            FilterField(
                 key="include_filepath",
                 label="Include File Path",
                 filter_type=FilterType.CHECKBOX,
@@ -136,6 +144,14 @@ class ImagesModule(BaseReportModule):
                 filter_type=FilterType.CHECKBOX,
                 default=False,
                 help_text="Display filter criteria below the images",
+                required=False,
+            ),
+            FilterField(
+                key="show_image_count",
+                label="Show Image Count",
+                filter_type=FilterType.CHECKBOX,
+                default=True,
+                help_text="Show 'Showing X of Y images' when a limit is applied",
                 required=False,
             ),
             FilterField(
@@ -233,10 +249,12 @@ class ImagesModule(BaseReportModule):
         title = config.get("title", "")
         tag_filter = config.get("tag_filter", self.ALL)
         match_filter = config.get("match_filter", self.ALL)
+        include_filename = config.get("include_filename", True)
         include_filepath = config.get("include_filepath", False)
         include_url = config.get("include_url", False)
         sort_by = config.get("sort_by", "date_desc")
         show_filter_info = config.get("show_filter_info", False)
+        show_image_count = config.get("show_image_count", True)
         limit = config.get("limit", "all")
 
         # Get locale and translations
@@ -305,9 +323,11 @@ class ImagesModule(BaseReportModule):
                 shown_count=len(images),
                 total_count=total_count,
                 filter_description=filter_description,
+                include_filename=include_filename,
                 include_filepath=include_filepath,
                 include_url=include_url,
                 show_filter_info=show_filter_info,
+                show_image_count=show_image_count,
                 t=translations,
                 locale=locale,
             )
