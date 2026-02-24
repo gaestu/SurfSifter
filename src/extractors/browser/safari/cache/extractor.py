@@ -13,9 +13,14 @@ from PySide6.QtWidgets import QLabel, QWidget
 
 from core.logging import get_logger
 from extractors._shared.extracted_files_audit import record_browser_files
+from extractors._shared.file_list_discovery import (
+    open_partition_for_extraction,
+    get_ewf_paths_from_evidence_fs,
+)
 from ....base import BaseExtractor, ExtractorMetadata
 from ....callbacks import ExtractorCallbacks
 from ....widgets import MultiPartitionWidget
+from .._discovery import discover_safari_files, discover_safari_files_fallback
 from .._patterns import extract_user_from_path, get_patterns
 from .ingestion import CacheIngestionHandler
 
@@ -118,11 +123,7 @@ class SafariCacheExtractor(BaseExtractor):
         run_dir = output_dir / run_id
         run_dir.mkdir(parents=True, exist_ok=True)
 
-        callbacks.on_step("Discovering Safari cache files")
-        discovered = self._discover_cache_paths(evidence_fs)
-        cache_db_paths = sorted(p for p in discovered if Path(p).name == "Cache.db")
-
-        manifest_data = {
+        manifest_data: Dict[str, Any] = {
             "extractor": self.metadata.name,
             "version": self.metadata.version,
             "schema_version": "1.0.0",
@@ -135,10 +136,56 @@ class SafariCacheExtractor(BaseExtractor):
             "notes": [],
         }
 
+        callbacks.on_step("Discovering Safari cache files")
+
+        # Multi-partition discovery with fallback to filesystem iteration
+        evidence_conn = config.get("evidence_conn")
+        files_by_partition = discover_safari_files(
+            evidence_conn, evidence_id,
+            artifact_names=["cache"],
+            callbacks=callbacks,
+        )
+        if not files_by_partition:
+            files_by_partition = discover_safari_files_fallback(
+                evidence_fs, artifact_names=["cache"], callbacks=callbacks,
+            )
+
+        # Apply cache-specific path filtering
+        for part_idx in list(files_by_partition.keys()):
+            files_by_partition[part_idx] = [
+                f for f in files_by_partition[part_idx]
+                if self._is_supported_cache_path(f["logical_path"])
+            ]
+            if not files_by_partition[part_idx]:
+                del files_by_partition[part_idx]
+
+        manifest_data["multi_partition"] = len(files_by_partition) > 1
+        manifest_data["partitions_scanned"] = sorted(files_by_partition.keys())
+
+        # Flatten for grouping — cache groups by Cache.db root
+        all_discovered = []
+        for part_idx, file_list in files_by_partition.items():
+            for f in file_list:
+                all_discovered.append((part_idx, f["logical_path"]))
+
+        discovered_paths = [path for _, path in all_discovered]
+        cache_db_paths = sorted(p for p in discovered_paths if Path(p).name == "Cache.db")
+
         if not cache_db_paths:
             manifest_data["status"] = "skipped"
             manifest_data["notes"].append("No Safari Cache.db files found")
         else:
+            ewf_paths = get_ewf_paths_from_evidence_fs(evidence_fs)
+            current_partition = getattr(evidence_fs, "partition_index", 0)
+
+            # Build partition lookup for each path
+            path_to_partition: Dict[str, int] = {}
+            path_to_inode: Dict[str, Optional[int]] = {}
+            for part_idx, file_list in files_by_partition.items():
+                for f in file_list:
+                    path_to_partition[f["logical_path"]] = part_idx
+                    path_to_inode[f["logical_path"]] = f.get("inode")
+
             for cache_db_path in cache_db_paths:
                 if callbacks.is_cancelled():
                     manifest_data["status"] = "cancelled"
@@ -150,12 +197,24 @@ class SafariCacheExtractor(BaseExtractor):
                 group_dir = run_dir / f"cache_{group_id}"
                 group_dir.mkdir(parents=True, exist_ok=True)
 
-                group_paths = self._collect_group_paths(cache_db_path, discovered)
-                for source_path in sorted(group_paths):
-                    file_info = self._extract_file(evidence_fs, source_path, group_dir, run_dir)
-                    if file_info:
-                        file_info["group_id"] = group_id
-                        manifest_data["files"].append(file_info)
+                group_paths = self._collect_group_paths(cache_db_path, discovered_paths)
+                partition_idx = path_to_partition.get(cache_db_path, current_partition)
+
+                if ewf_paths is not None and partition_idx != current_partition:
+                    ctx = open_partition_for_extraction(ewf_paths, partition_idx)
+                else:
+                    ctx = open_partition_for_extraction(evidence_fs, None)
+
+                with ctx as fs_to_use:
+                    for source_path in sorted(group_paths):
+                        file_info = self._extract_file(fs_to_use, source_path, group_dir, run_dir)
+                        if file_info:
+                            file_info["group_id"] = group_id
+                            file_info["partition_index"] = partition_idx
+                            inode = path_to_inode.get(source_path)
+                            if inode:
+                                file_info["inode"] = inode
+                            manifest_data["files"].append(file_info)
 
         manifest_path = run_dir / "manifest.json"
         manifest_path.write_text(json.dumps(manifest_data, indent=2))
@@ -185,21 +244,6 @@ class SafariCacheExtractor(BaseExtractor):
             extractor_version=self.metadata.version,
         )
         return handler.run(output_dir, evidence_conn, evidence_id, config, callbacks)
-
-    def _discover_cache_paths(self, evidence_fs) -> List[str]:
-        discovered: List[str] = []
-        seen = set()
-        for pattern in get_patterns("cache"):
-            try:
-                for path_str in evidence_fs.iter_paths(pattern):
-                    if path_str in seen:
-                        continue
-                    seen.add(path_str)
-                    if self._is_supported_cache_path(path_str):
-                        discovered.append(path_str)
-            except Exception as exc:
-                LOGGER.debug("Safari cache pattern failed (%s): %s", pattern, exc)
-        return discovered
 
     def _is_supported_cache_path(self, path_str: str) -> bool:
         path = path_str.replace("\\", "/")

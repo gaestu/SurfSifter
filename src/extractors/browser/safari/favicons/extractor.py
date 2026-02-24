@@ -13,9 +13,14 @@ from PySide6.QtWidgets import QLabel, QWidget
 
 from core.logging import get_logger
 from extractors._shared.extracted_files_audit import record_browser_files
+from extractors._shared.file_list_discovery import (
+    open_partition_for_extraction,
+    get_ewf_paths_from_evidence_fs,
+)
 from ....base import BaseExtractor, ExtractorMetadata
 from ....callbacks import ExtractorCallbacks
 from ....widgets import MultiPartitionWidget
+from .._discovery import discover_safari_files, discover_safari_files_fallback
 from .._patterns import extract_user_from_path, get_patterns
 from .ingestion import FaviconsIngestionHandler
 
@@ -133,23 +138,64 @@ class SafariFaviconsExtractor(BaseExtractor):
         }
 
         callbacks.on_step("Discovering Safari favicon artifacts")
-        discovered = self._discover_favicon_paths(evidence_fs)
-        if collector:
-            collector.report_discovered(evidence_id, self.metadata.name, files=len(discovered))
+        # Multi-partition discovery with fallback to filesystem iteration
+        evidence_conn = config.get("evidence_conn")
+        files_by_partition = discover_safari_files(
+            evidence_conn, evidence_id,
+            artifact_names=["favicons"],
+            callbacks=callbacks,
+        )
+        if not files_by_partition:
+            files_by_partition = discover_safari_files_fallback(
+                evidence_fs, artifact_names=["favicons"], callbacks=callbacks,
+            )
 
-        if not discovered:
+        # Filter to supported paths only (same logic as old _discover_favicon_paths)
+        for part_idx in list(files_by_partition.keys()):
+            files_by_partition[part_idx] = [
+                f for f in files_by_partition[part_idx]
+                if self._classify_source_path(f["logical_path"])[0] is not None
+            ]
+            if not files_by_partition[part_idx]:
+                del files_by_partition[part_idx]
+
+        manifest_data["multi_partition"] = len(files_by_partition) > 1
+        manifest_data["partitions_scanned"] = sorted(files_by_partition.keys())
+        total_discovered = sum(len(v) for v in files_by_partition.values())
+
+        if collector:
+            collector.report_discovered(evidence_id, self.metadata.name, files=total_discovered)
+
+        if not files_by_partition:
             manifest_data["status"] = "skipped"
             manifest_data["notes"].append("No Safari favicon cache artifacts found")
         else:
-            for source_path in discovered:
-                if callbacks.is_cancelled():
-                    manifest_data["status"] = "cancelled"
-                    manifest_data["notes"].append("Extraction cancelled by user")
-                    break
-                file_info = self._extract_file(evidence_fs, source_path, run_dir, output_dir)
-                if file_info:
-                    manifest_data["files"].append(file_info)
-                    callbacks.on_log(f"Copied: {source_path}", "info")
+            ewf_paths = get_ewf_paths_from_evidence_fs(evidence_fs)
+            current_partition = getattr(evidence_fs, "partition_index", 0)
+
+            for partition_idx in sorted(files_by_partition.keys()):
+                partition_files = files_by_partition[partition_idx]
+
+                if ewf_paths is not None and partition_idx != current_partition:
+                    ctx = open_partition_for_extraction(ewf_paths, partition_idx)
+                else:
+                    ctx = open_partition_for_extraction(evidence_fs, None)
+
+                with ctx as fs_to_use:
+                    for file_data in partition_files:
+                        if callbacks.is_cancelled():
+                            manifest_data["status"] = "cancelled"
+                            manifest_data["notes"].append("Extraction cancelled by user")
+                            break
+                        file_info = self._extract_file(
+                            fs_to_use, file_data["logical_path"], run_dir, output_dir,
+                        )
+                        if file_info:
+                            file_info["partition_index"] = partition_idx
+                            if file_data.get("inode"):
+                                file_info["inode"] = file_data["inode"]
+                            manifest_data["files"].append(file_info)
+                            callbacks.on_log(f"Copied: {file_data['logical_path']}", "info")
 
         manifest_path = run_dir / "manifest.json"
         manifest_path.write_text(json.dumps(manifest_data, indent=2))
@@ -184,21 +230,6 @@ class SafariFaviconsExtractor(BaseExtractor):
             extractor_version=self.metadata.version,
         )
         return handler.run(output_dir, evidence_conn, evidence_id, config, callbacks)
-
-    def _discover_favicon_paths(self, evidence_fs) -> list[str]:
-        discovered: list[str] = []
-        seen: set[str] = set()
-        for pattern in get_patterns("favicons"):
-            try:
-                for path_str in evidence_fs.iter_paths(pattern):
-                    if path_str in seen:
-                        continue
-                    seen.add(path_str)
-                    if self._classify_source_path(path_str)[0] is not None:
-                        discovered.append(path_str)
-            except Exception as exc:
-                LOGGER.debug("Safari favicons pattern failed (%s): %s", pattern, exc)
-        return discovered
 
     def _extract_file(
         self,
