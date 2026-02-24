@@ -92,6 +92,7 @@ TRANSLATIONS: Dict[str, TranslationDict] = {
         "software_name": "Software Name",
         "version": "Version",
         "publisher": "Publisher",
+        "install_location": "Install Location",
 
         # Autostart table
         "entry_name": "Name",
@@ -311,6 +312,13 @@ TRANSLATIONS: Dict[str, TranslationDict] = {
         "no_jump_lists_found": "No jump list entries found matching the filter criteria.",
 
         # ===================
+        # Installed Applications module
+        # ===================
+        "installed_applications_title": "Installed Applications",
+        "no_installed_applications_found": "No installed applications found matching the filter criteria.",
+        "applications": "applications",
+
+        # ===================
         # Bookmarks module
         # ===================
         "bookmarks_title": "Bookmarks",
@@ -485,6 +493,7 @@ TRANSLATIONS: Dict[str, TranslationDict] = {
         "software_name": "Softwarename",
         "version": "Version",
         "publisher": "Herausgeber",
+        "install_location": "Installationspfad",
 
         # Autostart table
         "entry_name": "Name",
@@ -702,6 +711,13 @@ TRANSLATIONS: Dict[str, TranslationDict] = {
         "jl_jumplist_path": "Sprunglisten-Pfad",
         "jl_entries": "Einträge",
         "no_jump_lists_found": "Keine Sprunglisten-Einträge gefunden, die den Filterkriterien entsprechen.",
+
+        # ===================
+        # Installed Applications module
+        # ===================
+        "installed_applications_title": "Installierte Anwendungen",
+        "no_installed_applications_found": "Keine installierten Anwendungen gefunden, die den Filterkriterien entsprechen.",
+        "applications": "Anwendungen",
 
         # ===================
         # Bookmarks module
