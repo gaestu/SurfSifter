@@ -28,6 +28,33 @@ try:
 except ImportError:
     HAS_PIL = False
 
+# Human-readable display names for extractor identifiers
+EXTRACTOR_DISPLAY_NAMES: Dict[str, str] = {
+    "bulk_extractor": "Bulk Extractor",
+    "bulk_extractor:images": "Bulk Extractor",
+    "bulk_extractor_images": "Bulk Extractor",
+    "foremost_carver": "Foremost Carver",
+    "scalpel": "Scalpel",
+    "image_carving": "Image Carving",
+    "filesystem_images": "Filesystem",
+    "cache_simple": "Chromium Cache",
+    "cache_blockfile": "Chromium Cache (Blockfile)",
+    "cache_firefox": "Firefox Cache",
+    "browser_storage_indexeddb": "Browser Storage (IndexedDB)",
+    "safari": "Safari",
+    "safari_cache": "Safari Cache",
+    "firefox_favicons": "Firefox Favicons",
+    "chromium_favicons": "Chromium Favicons",
+}
+
+
+def _humanize_extractor(name: str) -> str:
+    """Return a human-readable display name for an extractor identifier."""
+    if name in EXTRACTOR_DISPLAY_NAMES:
+        return EXTRACTOR_DISPLAY_NAMES[name]
+    # Fallback: title-case with underscores replaced
+    return name.replace("_", " ").title()
+
 
 class AppendixImageListModule(BaseAppendixModule):
     """Appendix module for listing images with tag and hash match filters."""
@@ -194,9 +221,37 @@ class AppendixImageListModule(BaseAppendixModule):
         except Exception as exc:
             return f'<div class="module-error">Error loading images: {exc}</div>'
 
+        # Fetch extractor sources and filesystem dates for all images
+        image_ids = [img["id"] for img in images]
+        if image_ids:
+            image_sources = self._get_image_sources(db_conn, image_ids)
+            fs_dates = self._get_filesystem_dates(db_conn, image_ids)
+            for img in images:
+                raw_sources = image_sources.get(img["id"], [])
+                img["found_by"] = [_humanize_extractor(s) for s in raw_sources]
+
+                # Use filesystem creation date when available for fs images
+                if img["id"] in fs_dates:
+                    img["timestamp"] = format_datetime(
+                        fs_dates[img["id"]], date_format,
+                        include_time=True, include_seconds=True,
+                    )
+                    img["timestamp_label"] = translations.get(
+                        "creation_date", "Creation Date"
+                    )
+                elif "filesystem_images" in raw_sources and not img.get("timestamp"):
+                    # Filesystem image but no date at all
+                    img["timestamp_label"] = translations.get(
+                        "creation_date", "Creation Date"
+                    )
+                else:
+                    img["timestamp_label"] = translations.get(
+                        "source_date", "Source Date"
+                    )
+
         # Fetch URLs for images if requested
         if include_url and images:
-            image_urls = self._get_image_urls(db_conn, [img["id"] for img in images])
+            image_urls = self._get_image_urls(db_conn, image_ids)
             for img in images:
                 img["urls"] = image_urls.get(img["id"], [])
 
@@ -248,6 +303,82 @@ class AppendixImageListModule(BaseAppendixModule):
                 # Add only unique URLs per image
                 if cache_url not in result[image_id]:
                     result[image_id].append(cache_url)
+        except Exception:
+            pass
+        return result
+
+    def _get_filesystem_dates(
+        self, db_conn: sqlite3.Connection, image_ids: List[int]
+    ) -> Dict[int, str]:
+        """Fetch filesystem creation dates for images from image_discoveries.
+
+        Returns the best available filesystem timestamp (fs_crtime preferred,
+        then fs_mtime as fallback) for images discovered by filesystem_images.
+
+        Args:
+            db_conn: Database connection
+            image_ids: List of image IDs to fetch dates for
+
+        Returns:
+            Dict mapping image_id to ISO datetime string
+        """
+        if not image_ids:
+            return {}
+
+        result: Dict[int, str] = {}
+        placeholders = ",".join("?" * len(image_ids))
+        try:
+            cursor = db_conn.execute(
+                f"""
+                SELECT image_id,
+                       COALESCE(fs_crtime, fs_mtime) AS best_date
+                FROM image_discoveries
+                WHERE image_id IN ({placeholders})
+                  AND discovered_by = 'filesystem_images'
+                  AND (fs_crtime IS NOT NULL OR fs_mtime IS NOT NULL)
+                """,
+                image_ids,
+            )
+            for image_id, best_date in cursor.fetchall():
+                if best_date and image_id not in result:
+                    result[image_id] = best_date
+        except Exception:
+            pass
+        return result
+
+    def _get_image_sources(
+        self, db_conn: sqlite3.Connection, image_ids: List[int]
+    ) -> Dict[int, List[str]]:
+        """Fetch distinct extractor sources for images using v_image_sources.
+
+        Args:
+            db_conn: Database connection
+            image_ids: List of image IDs to fetch sources for
+
+        Returns:
+            Dict mapping image_id to list of extractor name strings
+        """
+        if not image_ids:
+            return {}
+
+        result: Dict[int, List[str]] = {}
+        placeholders = ",".join("?" * len(image_ids))
+        try:
+            cursor = db_conn.execute(
+                f"""
+                SELECT image_id, sources
+                FROM v_image_sources
+                WHERE image_id IN ({placeholders})
+                """,
+                image_ids,
+            )
+            for image_id, sources in cursor.fetchall():
+                if sources:
+                    result[image_id] = [
+                        s.strip() for s in sources.split(",") if s.strip()
+                    ]
+                else:
+                    result[image_id] = []
         except Exception:
             pass
         return result
@@ -381,16 +512,17 @@ class AppendixImageListModule(BaseAppendixModule):
 
         return {
             "id": row["id"],
-            "filename": row.get("filename", t.get("unknown", "Unknown")),
             "rel_path": row.get("rel_path", ""),
             "md5": row.get("md5", ""),
             "sha256": row.get("sha256", ""),
             "timestamp": format_datetime(
                 row.get("ts_utc", ""), date_format, include_time=True, include_seconds=True
             ),
+            "timestamp_label": t.get("source_date", "Source Date"),  # default; overridden in render()
             "size_bytes": row.get("size_bytes"),
             "exif_display": exif_display,
             "thumbnail_b64": thumbnail_b64,
+            "filename": row.get("filename", ""),  # kept for alt text
         }
 
     def _generate_thumbnail(
