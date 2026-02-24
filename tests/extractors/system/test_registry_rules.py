@@ -245,3 +245,79 @@ class TestTargetToDict:
         # The first few keys (RecentDocs, OpenSavePidlMRU, TypedPaths) have no custom_handler
         recent_docs = next(k for k in keys if "RecentDocs" in k["path"] and "custom_handler" not in k)
         assert "custom_handler" not in recent_docs
+
+
+class TestLastVisitedPidlMRURule:
+    """Tests for LastVisitedPidlMRU rule definition."""
+
+    def test_last_visited_rule_exists(self):
+        """Verify LastVisitedPidlMRU rule is in USER_ACTIVITY."""
+        action = USER_ACTIVITY.actions[0]
+        lv_keys = [
+            k for k in action.keys
+            if "LastVisitedPidlMRU" in k.path
+        ]
+        assert len(lv_keys) == 1
+
+    def test_last_visited_rule_properties(self):
+        """Verify LastVisitedPidlMRU rule has correct properties."""
+        action = USER_ACTIVITY.actions[0]
+        key = next(k for k in action.keys if "LastVisitedPidlMRU" in k.path)
+        assert key.indicator == "open_save_dialog_last_visited"
+        assert key.extract is True
+        assert key.confidence == 0.75
+
+
+class TestRegisteredBrowsersRule:
+    """Tests for StartMenuInternet (registered browsers) rule."""
+
+    def test_start_menu_internet_rule_exists(self):
+        """Verify StartMenuInternet wildcard rule is in SOFTWARE hive."""
+        action = SYSTEM_INFO_SOFTWARE.actions[0]
+        smi_keys = [
+            k for k in action.keys
+            if "StartMenuInternet" in k.path
+        ]
+        assert len(smi_keys) == 1
+
+    def test_start_menu_internet_properties(self):
+        """Verify StartMenuInternet rule has correct properties."""
+        action = SYSTEM_INFO_SOFTWARE.actions[0]
+        key = next(k for k in action.keys if "StartMenuInternet" in k.path)
+        assert key.indicator == "browser:registered_browser"
+        assert key.extract is True
+        assert key.confidence == 0.90
+        assert key.path.endswith("\\*")
+
+
+class TestBrowserAppPathsRules:
+    """Tests for browser App Paths rules."""
+
+    def test_app_paths_rules_exist(self):
+        """Verify App Paths rules exist for known browsers."""
+        action = SYSTEM_INFO_SOFTWARE.actions[0]
+        app_path_keys = [
+            k for k in action.keys
+            if "App Paths" in k.path and k.indicator == "browser:app_path"
+        ]
+        assert len(app_path_keys) == 7
+
+    def test_app_paths_browsers_covered(self):
+        """Verify all expected browser executables have App Paths rules."""
+        action = SYSTEM_INFO_SOFTWARE.actions[0]
+        app_path_exes = [
+            k.path.split("\\")[-1].lower()
+            for k in action.keys
+            if "App Paths" in k.path and k.indicator == "browser:app_path"
+        ]
+        for exe in ["chrome.exe", "msedge.exe", "firefox.exe", "iexplore.exe",
+                     "brave.exe", "opera.exe", "vivaldi.exe"]:
+            assert exe in app_path_exes, f"Missing App Path rule for: {exe}"
+
+    def test_app_paths_use_extract_all_values(self):
+        """Verify all App Paths rules use extract_all_values."""
+        action = SYSTEM_INFO_SOFTWARE.actions[0]
+        for key in action.keys:
+            if "App Paths" in key.path and key.indicator == "browser:app_path":
+                assert key.extract_all_values is True
+                assert key.confidence == 0.85

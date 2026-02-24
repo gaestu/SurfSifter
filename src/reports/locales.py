@@ -127,6 +127,43 @@ TRANSLATIONS: Dict[str, TranslationDict] = {
         "private": "Private",
         "public": "Public",
         "drive_path": "Network Path",
+        "proxy_settings": "Proxy Settings",
+        "internet_policy": "Internet Policy",
+
+        # Shell folder paths
+        "pictures_path": "Pictures Path",
+        "videos_path": "Videos Path",
+        "documents_path": "Documents Path",
+        "desktop_path": "Desktop Path",
+
+        # Browser detection section
+        "browser_detection": "Browser Detection",
+        "registered_browsers": "Registered Browsers",
+        "browser_name": "Browser",
+        "browser_app_paths": "Browser Application Paths",
+        "ie_edge_settings": "IE / Edge Settings",
+        "no_browser_detection": "No browser detection data found in registry data.",
+
+        # User activity section
+        "user_activity_title": "User Activity",
+        "recent_images": "Recently Accessed Images",
+        "typed_urls": "Typed URLs (IE/Edge)",
+        "typed_paths_title": "Typed Paths (Explorer)",
+        "recent_documents": "Recent Documents",
+        "open_save_mru": "Open/Save Dialog History",
+        "open_save_last_visited": "Last Visited Folders (Open/Save)",
+        "explorer_searches": "Explorer Search Terms",
+        "search_term": "Search Term",
+        "no_user_activity": "No user activity data found in registry data.",
+
+        # Execution history section
+        "execution_history": "Execution History",
+        "program_path": "Program Path",
+        "run_count": "Run Count",
+        "focus_count": "Focus Count",
+        "focus_time": "Focus Time",
+        "last_run": "Last Run",
+        "no_execution_history": "No execution history found in registry data.",
 
         # ===================
         # Activity summary module
@@ -528,6 +565,43 @@ TRANSLATIONS: Dict[str, TranslationDict] = {
         "private": "Privat",
         "public": "Öffentlich",
         "drive_path": "Netzwerkpfad",
+        "proxy_settings": "Proxy-Einstellungen",
+        "internet_policy": "Internetrichtlinie",
+
+        # Shell folder paths
+        "pictures_path": "Bilderpfad",
+        "videos_path": "Videopfad",
+        "documents_path": "Dokumentenpfad",
+        "desktop_path": "Desktoppfad",
+
+        # Browser detection section
+        "browser_detection": "Browsererkennung",
+        "registered_browsers": "Registrierte Browser",
+        "browser_name": "Browser",
+        "browser_app_paths": "Browser-Anwendungspfade",
+        "ie_edge_settings": "IE / Edge Einstellungen",
+        "no_browser_detection": "Keine Browsererkennungsdaten in den Registry-Daten gefunden.",
+
+        # User activity section
+        "user_activity_title": "Benutzeraktivität",
+        "recent_images": "Kürzlich aufgerufene Bilder",
+        "typed_urls": "Eingegebene URLs (IE/Edge)",
+        "typed_paths_title": "Eingegebene Pfade (Explorer)",
+        "recent_documents": "Zuletzt verwendete Dokumente",
+        "open_save_mru": "Öffnen/Speichern-Dialogverlauf",
+        "open_save_last_visited": "Zuletzt besuchte Ordner (Öffnen/Speichern)",
+        "explorer_searches": "Explorer-Suchbegriffe",
+        "search_term": "Suchbegriff",
+        "no_user_activity": "Keine Benutzeraktivitätsdaten in den Registry-Daten gefunden.",
+
+        # Execution history section
+        "execution_history": "Ausführungsverlauf",
+        "program_path": "Programmpfad",
+        "run_count": "Ausführungen",
+        "focus_count": "Fokus-Anzahl",
+        "focus_time": "Fokus-Zeit",
+        "last_run": "Letzte Ausführung",
+        "no_execution_history": "Kein Ausführungsverlauf in den Registry-Daten gefunden.",
 
         # ===================
         # Activity summary module
@@ -888,6 +962,10 @@ SYSTEM_INFO_LABEL_KEYS = {
     "system:rdp_status": "rdp_status",
     "system:default_browser": "default_browser",
     "system:downloads_path": "downloads_path",
+    "system:pictures_path": "pictures_path",
+    "system:videos_path": "videos_path",
+    "system:documents_path": "documents_path",
+    "system:desktop_path": "desktop_path",
 }
 
 NETWORK_LABEL_KEYS = {
@@ -899,6 +977,8 @@ NETWORK_LABEL_KEYS = {
     "network:connected_profile": "connected_network",
     "network:profile_last_connected": "last_connected",
     "network:mapped_drive": "mapped_drive",
+    "network:proxy_settings": "proxy_settings",
+    "network:internet_policy": "internet_policy",
 }
 
 

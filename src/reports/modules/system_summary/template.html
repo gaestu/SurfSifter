@@ -312,6 +312,288 @@
     </div>
     {% endif %}
 
+    {# ===== BROWSER DETECTION SECTION ===== #}
+    {% if SECTION_BROWSER_DETECTION in sections %}
+    {% set browser_data = section_data[SECTION_BROWSER_DETECTION] %}
+    <div class="summary-section browser-detection">
+        <h4 class="section-title">{{ t.browser_detection | default('Browser Detection') }} ({{ browser_data.count }})</h4>
+        
+        {# Registered Browsers (StartMenuInternet) #}
+        {% if browser_data.registered_browsers %}
+        <h5 class="subsection-title">{{ t.registered_browsers | default('Registered Browsers') }}</h5>
+        <table class="system-table">
+            <thead>
+                <tr>
+                    <th>{{ t.browser_name | default('Browser') }}</th>
+                    {% if show_paths %}<th class="col-path">{{ t.registry_path | default('Registry Path') }}</th>{% endif %}
+                </tr>
+            </thead>
+            <tbody>
+                {% for browser in browser_data.registered_browsers %}
+                <tr>
+                    <td>{{ browser.name }}</td>
+                    {% if show_paths %}<td class="col-path">{{ browser.path if browser.path else '—' }}</td>{% endif %}
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        {% endif %}
+        
+        {# Browser App Paths #}
+        {% if browser_data.app_paths %}
+        <h5 class="subsection-title">{{ t.browser_app_paths | default('Browser Application Paths') }}</h5>
+        <table class="system-table">
+            <thead>
+                <tr>
+                    <th class="col-entry-name">{{ t.entry_name | default('Name') }}</th>
+                    <th>{{ t.value | default('Value') }}</th>
+                    {% if show_paths %}<th class="col-path">{{ t.registry_path | default('Registry Path') }}</th>{% endif %}
+                </tr>
+            </thead>
+            <tbody>
+                {% for ap in browser_data.app_paths %}
+                <tr>
+                    <td class="col-entry-name">{{ ap.name }}</td>
+                    <td class="col-command">{{ ap.value }}</td>
+                    {% if show_paths %}<td class="col-path">{{ ap.path if ap.path else '—' }}</td>{% endif %}
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        {% endif %}
+        
+        {# IE/Edge Settings (home page, search page, search scopes) #}
+        {% if browser_data.ie_settings %}
+        <h5 class="subsection-title">{{ t.ie_edge_settings | default('IE / Edge Settings') }}</h5>
+        <table class="system-table info-table">
+            <thead>
+                <tr>
+                    <th class="col-label">{{ t.property | default('Property') }}</th>
+                    <th class="col-value">{{ t.value | default('Value') }}</th>
+                    {% if show_paths %}<th class="col-path">{{ t.registry_path | default('Registry Path') }}</th>{% endif %}
+                </tr>
+            </thead>
+            <tbody>
+                {% for setting in browser_data.ie_settings %}
+                <tr>
+                    <td class="col-label">{{ setting.label }}</td>
+                    <td class="col-value">{{ setting.value }}</td>
+                    {% if show_paths %}<td class="col-path">{{ setting.path if setting.path else '—' }}</td>{% endif %}
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        {% endif %}
+        
+        {% if not browser_data.registered_browsers and not browser_data.app_paths and not browser_data.ie_settings %}
+        <p class="empty-message">{{ t.no_browser_detection | default('No browser detection data found in registry data.') }}</p>
+        {% endif %}
+    </div>
+    {% endif %}
+
+    {# ===== USER ACTIVITY SECTION ===== #}
+    {% if SECTION_USER_ACTIVITY in sections %}
+    {% set activity_data = section_data[SECTION_USER_ACTIVITY] %}
+    <div class="summary-section user-activity">
+        <h4 class="section-title">{{ t.user_activity_title | default('User Activity') }} ({{ activity_data.count }})</h4>
+        
+        {# Recent Documents (Image) — forensic highlight #}
+        {% if activity_data.recent_images %}
+        <h5 class="subsection-title">{{ t.recent_images | default('Recently Accessed Images') }} <span class="forensic-badge">⚠️</span></h5>
+        <table class="system-table">
+            <thead>
+                <tr>
+                    <th>{{ t.entry_name | default('Name') }}</th>
+                    <th>{{ t.value | default('Value') }}</th>
+                    {% if show_paths %}<th class="col-path">{{ t.registry_path | default('Registry Path') }}</th>{% endif %}
+                </tr>
+            </thead>
+            <tbody>
+                {% for item in activity_data.recent_images %}
+                <tr class="forensic-highlight">
+                    <td>{{ item.name }}</td>
+                    <td>{{ item.value }}</td>
+                    {% if show_paths %}<td class="col-path">{{ item.path if item.path else '—' }}</td>{% endif %}
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        {% endif %}
+        
+        {# Typed URLs (IE) #}
+        {% if activity_data.typed_urls %}
+        <h5 class="subsection-title">{{ t.typed_urls | default('Typed URLs (IE/Edge)') }}</h5>
+        <table class="system-table">
+            <thead>
+                <tr>
+                    <th>{{ t.url | default('URL') }}</th>
+                    {% if show_paths %}<th class="col-path">{{ t.registry_path | default('Registry Path') }}</th>{% endif %}
+                </tr>
+            </thead>
+            <tbody>
+                {% for item in activity_data.typed_urls %}
+                <tr>
+                    <td class="col-command">{{ item.value }}</td>
+                    {% if show_paths %}<td class="col-path">{{ item.path if item.path else '—' }}</td>{% endif %}
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        {% endif %}
+        
+        {# Typed Paths (Explorer address bar) #}
+        {% if activity_data.typed_paths %}
+        <h5 class="subsection-title">{{ t.typed_paths_title | default('Typed Paths (Explorer)') }}</h5>
+        <table class="system-table">
+            <thead>
+                <tr>
+                    <th>{{ t.path | default('Path') }}</th>
+                    {% if show_paths %}<th class="col-path">{{ t.registry_path | default('Registry Path') }}</th>{% endif %}
+                </tr>
+            </thead>
+            <tbody>
+                {% for item in activity_data.typed_paths %}
+                <tr>
+                    <td class="col-command">{{ item.value }}</td>
+                    {% if show_paths %}<td class="col-path">{{ item.path if item.path else '—' }}</td>{% endif %}
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        {% endif %}
+        
+        {# Recent Documents #}
+        {% if activity_data.recent_docs %}
+        <h5 class="subsection-title">{{ t.recent_documents | default('Recent Documents') }}</h5>
+        <table class="system-table">
+            <thead>
+                <tr>
+                    <th>{{ t.entry_name | default('Name') }}</th>
+                    <th>{{ t.value | default('Value') }}</th>
+                    {% if show_paths %}<th class="col-path">{{ t.registry_path | default('Registry Path') }}</th>{% endif %}
+                </tr>
+            </thead>
+            <tbody>
+                {% for item in activity_data.recent_docs %}
+                <tr>
+                    <td>{{ item.name }}</td>
+                    <td>{{ item.value }}</td>
+                    {% if show_paths %}<td class="col-path">{{ item.path if item.path else '—' }}</td>{% endif %}
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        {% endif %}
+        
+        {# Open/Save Dialog MRU #}
+        {% if activity_data.open_save_mru %}
+        <h5 class="subsection-title">{{ t.open_save_mru | default('Open/Save Dialog History') }}</h5>
+        <table class="system-table">
+            <thead>
+                <tr>
+                    <th>{{ t.entry_name | default('Name') }}</th>
+                    <th>{{ t.value | default('Value') }}</th>
+                    {% if show_paths %}<th class="col-path">{{ t.registry_path | default('Registry Path') }}</th>{% endif %}
+                </tr>
+            </thead>
+            <tbody>
+                {% for item in activity_data.open_save_mru %}
+                <tr>
+                    <td>{{ item.name }}</td>
+                    <td>{{ item.value }}</td>
+                    {% if show_paths %}<td class="col-path">{{ item.path if item.path else '—' }}</td>{% endif %}
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        {% endif %}
+        
+        {# Open/Save Dialog Last Visited #}
+        {% if activity_data.open_save_last_visited %}
+        <h5 class="subsection-title">{{ t.open_save_last_visited | default('Last Visited Folders (Open/Save)') }}</h5>
+        <table class="system-table">
+            <thead>
+                <tr>
+                    <th>{{ t.entry_name | default('Name') }}</th>
+                    <th>{{ t.value | default('Value') }}</th>
+                    {% if show_paths %}<th class="col-path">{{ t.registry_path | default('Registry Path') }}</th>{% endif %}
+                </tr>
+            </thead>
+            <tbody>
+                {% for item in activity_data.open_save_last_visited %}
+                <tr>
+                    <td>{{ item.name }}</td>
+                    <td>{{ item.value }}</td>
+                    {% if show_paths %}<td class="col-path">{{ item.path if item.path else '—' }}</td>{% endif %}
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        {% endif %}
+        
+        {# Explorer Search Terms #}
+        {% if activity_data.explorer_searches %}
+        <h5 class="subsection-title">{{ t.explorer_searches | default('Explorer Search Terms') }}</h5>
+        <table class="system-table">
+            <thead>
+                <tr>
+                    <th>{{ t.search_term | default('Search Term') }}</th>
+                    {% if show_paths %}<th class="col-path">{{ t.registry_path | default('Registry Path') }}</th>{% endif %}
+                </tr>
+            </thead>
+            <tbody>
+                {% for item in activity_data.explorer_searches %}
+                <tr>
+                    <td>{{ item.value }}</td>
+                    {% if show_paths %}<td class="col-path">{{ item.path if item.path else '—' }}</td>{% endif %}
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        {% endif %}
+        
+        {% if activity_data.count == 0 %}
+        <p class="empty-message">{{ t.no_user_activity | default('No user activity data found in registry data.') }}</p>
+        {% endif %}
+    </div>
+    {% endif %}
+
+    {# ===== EXECUTION HISTORY SECTION ===== #}
+    {% if SECTION_EXECUTION_HISTORY in sections %}
+    {% set exec_data = section_data[SECTION_EXECUTION_HISTORY] %}
+    <div class="summary-section execution-history">
+        <h4 class="section-title">{{ t.execution_history | default('Execution History') }} ({{ exec_data.count }})</h4>
+        {% if exec_data.entries %}
+        <table class="system-table execution-table">
+            <thead>
+                <tr>
+                    <th class="col-exec-path">{{ t.program_path | default('Program Path') }}</th>
+                    <th class="col-run-count">{{ t.run_count | default('Run Count') }}</th>
+                    <th class="col-focus-count">{{ t.focus_count | default('Focus Count') }}</th>
+                    <th class="col-focus-time">{{ t.focus_time | default('Focus Time') }}</th>
+                    <th class="col-last-run">{{ t.last_run | default('Last Run') }}</th>
+                    {% if show_paths %}<th class="col-path">{{ t.registry_path | default('Registry Path') }}</th>{% endif %}
+                </tr>
+            </thead>
+            <tbody>
+                {% for entry in exec_data.entries %}
+                <tr>
+                    <td class="col-exec-path">{{ entry.decoded_path }}</td>
+                    <td class="col-run-count">{{ entry.run_count if entry.run_count is not none else '—' }}</td>
+                    <td class="col-focus-count">{{ entry.focus_count if entry.focus_count is not none else '—' }}</td>
+                    <td class="col-focus-time">{{ entry.focus_time if entry.focus_time is not none else '—' }}</td>
+                    <td class="col-last-run">{{ entry.last_run if entry.last_run else '—' }}</td>
+                    {% if show_paths %}<td class="col-path">{{ entry.path if entry.path else '—' }}</td>{% endif %}
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        {% else %}
+        <p class="empty-message">{{ t.no_execution_history | default('No execution history found in registry data.') }}</p>
+        {% endif %}
+    </div>
+    {% endif %}
+
 </div>
 
 <style>
@@ -554,6 +836,33 @@
     padding: 0.3em 0.5em;
     background: #f0f7ff;
     border-radius: 3px;
+}
+
+/* Execution history table columns */
+.module-system-summary .execution-table .col-exec-path {
+    max-width: 350px;
+    font-family: 'Consolas', 'Monaco', monospace;
+    font-size: 0.9em;
+    word-break: break-all;
+}
+
+.module-system-summary .execution-table .col-run-count,
+.module-system-summary .execution-table .col-focus-count {
+    width: 80px;
+    text-align: center;
+    white-space: nowrap;
+}
+
+.module-system-summary .execution-table .col-focus-time {
+    width: 100px;
+    text-align: center;
+    white-space: nowrap;
+}
+
+.module-system-summary .execution-table .col-last-run {
+    width: 160px;
+    font-size: 0.85em;
+    white-space: nowrap;
 }
 
 /* Print styles */
