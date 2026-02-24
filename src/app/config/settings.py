@@ -103,6 +103,16 @@ class ReportSettings:
     default_locale: str = "en"
     default_date_format: str = "eu"
 
+    # Default title-page visibility
+    default_show_title_case_number: bool = True
+    default_show_title_evidence: bool = True
+    default_show_title_investigator: bool = True
+    default_show_title_date: bool = True
+
+    # Default footer / appendix options
+    default_show_footer_date: bool = True
+    default_hide_appendix_page_numbers: bool = False
+
 
 @dataclass
 class AppSettings:

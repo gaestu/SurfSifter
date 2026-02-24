@@ -6,11 +6,13 @@ from typing import Dict, List, Optional, TYPE_CHECKING
 from PySide6.QtCore import QUrl
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
+    QCheckBox,
     QComboBox,
     QDialog,
     QDialogButtonBox,
     QFileDialog,
     QFormLayout,
+    QFrame,
     QGridLayout,
     QHBoxLayout,
     QLabel,
@@ -561,6 +563,12 @@ class PreferencesDialog(QDialog):
         self.report_org_name.textChanged.connect(self._validate)
         form.addRow("Organization:", self.report_org_name)
 
+        # Department
+        self.report_department = QLineEdit(settings.reports.default_department)
+        self.report_department.setPlaceholderText("Department / unit (below organization)...")
+        self.report_department.textChanged.connect(self._validate)
+        form.addRow("Department:", self.report_department)
+
         # Footer text
         self.report_footer_text = QLineEdit(settings.reports.default_footer_text)
         self.report_footer_text.setPlaceholderText("Footer text (all pages)...")
@@ -623,6 +631,49 @@ class PreferencesDialog(QDialog):
         prefs_form.addRow("Default Date Format:", self.report_date_format)
 
         layout.addLayout(prefs_form)
+
+        # --- Options separator ---
+        options_sep = QFrame()
+        options_sep.setFrameShape(QFrame.Shape.HLine)
+        options_sep.setFrameShadow(QFrame.Shadow.Sunken)
+        layout.addWidget(options_sep)
+
+        options_label = QLabel("Default Title-Page & Footer Options")
+        options_label.setStyleSheet("font-weight: bold; margin-top: 4px;")
+        layout.addWidget(options_label)
+
+        options_hint = QLabel(
+            "These defaults are applied when a new evidence has no saved report settings."
+        )
+        options_hint.setWordWrap(True)
+        options_hint.setStyleSheet("color: palette(mid); margin-bottom: 4px;")
+        layout.addWidget(options_hint)
+
+        # Title page visibility checkboxes
+        self.report_show_case_number = QCheckBox("Show Case Number on title page")
+        self.report_show_case_number.setChecked(settings.reports.default_show_title_case_number)
+        layout.addWidget(self.report_show_case_number)
+
+        self.report_show_evidence = QCheckBox("Show Evidence on title page")
+        self.report_show_evidence.setChecked(settings.reports.default_show_title_evidence)
+        layout.addWidget(self.report_show_evidence)
+
+        self.report_show_investigator = QCheckBox("Show Investigator on title page")
+        self.report_show_investigator.setChecked(settings.reports.default_show_title_investigator)
+        layout.addWidget(self.report_show_investigator)
+
+        self.report_show_date = QCheckBox("Show Date on title page")
+        self.report_show_date.setChecked(settings.reports.default_show_title_date)
+        layout.addWidget(self.report_show_date)
+
+        self.report_show_footer_date = QCheckBox("Show creation date in footer")
+        self.report_show_footer_date.setChecked(settings.reports.default_show_footer_date)
+        layout.addWidget(self.report_show_footer_date)
+
+        self.report_hide_appendix_pg = QCheckBox("Hide page numbers in appendix")
+        self.report_hide_appendix_pg.setChecked(settings.reports.default_hide_appendix_page_numbers)
+        layout.addWidget(self.report_hide_appendix_pg)
+
         layout.addStretch()
 
         widget.setLayout(layout)
@@ -1705,6 +1756,19 @@ class PreferencesDialog(QDialog):
         for name, editor in self._tool_line_edits.items():
             editor.setText(getattr(defaults.tools, name, ""))
         self.hash_path_edit.setText(defaults.hash.db_path)
+        # Report defaults
+        self.report_author_function.setText(defaults.reports.default_author_function)
+        self.report_author_name.setText(defaults.reports.default_author_name)
+        self.report_org_name.setText(defaults.reports.default_org_name)
+        self.report_department.setText(defaults.reports.default_department)
+        self.report_footer_text.setText(defaults.reports.default_footer_text)
+        self.report_logo_path.clear()
+        self.report_show_case_number.setChecked(defaults.reports.default_show_title_case_number)
+        self.report_show_evidence.setChecked(defaults.reports.default_show_title_evidence)
+        self.report_show_investigator.setChecked(defaults.reports.default_show_title_investigator)
+        self.report_show_date.setChecked(defaults.reports.default_show_title_date)
+        self.report_show_footer_date.setChecked(defaults.reports.default_show_footer_date)
+        self.report_hide_appendix_pg.setChecked(defaults.reports.default_hide_appendix_page_numbers)
         self._validate()
 
     def _validate(self) -> bool:
@@ -1778,10 +1842,17 @@ class PreferencesDialog(QDialog):
             default_author_function=self.report_author_function.text().strip(),
             default_author_name=self.report_author_name.text().strip(),
             default_org_name=self.report_org_name.text().strip(),
+            default_department=self.report_department.text().strip(),
             default_footer_text=self.report_footer_text.text().strip(),
             default_logo_path=self._get_report_logo_relative_path(),
             default_locale=self.report_locale.currentData() or "en",
             default_date_format=self.report_date_format.currentData() or "eu",
+            default_show_title_case_number=self.report_show_case_number.isChecked(),
+            default_show_title_evidence=self.report_show_evidence.isChecked(),
+            default_show_title_investigator=self.report_show_investigator.isChecked(),
+            default_show_title_date=self.report_show_date.isChecked(),
+            default_show_footer_date=self.report_show_footer_date.isChecked(),
+            default_hide_appendix_page_numbers=self.report_hide_appendix_pg.isChecked(),
         )
 
         self.result_settings = AppSettings(
