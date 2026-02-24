@@ -6,13 +6,14 @@ Handles parsing of offline registry hives using regipy and rule definitions.
 
 from __future__ import annotations
 
+import codecs
 import json
 import re
 import struct
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Dict, List, Any, Optional, Union
+from typing import Callable, Dict, List, Any, Optional, Union
 
 from core.logging import get_logger
 
@@ -216,6 +217,95 @@ def _get_key_robust(hive, path: str):
     return current_key
 
 
+def _resolve_wildcard_path(
+    hive, path_pattern: str
+) -> List[tuple]:
+    """
+    Resolve a registry path pattern that may contain wildcards (*) at any position.
+
+    Supports patterns like:
+    - "Software\\Microsoft\\...\\UserAssist\\*\\Count" (mid-path wildcard)
+    - "Software\\...\\Uninstall\\*" (trailing wildcard)
+    - "Software\\Some\\Exact\\Path" (no wildcard)
+
+    Each * expands to all subkeys at that level. Multiple wildcards are supported.
+
+    Args:
+        hive: RegistryHive object
+        path_pattern: Path pattern with optional * wildcards
+
+    Returns:
+        List of (resolved_path_str, key_object) tuples
+    """
+    parts = [p for p in path_pattern.replace("/", "\\").split("\\") if p]
+
+    if "*" not in parts:
+        # No wildcards — resolve directly
+        try:
+            key = _get_key_robust(hive, path_pattern)
+            return [(path_pattern, key)]
+        except Exception as e:
+            LOGGER.debug("Failed to get key %s: %s", path_pattern, e)
+            return []
+
+    # Recursive expansion of wildcards
+    results: List[tuple] = []
+    _expand_wildcard_parts(hive.root, parts, 0, [], results)
+    return results
+
+
+def _expand_wildcard_parts(
+    current_key, parts: List[str], index: int, path_acc: List[str], results: List[tuple]
+) -> None:
+    """
+    Recursively expand wildcard parts in a registry path.
+
+    Args:
+        current_key: Current registry key object
+        parts: List of path components (some may be '*')
+        index: Current index into parts
+        path_acc: Accumulated resolved path components
+        results: Output list of (path_str, key) tuples
+    """
+    if index >= len(parts):
+        # All parts resolved — add the current key
+        results.append(("\\".join(path_acc), current_key))
+        return
+
+    part = parts[index]
+
+    if part == "*":
+        # Expand: iterate all subkeys at this level
+        try:
+            for subkey in current_key.iter_subkeys():
+                _expand_wildcard_parts(
+                    subkey, parts, index + 1,
+                    path_acc + [subkey.name], results
+                )
+        except Exception as e:
+            LOGGER.debug("Failed to expand wildcard at %s: %s", "\\".join(path_acc), e)
+    else:
+        # Exact match: case-insensitive lookup
+        found = None
+        try:
+            for subkey in current_key.iter_subkeys():
+                if subkey.name.lower() == part.lower():
+                    found = subkey
+                    break
+        except Exception:
+            pass
+
+        if found is not None:
+            _expand_wildcard_parts(
+                found, parts, index + 1,
+                path_acc + [found.name], results
+            )
+        else:
+            LOGGER.debug(
+                "Key part '%s' not found under %s", part, "\\".join(path_acc) or "(root)"
+            )
+
+
 def process_hive_file(
     hive_path: Path,
     target: Dict[str, Any],
@@ -251,42 +341,22 @@ def process_hive_file(
                 if not key_path_pattern:
                     continue
 
-                # Handle wildcards in registry path
-                # If path ends with *, we iterate subkeys
-                if key_path_pattern.endswith("\\*"):
-                    base_path = key_path_pattern[:-2]
+                # Resolve wildcard patterns into concrete key paths
+                resolved_paths = _resolve_wildcard_path(hive, key_path_pattern)
+
+                for resolved_path, resolved_key in resolved_paths:
                     try:
-                        key = _get_key_robust(hive, base_path)
-                        for subkey in key.iter_subkeys():
-                            subkey_path = f"{base_path}\\{subkey.name}"
-                            _process_registry_key(
-                                subkey,
-                                key_def,
-                                target,
-                                action,
-                                str(hive_path),
-                                findings,
-                                subkey_path
-                            )
-                    except Exception as e:
-                        LOGGER.debug("Failed to iterate subkeys of %s in hive %s: %s", base_path, hive_path, e)
-                        pass
-                else:
-                    # Exact path
-                    try:
-                        key = _get_key_robust(hive, key_path_pattern)
                         _process_registry_key(
-                            key,
+                            resolved_key,
                             key_def,
                             target,
                             action,
                             str(hive_path),
                             findings,
-                            key_path_pattern
+                            resolved_path
                         )
                     except Exception as e:
-                        LOGGER.debug("Failed to get key %s in hive %s: %s", key_path_pattern, hive_path, e)
-                        pass
+                        LOGGER.debug("Failed to process key %s in hive %s: %s", resolved_path, hive_path, e)
 
     except Exception as e:
         LOGGER.warning("Error processing hive %s: %s", hive_path, e)
@@ -304,6 +374,15 @@ def _process_registry_key(
     key_path_str: str
 ):
     """Process a single registry key and extract values."""
+
+    # Dispatch to custom handler if specified
+    handler_name = key_def.get("custom_handler")
+    if handler_name:
+        handler = CUSTOM_HANDLERS.get(handler_name)
+        if handler:
+            handler(key, key_def, target, action, hive_path, findings, key_path_str)
+            return
+        LOGGER.warning("Unknown custom handler: %s", handler_name)
 
     # Check if we need to extract specific values
     values_to_check = key_def.get("values", [])
@@ -611,4 +690,350 @@ def _process_software_entry(
         path=key_path_str,
         extra_json=json.dumps(software_data, default=str)
     ))
+
+
+# =============================================================================
+# Custom Handler Functions
+# =============================================================================
+
+def _process_typed_urls(
+    key,
+    key_def: Dict[str, Any],
+    target: Dict[str, Any],
+    action: Dict[str, Any],
+    hive_path: str,
+    findings: List[RegistryFinding],
+    key_path_str: str,
+) -> None:
+    """
+    Process IE/Legacy Edge TypedURLs key.
+
+    Correlates URL values with timestamps from the sibling TypedURLsTime key.
+    Each value (url1, url2, ...) has a matching FILETIME timestamp.
+    """
+    # Read URL values
+    url_values: Dict[str, str] = {}
+    try:
+        for val in key.iter_values():
+            if val.name and val.name.lower() != "(default)":
+                url_values[val.name] = str(val.value)
+    except Exception as e:
+        LOGGER.debug("Failed to read TypedURLs values: %s", e)
+        return
+
+    # Try to read sibling TypedURLsTime key for timestamps
+    timestamps: Dict[str, Optional[datetime]] = {}
+    try:
+        # Navigate to the parent and find TypedURLsTime
+        time_key_path = key_path_str.rsplit("\\", 1)[0] + "\\TypedURLsTime"
+        from regipy.registry import RegistryHive  # type: ignore
+        # The hive is already open; use _get_key_robust to find the sibling
+        # We need to get the hive object — reconstruct from hive_path
+        hive = RegistryHive(hive_path)
+        time_key = _get_key_robust(hive, time_key_path)
+        for val in time_key.iter_values():
+            if val.name and isinstance(val.value, bytes) and len(val.value) == 8:
+                timestamps[val.name] = filetime_to_datetime(val.value)
+    except Exception as e:
+        LOGGER.debug("TypedURLsTime not available: %s", e)
+
+    # Create findings for each URL
+    for val_name, url in url_values.items():
+        timestamp = timestamps.get(val_name)
+        extra_data = {
+            "type": key_def.get("indicator", "browser:typed_url"),
+            "url": url,
+            "value_name": val_name,
+            "key_last_modified": str(key.header.last_modified),
+        }
+        if timestamp:
+            extra_data["timestamp_utc"] = timestamp.isoformat()
+
+        findings.append(RegistryFinding(
+            detector_id=target.get("name"),
+            name=key_def.get("indicator", "browser:typed_url"),
+            value=url,
+            confidence=str(key_def.get("confidence", 0.85)),
+            provenance=action.get("provenance", "registry"),
+            hive=hive_path,
+            path=f"{key_path_str}\\{val_name}",
+            extra_json=json.dumps(extra_data, default=str),
+        ))
+
+
+def _process_recent_docs_extension(
+    key,
+    key_def: Dict[str, Any],
+    target: Dict[str, Any],
+    action: Dict[str, Any],
+    hive_path: str,
+    findings: List[RegistryFinding],
+    key_path_str: str,
+) -> None:
+    """
+    Process RecentDocs per-extension key (e.g., .jpg, .png).
+
+    Each numbered value (0, 1, 2, ...) contains binary data with a
+    UTF-16LE null-terminated filename followed by shell item data.
+    """
+    # Determine the extension from the key path
+    extension = key.name if key.name.startswith(".") else ""
+
+    try:
+        for val in key.iter_values():
+            # Skip MRUListEx (the ordering value) and (Default)
+            if val.name and val.name.lower() in ("(default)", "mrulistex"):
+                continue
+
+            if not isinstance(val.value, bytes) or len(val.value) < 4:
+                continue
+
+            # Extract filename: UTF-16LE null-terminated string at start of binary data
+            filename = _extract_utf16le_filename(val.value)
+            if not filename:
+                continue
+
+            extra_data = {
+                "type": key_def.get("indicator", "recent_documents:image"),
+                "filename": filename,
+                "extension": extension,
+                "MRU_position": val.name,
+                "key_last_modified": str(key.header.last_modified),
+            }
+
+            findings.append(RegistryFinding(
+                detector_id=target.get("name"),
+                name=key_def.get("indicator", "recent_documents:image"),
+                value=filename,
+                confidence=str(key_def.get("confidence", 0.75)),
+                provenance=action.get("provenance", "registry"),
+                hive=hive_path,
+                path=f"{key_path_str}\\{val.name}",
+                extra_json=json.dumps(extra_data, default=str),
+            ))
+    except Exception as e:
+        LOGGER.debug("Failed to process RecentDocs extension key %s: %s", key_path_str, e)
+
+
+def _extract_utf16le_filename(data: bytes) -> Optional[str]:
+    """
+    Extract a UTF-16LE null-terminated filename from binary data.
+
+    The filename is at the start of the value data, terminated by a
+    UTF-16LE null character (0x00 0x00 on a 2-byte boundary).
+
+    Args:
+        data: Raw binary value data
+
+    Returns:
+        Decoded filename string, or None if extraction fails
+    """
+    try:
+        # Find the null terminator (0x0000) on a 2-byte boundary
+        for i in range(0, len(data) - 1, 2):
+            if data[i] == 0 and data[i + 1] == 0:
+                if i == 0:
+                    return None
+                return data[:i].decode("utf-16-le")
+        # No null terminator found - try decoding what we have
+        # (unlikely for valid data, but be defensive)
+        return None
+    except (UnicodeDecodeError, IndexError):
+        return None
+
+
+def _process_word_wheel_query(
+    key,
+    key_def: Dict[str, Any],
+    target: Dict[str, Any],
+    action: Dict[str, Any],
+    hive_path: str,
+    findings: List[RegistryFinding],
+    key_path_str: str,
+) -> None:
+    """
+    Process Windows Explorer WordWheelQuery (search box history).
+
+    Each numbered value (0, 1, 2, ...) is a UTF-16LE encoded search term
+    with a null terminator.
+    """
+    try:
+        for val in key.iter_values():
+            # Skip MRUListEx and (Default)
+            if val.name and val.name.lower() in ("(default)", "mrulistex"):
+                continue
+
+            search_term = None
+            if isinstance(val.value, bytes):
+                # UTF-16LE encoded with null terminator
+                try:
+                    # Strip trailing null bytes and decode
+                    raw = val.value.rstrip(b'\x00')
+                    if len(raw) % 2 == 1:
+                        raw = raw + b'\x00'  # Pad for UTF-16LE alignment
+                    search_term = raw.decode("utf-16-le")
+                except UnicodeDecodeError:
+                    continue
+            elif isinstance(val.value, str):
+                search_term = val.value
+            else:
+                continue
+
+            if not search_term:
+                continue
+
+            extra_data = {
+                "type": key_def.get("indicator", "user_activity:explorer_search"),
+                "search_term": search_term,
+                "MRU_position": val.name,
+                "key_last_modified": str(key.header.last_modified),
+            }
+
+            findings.append(RegistryFinding(
+                detector_id=target.get("name"),
+                name=key_def.get("indicator", "user_activity:explorer_search"),
+                value=search_term,
+                confidence=str(key_def.get("confidence", 0.80)),
+                provenance=action.get("provenance", "registry"),
+                hive=hive_path,
+                path=f"{key_path_str}\\{val.name}",
+                extra_json=json.dumps(extra_data, default=str),
+            ))
+    except Exception as e:
+        LOGGER.debug("Failed to process WordWheelQuery key %s: %s", key_path_str, e)
+
+
+# Forensically interesting patterns in UserAssist decoded paths
+# Order matters: more specific patterns (tor, wiping) before generic (browser)
+USERASSIST_FORENSIC_PATTERNS = [
+    ("tor", ["tor browser", "torbrowser"]),
+    ("wiping_tool", ["ccleaner", "bleachbit", "privazer", "evidence eliminator", "eraser"]),
+    ("encryption", ["veracrypt", "truecrypt", "bitlocker", "gpg4win", "axcrypt"]),
+    ("privacy", ["vpn", "protonvpn", "nordvpn", "windscribe", "mullvad"]),
+    ("file_sharing", ["utorrent", "bittorrent", "qbittorrent", "deluge", "transmission"]),
+    ("browser", ["chrome", "firefox", "iexplore", "msedge", "opera", "brave", "vivaldi", "safari"]),
+]
+
+
+def _process_user_assist(
+    key,
+    key_def: Dict[str, Any],
+    target: Dict[str, Any],
+    action: Dict[str, Any],
+    hive_path: str,
+    findings: List[RegistryFinding],
+    key_path_str: str,
+) -> None:
+    """
+    Process UserAssist registry key (application execution history).
+
+    Value names are ROT13-encoded paths. Value data is a binary struct:
+    - Version 5 (Win7+, 72 bytes): session/run_count/focus_count/focus_time/last_run
+    - Version 3 (XP, 16 bytes): session/run_count/last_run
+    """
+    try:
+        for val in key.iter_values():
+            # Skip default and version markers
+            # Note: value names are ROT13-encoded; UEME_ encodes as HRZR_
+            if not val.name or val.name.lower() == "(default)" or val.name.startswith("HRZR_"):
+                continue
+
+            # Decode ROT13 path
+            decoded_path = codecs.decode(val.name, "rot_13")
+
+            # Parse binary data — regipy may return bytes or hex-encoded string
+            data = val.value
+            if isinstance(data, str):
+                try:
+                    data = bytes.fromhex(data)
+                except ValueError:
+                    LOGGER.debug("UserAssist value not valid hex: %s", val.name)
+                    continue
+            if not isinstance(data, bytes):
+                continue
+
+            run_count = None
+            focus_count = None
+            focus_time_ms = None
+            last_run_dt = None
+
+            if len(data) >= 72:
+                # Version 5 (Windows 7+)
+                # Bytes 4-7: run count (uint32 LE)
+                # Bytes 8-11: focus count (uint32 LE)
+                # Bytes 12-15: focus time in ms (uint32 LE)
+                # Bytes 60-67: last run time (FILETIME)
+                run_count = struct.unpack_from('<I', data, 4)[0]
+                focus_count = struct.unpack_from('<I', data, 8)[0]
+                focus_time_ms = struct.unpack_from('<I', data, 12)[0]
+                last_run_filetime = struct.unpack_from('<Q', data, 60)[0]
+                last_run_dt = filetime_to_datetime(last_run_filetime)
+            elif len(data) >= 16:
+                # Version 3 (Windows XP)
+                # Bytes 4-7: run count (uint32 LE) — subtract 5 for XP correction
+                # Bytes 8-15: last run time (FILETIME)
+                raw_count = struct.unpack_from('<I', data, 4)[0]
+                run_count = max(0, raw_count - 5)
+                last_run_filetime = struct.unpack_from('<Q', data, 8)[0]
+                last_run_dt = filetime_to_datetime(last_run_filetime)
+            else:
+                LOGGER.debug("UserAssist value too short (%d bytes): %s", len(data), val.name)
+                continue
+
+            # Detect forensic interest
+            forensic_category = None
+            decoded_lower = decoded_path.lower()
+            for category, patterns in USERASSIST_FORENSIC_PATTERNS:
+                for pattern in patterns:
+                    if pattern in decoded_lower:
+                        forensic_category = category
+                        break
+                if forensic_category:
+                    break
+
+            extra_data: Dict[str, Any] = {
+                "type": key_def.get("indicator", "execution:user_assist"),
+                "decoded_path": decoded_path,
+                "rot13_name": val.name,
+                "run_count": run_count,
+                "key_last_modified": str(key.header.last_modified),
+            }
+            if focus_count is not None:
+                extra_data["focus_count"] = focus_count
+            if focus_time_ms is not None:
+                extra_data["focus_time_ms"] = focus_time_ms
+            if last_run_dt:
+                extra_data["last_run_utc"] = last_run_dt.isoformat()
+            if forensic_category:
+                extra_data["forensic_interest"] = True
+                extra_data["forensic_category"] = forensic_category
+
+            display_value = decoded_path
+            if last_run_dt:
+                display_value = f"{decoded_path} (last: {format_datetime(last_run_dt)})"
+
+            findings.append(RegistryFinding(
+                detector_id=target.get("name"),
+                name=key_def.get("indicator", "execution:user_assist"),
+                value=display_value,
+                confidence=str(key_def.get("confidence", 0.90)),
+                provenance=action.get("provenance", "registry"),
+                hive=hive_path,
+                path=f"{key_path_str}\\{val.name}",
+                extra_json=json.dumps(extra_data, default=str),
+            ))
+    except Exception as e:
+        LOGGER.debug("Failed to process UserAssist key %s: %s", key_path_str, e)
+
+
+# =============================================================================
+# Custom Handler Registry
+# =============================================================================
+
+CUSTOM_HANDLERS: Dict[str, Callable] = {
+    "typed_urls": _process_typed_urls,
+    "recent_docs_extension": _process_recent_docs_extension,
+    "word_wheel_query": _process_word_wheel_query,
+    "user_assist": _process_user_assist,
+}
 

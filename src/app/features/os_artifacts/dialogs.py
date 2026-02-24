@@ -223,7 +223,7 @@ class SoftwareDetailsDialog(QDialog):
 
         # Forensic interest section
         if self.row_data.get("forensic_interest"):
-            forensic_label = QLabel("⚠️ FORENSIC INTEREST")
+            forensic_label = QLabel("FORENSIC INTEREST")
             forensic_label.setStyleSheet("color: red; font-weight: bold;")
             form.addRow("", forensic_label)
 
@@ -297,3 +297,127 @@ class SoftwareDetailsDialog(QDialog):
         button_layout.addWidget(close_btn)
 
         layout.addLayout(button_layout)
+
+
+class AppExecutionDetailsDialog(QDialog):
+    """Dialog showing full details for an application execution (UserAssist) entry."""
+
+    def __init__(self, row_data: Dict[str, Any], parent=None):
+        """
+        Initialize Application Execution details dialog.
+
+        Args:
+            row_data: UserAssist entry data dictionary
+            parent: Parent widget
+        """
+        super().__init__(parent)
+        self.row_data = row_data
+
+        self.setWindowTitle("Application Execution Details")
+        self.setModal(True)
+        self.resize(600, 500)
+
+        self._setup_ui()
+
+    def _setup_ui(self) -> None:
+        """Create UI layout."""
+        layout = QVBoxLayout(self)
+
+        form = QFormLayout()
+
+        # Decoded path (large, bold)
+        decoded_path = self.row_data.get("decoded_path") or "Unknown"
+        path_label = QLabel(f"<b>{decoded_path}</b>")
+        path_label.setStyleSheet("font-size: 13px;")
+        path_label.setWordWrap(True)
+        path_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        form.addRow("Application:", path_label)
+
+        form.addRow("", QLabel(""))  # Spacer
+
+        # Execution stats
+        run_count = self.row_data.get("run_count")
+        form.addRow("Run Count:", QLabel(str(run_count) if run_count is not None else "N/A"))
+
+        focus_count = self.row_data.get("focus_count")
+        form.addRow("Focus Count:", QLabel(str(focus_count) if focus_count is not None else "N/A"))
+
+        focus_time_ms = self.row_data.get("focus_time_ms")
+        if focus_time_ms is not None:
+            from app.features.os_artifacts.models.app_execution_model import _format_focus_time
+            form.addRow("Focus Time:", QLabel(_format_focus_time(focus_time_ms)))
+
+        last_run = self.row_data.get("last_run_utc") or "N/A"
+        if last_run != "N/A":
+            last_run = last_run.replace("T", " ").split("+")[0]
+        form.addRow("Last Run (UTC):", QLabel(last_run))
+
+        form.addRow("", QLabel(""))  # Spacer
+
+        # Forensic interest section
+        if self.row_data.get("forensic_interest"):
+            forensic_label = QLabel("FORENSIC INTEREST")
+            forensic_label.setStyleSheet("color: red; font-weight: bold;")
+            form.addRow("", forensic_label)
+
+            category = self.row_data.get("forensic_category") or "unknown"
+            category_display = {
+                "browser": "Web Browser",
+                "wiping_tool": "Data Wiping / Anti-Forensic Tool",
+                "tor": "Tor / Anonymization",
+                "encryption": "Encryption Software",
+                "privacy": "Privacy / VPN Tool",
+                "file_sharing": "File Sharing / P2P",
+            }.get(category, category.title())
+            form.addRow("Category:", QLabel(category_display))
+
+            form.addRow("", QLabel(""))  # Spacer
+
+        layout.addLayout(form)
+
+        # Registry info section
+        layout.addWidget(QLabel("<b>Registry Information</b>"))
+
+        registry_text = QTextEdit()
+        registry_text.setReadOnly(True)
+        registry_text.setMaximumHeight(120)
+
+        registry_info = []
+        hive = self.row_data.get("hive") or ""
+        if hive:
+            registry_info.append(f"Hive: {hive}")
+
+        path = self.row_data.get("path") or ""
+        if path:
+            registry_info.append(f"Registry Path: {path}")
+
+        rot13_name = self.row_data.get("rot13_name") or ""
+        if rot13_name:
+            registry_info.append(f"Original ROT13 Name: {rot13_name}")
+
+        registry_text.setPlainText("\n".join(registry_info) or "N/A")
+        layout.addWidget(registry_text)
+
+        # Buttons
+        layout.addStretch()
+        button_layout = QHBoxLayout()
+        button_layout.addStretch()
+
+        # Copy path button
+        copy_path_btn = QPushButton("Copy Path")
+        copy_path_btn.clicked.connect(self._copy_path)
+        button_layout.addWidget(copy_path_btn)
+
+        close_btn = QPushButton("Close")
+        close_btn.clicked.connect(self.accept)
+        button_layout.addWidget(close_btn)
+
+        layout.addLayout(button_layout)
+
+    def _copy_path(self) -> None:
+        """Copy decoded path to clipboard."""
+        from PySide6.QtWidgets import QApplication
+        path = self.row_data.get("decoded_path", "")
+        if path:
+            clipboard = QApplication.clipboard()
+            clipboard.setText(path)

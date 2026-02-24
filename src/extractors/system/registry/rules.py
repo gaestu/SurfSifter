@@ -38,6 +38,7 @@ class RegistryKey:
     extract: bool = False  # Extract entire key as indicator
     extract_all_values: bool = False  # Extract all values under this key
     extract_software_entry: bool = False  # Extract as software entry with full metadata
+    custom_handler: Optional[str] = None  # Route to dedicated parser for complex binary formats
     indicator: Optional[str] = None
     confidence: float = 1.0
     note: Optional[str] = None
@@ -174,6 +175,14 @@ SYSTEM_INFO_SOFTWARE = RegistryTarget(
                     extract=True,
                     indicator="startup:bho",
                 ),
+                # Internet Settings policies (machine-level)
+                RegistryKey(
+                    path="Policies\\Microsoft\\Windows\\CurrentVersion\\Internet Settings",
+                    extract_all_values=True,
+                    indicator="network:internet_policy",
+                    confidence=0.75,
+                    note="Machine-level Internet policy settings",
+                ),
             ],
         ),
     ],
@@ -292,7 +301,7 @@ SYSTEM_INFO_NTUSER = RegistryTarget(
                         RegistryValue(name="ProgId", indicator="system:default_browser"),
                     ],
                 ),
-                # User Shell Folders (Downloads)
+                # User Shell Folders (Downloads, Pictures, Videos, Documents, Desktop)
                 RegistryKey(
                     path="Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\User Shell Folders",
                     values=[
@@ -300,6 +309,13 @@ SYSTEM_INFO_NTUSER = RegistryTarget(
                             name="{374DE290-123F-4565-9164-39C4925E467B}",
                             indicator="system:downloads_path",
                         ),
+                        RegistryValue(name="My Pictures", indicator="system:pictures_path"),
+                        RegistryValue(
+                            name="{F42EE2D3-909F-4907-8871-4C22FC0BF756}",
+                            indicator="system:videos_path",
+                        ),
+                        RegistryValue(name="Personal", indicator="system:documents_path"),
+                        RegistryValue(name="Desktop", indicator="system:desktop_path"),
                     ],
                 ),
             ],
@@ -347,6 +363,118 @@ USER_ACTIVITY = RegistryTarget(
                     indicator="typed_paths",
                     confidence=0.80,
                     note="Manually typed paths in Explorer",
+                ),
+                # TypedURLs (IE/Legacy Edge)
+                RegistryKey(
+                    path="Software\\Microsoft\\Internet Explorer\\TypedURLs",
+                    custom_handler="typed_urls",
+                    indicator="browser:typed_url",
+                    confidence=0.85,
+                    note="IE/legacy Edge typed URLs with timestamps",
+                ),
+                # RecentDocs per-extension (image types)
+                RegistryKey(
+                    path="Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\RecentDocs\\.jpg",
+                    custom_handler="recent_docs_extension",
+                    indicator="recent_documents:image",
+                    confidence=0.75,
+                    note="Recently opened .jpg files",
+                ),
+                RegistryKey(
+                    path="Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\RecentDocs\\.jpeg",
+                    custom_handler="recent_docs_extension",
+                    indicator="recent_documents:image",
+                    confidence=0.75,
+                    note="Recently opened .jpeg files",
+                ),
+                RegistryKey(
+                    path="Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\RecentDocs\\.png",
+                    custom_handler="recent_docs_extension",
+                    indicator="recent_documents:image",
+                    confidence=0.75,
+                    note="Recently opened .png files",
+                ),
+                RegistryKey(
+                    path="Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\RecentDocs\\.gif",
+                    custom_handler="recent_docs_extension",
+                    indicator="recent_documents:image",
+                    confidence=0.75,
+                    note="Recently opened .gif files",
+                ),
+                RegistryKey(
+                    path="Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\RecentDocs\\.bmp",
+                    custom_handler="recent_docs_extension",
+                    indicator="recent_documents:image",
+                    confidence=0.75,
+                    note="Recently opened .bmp files",
+                ),
+                RegistryKey(
+                    path="Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\RecentDocs\\.webp",
+                    custom_handler="recent_docs_extension",
+                    indicator="recent_documents:image",
+                    confidence=0.75,
+                    note="Recently opened .webp files",
+                ),
+                # WordWheelQuery (Explorer search box history)
+                RegistryKey(
+                    path="Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\WordWheelQuery",
+                    custom_handler="word_wheel_query",
+                    indicator="user_activity:explorer_search",
+                    confidence=0.80,
+                    note="Explorer search box history",
+                ),
+                # UserAssist (application execution history)
+                RegistryKey(
+                    path="Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\UserAssist\\*\\Count",
+                    custom_handler="user_assist",
+                    indicator="execution:user_assist",
+                    confidence=0.90,
+                    note="Application execution history with timestamps",
+                ),
+                # IE Main (Start Page, Search Page)
+                RegistryKey(
+                    path="Software\\Microsoft\\Internet Explorer\\Main",
+                    values=[
+                        RegistryValue(
+                            name="Start Page",
+                            indicator="browser:home_page",
+                            confidence=0.80,
+                        ),
+                        RegistryValue(
+                            name="Search Page",
+                            indicator="browser:search_page",
+                            confidence=0.80,
+                        ),
+                    ],
+                ),
+                # IE SearchScopes (wildcard)
+                RegistryKey(
+                    path="Software\\Microsoft\\Internet Explorer\\SearchScopes\\*",
+                    extract_all_values=True,
+                    indicator="browser:search_scope",
+                    confidence=0.75,
+                    note="IE configured search scopes",
+                ),
+                # Internet Settings (user-level proxy/config)
+                RegistryKey(
+                    path="Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings",
+                    values=[
+                        RegistryValue(
+                            name="ProxyServer",
+                            indicator="network:proxy_settings",
+                            confidence=0.80,
+                        ),
+                        RegistryValue(
+                            name="ProxyEnable",
+                            indicator="network:proxy_settings",
+                            confidence=0.80,
+                        ),
+                        RegistryValue(
+                            name="AutoConfigURL",
+                            indicator="network:proxy_settings",
+                            confidence=0.80,
+                        ),
+                    ],
                 ),
             ],
         ),
@@ -546,6 +674,9 @@ def _key_to_dict(key: RegistryKey) -> Dict[str, Any]:
 
     if key.extract_software_entry:
         result["extract_software_entry"] = True
+
+    if key.custom_handler:
+        result["custom_handler"] = key.custom_handler
 
     if key.indicator:
         result["indicator"] = key.indicator
