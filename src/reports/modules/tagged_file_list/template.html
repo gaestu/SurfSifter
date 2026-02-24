@@ -1,7 +1,7 @@
 {# Tagged File List Module Template #}
 <div class="module-tagged-file-list">
     {% if show_title %}
-    <h3 class="module-title">{{ t.tagged_file_list_title | default('File List') }}</h3>
+    <h3 class="module-title">{{ module_title | default('File List') }}</h3>
     {% endif %}
     
     <table class="file-list-table">
