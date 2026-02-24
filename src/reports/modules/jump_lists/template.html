@@ -4,35 +4,77 @@
     <h3 class="module-title">{{ section_title }}</h3>
     {% endif %}
 
+    {% if section_description %}
+    <p class="module-description">{{ section_description }}</p>
+    {% elif show_default_description %}
+    <p class="module-description">{{ t.jl_description | default('Jump Lists are a Windows feature that tracks recently and frequently used items per application. They are stored as .lnk shortcut files and can contain file paths, URLs, and access timestamps. This data provides insight into which applications were used and what documents or websites were accessed.') }}</p>
+    {% endif %}
+
     <table class="jump-lists-table">
         <thead>
             <tr>
+                {% if show_application %}
                 <th class="col-app">{{ t.jl_application | default('Application') }}</th>
-                <th class="col-path">{{ t.jl_path | default('Path') }}</th>
+                {% endif %}
+                {% if show_title %}
                 <th class="col-title">{{ t.jl_title | default('Title') }}</th>
+                {% endif %}
+                {% if show_url %}
+                <th class="col-url">{{ t.jl_url | default('URL') }}</th>
+                {% endif %}
+                {% if show_target_path %}
+                <th class="col-path">{{ t.jl_target_path | default('Target Path') }}</th>
+                {% endif %}
+                {% if show_access_time %}
                 <th class="col-access-time">{{ t.jl_access_time | default('Access Time') }}</th>
+                {% endif %}
+                {% if show_creation_time %}
                 <th class="col-creation-time">{{ t.jl_creation_time | default('Creation Time') }}</th>
+                {% endif %}
+                {% if show_access_count %}
+                <th class="col-access-count">{{ t.jl_access_count | default('Access Count') }}</th>
+                {% endif %}
+                {% if show_pin_status %}
                 <th class="col-pin-status">{{ t.jl_pin_status | default('Pin Status') }}</th>
+                {% endif %}
             </tr>
         </thead>
         <tbody>
             {% for entry in entries %}
             <tr class="entry-main{% if loop.index0 % 2 == 0 %} entry-even{% endif %}">
+                {% if show_application %}
                 <td class="col-app">{{ entry.application }}</td>
-                <td class="col-path">{{ entry.target_path }}</td>
+                {% endif %}
+                {% if show_title %}
                 <td class="col-title">{{ entry.title }}</td>
+                {% endif %}
+                {% if show_url %}
+                <td class="col-url">{{ entry.url }}</td>
+                {% endif %}
+                {% if show_target_path %}
+                <td class="col-path">{{ entry.target_path }}</td>
+                {% endif %}
+                {% if show_access_time %}
                 <td class="col-access-time">{{ entry.access_time }}</td>
+                {% endif %}
+                {% if show_creation_time %}
                 <td class="col-creation-time">{{ entry.creation_time }}</td>
+                {% endif %}
+                {% if show_access_count %}
+                <td class="col-access-count">{{ entry.access_count }}</td>
+                {% endif %}
+                {% if show_pin_status %}
                 <td class="col-pin-status">{{ entry.pin_status }}</td>
+                {% endif %}
             </tr>
-            {% if entry.url or entry.jumplist_path %}
+            {% if entry.jumplist_path or entry.appid %}
             <tr class="entry-detail{% if loop.index0 % 2 == 0 %} entry-even{% endif %}">
-                <td colspan="6" class="detail-cell">
-                    {% if entry.url %}
-                    <span class="detail-label">{{ t.jl_url | default('URL') }}:</span>
-                    <span class="detail-value">{{ entry.url }}</span>
+                <td colspan="{{ col_count }}" class="detail-cell">
+                    {% if entry.appid %}
+                    <span class="detail-label">{{ t.jl_appid | default('App ID') }}:</span>
+                    <span class="detail-value">{{ entry.appid }}</span>
                     {% endif %}
-                    {% if entry.url and entry.jumplist_path %}
+                    {% if entry.appid and entry.jumplist_path %}
                     <span class="detail-separator">&nbsp;&bull;&nbsp;</span>
                     {% endif %}
                     {% if entry.jumplist_path %}
@@ -44,7 +86,7 @@
             {% endif %}
             {% else %}
             <tr>
-                <td colspan="6" class="empty-message">
+                <td colspan="{{ col_count }}" class="empty-message">
                     {{ t.no_jump_lists_found | default('No jump list entries found matching the filter criteria.') }}
                 </td>
             </tr>
@@ -78,6 +120,13 @@
     color: #333;
 }
 
+.module-jump-lists .module-description {
+    margin: 0 0 1em 0;
+    color: #555;
+    font-size: 0.9em;
+    line-height: 1.5;
+}
+
 .module-jump-lists .filter-info {
     margin-bottom: 0.5em;
     color: #555;
@@ -100,7 +149,7 @@
     width: 100%;
     border-collapse: collapse;
     font-size: 0.85em;
-    table-layout: fixed;
+    table-layout: auto;
 }
 
 .jump-lists-table th,
@@ -116,6 +165,7 @@
 .jump-lists-table th {
     background-color: #f5f5f5;
     font-weight: 600;
+    white-space: nowrap;
 }
 
 .jump-lists-table tbody tr.entry-main.entry-even {
@@ -126,40 +176,40 @@
     background-color: #f0f7ff;
 }
 
-/* Column widths */
+/* Column styles */
 .jump-lists-table .col-app {
-    width: 22%;
-}
-
-.jump-lists-table .col-path {
-    width: 22%;
-}
-
-.jump-lists-table .col-title {
-    width: 16%;
-}
-
-.jump-lists-table .col-access-time {
-    width: 14%;
     white-space: nowrap;
 }
 
+.jump-lists-table .col-url {
+    word-break: break-all;
+}
+
+.jump-lists-table .col-path {
+    word-break: break-all;
+}
+
+.jump-lists-table .col-access-time,
 .jump-lists-table .col-creation-time {
-    width: 14%;
+    white-space: nowrap;
+}
+
+.jump-lists-table .col-access-count {
+    text-align: center;
     white-space: nowrap;
 }
 
 .jump-lists-table .col-pin-status {
-    width: 12%;
+    white-space: nowrap;
 }
 
 /* Detail row styling */
 .jump-lists-table tr.entry-detail td {
     border-top: none;
-    padding-top: 2px;
-    padding-bottom: 6px;
+    padding-top: 1px;
+    padding-bottom: 5px;
     background-color: #f9f9f9;
-    font-size: 0.92em;
+    font-size: 0.82em;
 }
 
 .jump-lists-table tr.entry-detail.entry-even td {
@@ -173,12 +223,12 @@
 }
 
 .jump-lists-table .detail-label {
-    color: #888;
+    color: #999;
     font-weight: 500;
 }
 
 .jump-lists-table .detail-value {
-    color: #555;
+    color: #666;
     word-break: break-all;
 }
 
@@ -201,7 +251,7 @@
     }
 
     .jump-lists-table tr.entry-detail td {
-        font-size: 0.85em;
+        font-size: 0.78em;
     }
 }
 </style>

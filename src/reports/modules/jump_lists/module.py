@@ -1,13 +1,14 @@
 """Jump Lists Report Module.
 
 Displays a table of Windows Jump List entries with filtering by tags.
-Shows application name, path, title, access/creation times, pin status,
-and optionally URL and jump list path in a second detail line.
+All data columns are toggleable via checkboxes. The detail row below
+each entry shows the Jump List path and App ID.
 """
 
 from __future__ import annotations
 
 import sqlite3
+from pathlib import PureWindowsPath
 from typing import Any, Dict, List
 
 from jinja2 import Environment, FileSystemLoader
@@ -41,7 +42,7 @@ class JumpListsModule(BaseReportModule):
         )
 
     def get_filter_fields(self) -> List[FilterField]:
-        """Return filter fields for tags, limit, and sort."""
+        """Return filter fields for tags, limit, sort, and column visibility."""
         return [
             FilterField(
                 key="section_title",
@@ -49,6 +50,22 @@ class JumpListsModule(BaseReportModule):
                 filter_type=FilterType.TEXT,
                 default="",
                 help_text="Optional heading displayed above the table (leave empty to hide)",
+                required=False,
+            ),
+            FilterField(
+                key="section_description",
+                label="Section Description",
+                filter_type=FilterType.TEXT,
+                default="",
+                help_text="Optional custom description text (overrides default description)",
+                required=False,
+            ),
+            FilterField(
+                key="show_default_description",
+                label="Show Default Description",
+                filter_type=FilterType.CHECKBOX,
+                default=False,
+                help_text="Show a built-in description explaining what Jump Lists are",
                 required=False,
             ),
             FilterField(
@@ -92,6 +109,71 @@ class JumpListsModule(BaseReportModule):
                     ("app_desc", "Application (Z-A)"),
                 ],
                 help_text="Sort order for the jump list entries",
+                required=False,
+            ),
+            # Column visibility checkboxes
+            FilterField(
+                key="show_application",
+                label="Show Application",
+                filter_type=FilterType.CHECKBOX,
+                default=True,
+                help_text="Show the Application column",
+                required=False,
+            ),
+            FilterField(
+                key="show_title",
+                label="Show Title",
+                filter_type=FilterType.CHECKBOX,
+                default=False,
+                help_text="Show the Title column",
+                required=False,
+            ),
+            FilterField(
+                key="show_url",
+                label="Show URL",
+                filter_type=FilterType.CHECKBOX,
+                default=False,
+                help_text="Show the URL column",
+                required=False,
+            ),
+            FilterField(
+                key="show_target_path",
+                label="Show Target Path",
+                filter_type=FilterType.CHECKBOX,
+                default=True,
+                help_text="Show the Target Path column",
+                required=False,
+            ),
+            FilterField(
+                key="show_access_time",
+                label="Show Access Time",
+                filter_type=FilterType.CHECKBOX,
+                default=True,
+                help_text="Show the Access Time column",
+                required=False,
+            ),
+            FilterField(
+                key="show_creation_time",
+                label="Show Creation Time",
+                filter_type=FilterType.CHECKBOX,
+                default=True,
+                help_text="Show the Creation Time column",
+                required=False,
+            ),
+            FilterField(
+                key="show_access_count",
+                label="Show Access Count",
+                filter_type=FilterType.CHECKBOX,
+                default=False,
+                help_text="Show the Access Count column",
+                required=False,
+            ),
+            FilterField(
+                key="show_pin_status",
+                label="Show Pin Status",
+                filter_type=FilterType.CHECKBOX,
+                default=True,
+                help_text="Show the Pin Status column",
                 required=False,
             ),
             FilterField(
@@ -160,10 +242,22 @@ class JumpListsModule(BaseReportModule):
         date_format = config.get("_date_format", "eu")
 
         section_title = config.get("section_title", "")
+        section_description = config.get("section_description", "")
+        show_default_description = config.get("show_default_description", False)
         limit = config.get("limit", self.UNLIMITED)
         tag_filter = config.get("tag_filter", self.ALL)
         sort_by = config.get("sort_by", "access_time_desc")
         show_filter_info = config.get("show_filter_info", False)
+
+        # Column visibility
+        show_application = config.get("show_application", True)
+        show_title = config.get("show_title", False)
+        show_url = config.get("show_url", False)
+        show_target_path = config.get("show_target_path", True)
+        show_access_time = config.get("show_access_time", True)
+        show_creation_time = config.get("show_creation_time", True)
+        show_access_count = config.get("show_access_count", False)
+        show_pin_status = config.get("show_pin_status", True)
 
         query, params = self._build_query(evidence_id, tag_filter, sort_by)
 
@@ -181,19 +275,27 @@ class JumpListsModule(BaseReportModule):
                 all_rows = all_rows[:limit_int]
 
             for row in all_rows:
+                appid = row["appid"] or ""
+                browser = row["browser"] or ""
+                target_path = row["target_path"] or ""
+
+                application = self._resolve_app_name(browser, target_path, appid)
+
                 entries.append(
                     {
-                        "application": row["appid"] or "",
-                        "target_path": row["target_path"] or "",
+                        "application": application,
+                        "appid": appid,
                         "title": row["title"] or "",
+                        "url": row["url"] or "",
+                        "target_path": target_path,
                         "access_time": self._format_dt(
                             row["lnk_access_time"], date_format
                         ),
                         "creation_time": self._format_dt(
                             row["lnk_creation_time"], date_format
                         ),
+                        "access_count": row["access_count"] if row["access_count"] is not None else "",
                         "pin_status": row["pin_status"] or "",
-                        "url": row["url"] or "",
                         "jumplist_path": row["jumplist_path"] or "",
                     }
                 )
@@ -204,6 +306,15 @@ class JumpListsModule(BaseReportModule):
 
         shown_count = len(entries)
         is_truncated = shown_count < total_count
+
+        # Count visible columns for colspan
+        col_count = sum([
+            show_application, show_title, show_url, show_target_path,
+            show_access_time, show_creation_time, show_access_count,
+            show_pin_status,
+        ])
+        # Ensure at least 1 so colspan is valid
+        col_count = max(col_count, 1)
 
         filter_desc = self._build_filter_description(
             tag_filter, sort_by, translations
@@ -216,6 +327,17 @@ class JumpListsModule(BaseReportModule):
         return template.render(
             entries=entries,
             section_title=section_title,
+            section_description=section_description,
+            show_default_description=show_default_description,
+            show_application=show_application,
+            show_title=show_title,
+            show_url=show_url,
+            show_target_path=show_target_path,
+            show_access_time=show_access_time,
+            show_creation_time=show_creation_time,
+            show_access_count=show_access_count,
+            show_pin_status=show_pin_status,
+            col_count=col_count,
             filter_description=filter_desc,
             total_count=total_count,
             shown_count=shown_count,
@@ -224,6 +346,38 @@ class JumpListsModule(BaseReportModule):
             t=translations,
             locale=locale,
         )
+
+    @staticmethod
+    def _resolve_app_name(browser: str, target_path: str, appid: str) -> str:
+        """Derive a human-readable application name.
+
+        Priority:
+        1. Browser name (e.g. "Chrome", "Firefox")
+        2. Executable name from target_path (e.g. "iPoint" from "C:\\iPoint\\iPoint.exe")
+        3. Last folder component from target_path (e.g. "iPoint" from "C:\\iPoint")
+        4. Raw appid as fallback
+
+        Args:
+            browser: Browser name from DB (may be empty)
+            target_path: Target path from the LNK entry (may be empty)
+            appid: Raw Windows AppUserModelId hash
+
+        Returns:
+            Best available application display name
+        """
+        if browser:
+            return browser
+
+        if target_path:
+            p = PureWindowsPath(target_path)
+            # If it's an executable, use the filename without extension
+            if p.suffix.lower() == ".exe":
+                return p.stem
+            # Otherwise use the last path component (folder or file name)
+            if p.name:
+                return p.name
+
+        return appid
 
     def _build_query(
         self,
@@ -272,9 +426,9 @@ class JumpListsModule(BaseReportModule):
         where_clause = " AND ".join(conditions)
 
         query = f"""
-            SELECT DISTINCT j.id, j.appid, j.target_path, j.title,
-                   j.lnk_access_time, j.lnk_creation_time, j.pin_status,
-                   j.url, j.jumplist_path
+            SELECT DISTINCT j.id, j.appid, j.browser, j.target_path,
+                   j.title, j.url, j.lnk_access_time, j.lnk_creation_time,
+                   j.access_count, j.pin_status, j.jumplist_path
             FROM jump_list_entries j
             {join_clause}
             WHERE {where_clause}

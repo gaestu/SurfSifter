@@ -296,13 +296,16 @@ TRANSLATIONS: Dict[str, TranslationDict] = {
         # ===================
         # Jump Lists module
         # ===================
+        "jl_description": "Jump Lists are a Windows feature that tracks recently and frequently used items per application. They are stored as .lnk shortcut files and can contain file paths, URLs, and access timestamps. This data provides insight into which applications were used and what documents or websites were accessed.",
         "jl_application": "Application",
-        "jl_path": "Path",
+        "jl_appid": "App ID",
         "jl_title": "Title",
+        "jl_url": "URL",
+        "jl_target_path": "Target Path",
         "jl_access_time": "Access Time",
         "jl_creation_time": "Creation Time",
+        "jl_access_count": "Access Count",
         "jl_pin_status": "Pin Status",
-        "jl_url": "URL",
         "jl_jumplist_path": "Jump List Path",
         "jl_entries": "entries",
         "no_jump_lists_found": "No jump list entries found matching the filter criteria.",
@@ -686,13 +689,16 @@ TRANSLATIONS: Dict[str, TranslationDict] = {
         # ===================
         # Jump Lists module
         # ===================
+        "jl_description": "Sprunglisten (Jump Lists) sind eine Windows-Funktion, die kürzlich und häufig verwendete Elemente pro Anwendung erfasst. Sie werden als .lnk-Verknüpfungsdateien gespeichert und können Dateipfade, URLs und Zugriffszeitstempel enthalten. Diese Daten geben Aufschluss darüber, welche Anwendungen verwendet und welche Dokumente oder Websites aufgerufen wurden.",
         "jl_application": "Anwendung",
-        "jl_path": "Pfad",
+        "jl_appid": "App-ID",
         "jl_title": "Titel",
+        "jl_url": "URL",
+        "jl_target_path": "Zielpfad",
         "jl_access_time": "Zugriffszeit",
         "jl_creation_time": "Erstellungszeit",
+        "jl_access_count": "Zugriffe",
         "jl_pin_status": "Anheftstatus",
-        "jl_url": "URL",
         "jl_jumplist_path": "Sprunglisten-Pfad",
         "jl_entries": "Einträge",
         "no_jump_lists_found": "Keine Sprunglisten-Einträge gefunden, die den Filterkriterien entsprechen.",

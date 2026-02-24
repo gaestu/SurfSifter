@@ -1354,6 +1354,22 @@ class ReportTabWidget(QWidget):
         if date_fmt_index >= 0:
             self._date_format_combo.setCurrentIndex(date_fmt_index)
 
+        # Title page visibility defaults
+        if "default_show_title_case_number" in defaults:
+            self._show_case_number_cb.setChecked(bool(defaults["default_show_title_case_number"]))
+        if "default_show_title_evidence" in defaults:
+            self._show_evidence_cb.setChecked(bool(defaults["default_show_title_evidence"]))
+        if "default_show_title_investigator" in defaults:
+            self._show_investigator_cb.setChecked(bool(defaults["default_show_title_investigator"]))
+        if "default_show_title_date" in defaults:
+            self._show_date_cb.setChecked(bool(defaults["default_show_title_date"]))
+
+        # Footer / appendix defaults
+        if "default_show_footer_date" in defaults:
+            self._show_footer_date_cb.setChecked(bool(defaults["default_show_footer_date"]))
+        if "default_hide_appendix_page_numbers" in defaults:
+            self._hide_appendix_pg_cb.setChecked(bool(defaults["default_hide_appendix_page_numbers"]))
+
     def _save_report_settings(self) -> None:
         """Save report settings to database."""
         if self._db_conn is None or self._evidence_id is None:
