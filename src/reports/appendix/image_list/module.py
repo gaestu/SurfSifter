@@ -2,16 +2,25 @@
 
 Displays a grid of images with tag and hash match filters.
 Uses multi-select filters with OR/AND mode like the file list appendix.
+
+Performance notes:
+- Thumbnails are generated in parallel via ThreadPoolExecutor
+- Thumbnails are cached to disk under ``{case_folder}/report_thumbs/``
+- Thumbnails are referenced via file:// URIs to keep HTML small
+- SQL batch queries are chunked to stay within SQLite variable limits
 """
 
 from __future__ import annotations
 
 import base64
+import hashlib
 import json
+import logging
 import sqlite3
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from io import BytesIO
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 from jinja2 import Environment, FileSystemLoader
 
@@ -21,12 +30,20 @@ from ...paths import get_module_template_dir
 from core.image_codecs import ensure_pillow_heif_registered
 from core.database.manager import slugify_label
 
+logger = logging.getLogger(__name__)
+
 # Try to import PIL for thumbnail generation
 try:
     from PIL import Image as PILImage
     HAS_PIL = True
 except ImportError:
     HAS_PIL = False
+
+# Maximum number of SQL parameters per query (conservative, SQLite default is 999)
+_SQL_CHUNK_SIZE = 500
+
+# Number of parallel threads for thumbnail generation
+_THUMB_WORKERS = 8
 
 # Human-readable display names for extractor identifiers
 EXTRACTOR_DISPLAY_NAMES: Dict[str, str] = {
@@ -194,10 +211,15 @@ class AppendixImageListModule(BaseAppendixModule):
         case_folder = config.get("_case_folder")
         evidence_label = config.get("_evidence_label")
 
+        # Optional progress / cancellation callbacks (injected by ReportBuildTask)
+        progress_cb: Optional[Callable[[int, str], None]] = config.get("_progress_callback")
+        cancelled_fn: Optional[Callable[[], bool]] = config.get("_cancelled_fn")
+
         query, params = self._build_query(
             evidence_id, tag_filter, match_filter, filter_mode, sort_by
         )
 
+        # ── Step 1: Load image rows from database ──────────────────────
         images: List[Dict[str, Any]] = []
         seen_ids: set[int] = set()
         try:
@@ -208,25 +230,49 @@ class AppendixImageListModule(BaseAppendixModule):
                 if image_id in seen_ids:
                     continue
                 seen_ids.add(image_id)
-
-                image_data = self._process_image(
-                    dict(row),
-                    case_folder,
-                    evidence_id,
-                    evidence_label,
-                    date_format,
-                    translations,
-                )
-                images.append(image_data)
+                images.append(dict(row))
         except Exception as exc:
             return f'<div class="module-error">Error loading images: {exc}</div>'
 
-        # Fetch extractor sources and filesystem dates for all images
-        image_ids = [img["id"] for img in images]
+        if progress_cb:
+            progress_cb(5, f"Loaded {len(images)} images from database")
+
+        # ── Step 2: Generate thumbnails in parallel with disk caching ──
+        thumb_cache_dir = self._get_thumb_cache_dir(case_folder)
+        # Register HEIF support once before the parallel batch
+        if HAS_PIL:
+            ensure_pillow_heif_registered()
+
+        thumbnail_map = self._generate_thumbnails_batch(
+            images,
+            case_folder,
+            evidence_id,
+            evidence_label,
+            thumb_cache_dir,
+            progress_cb=progress_cb,
+            cancelled_fn=cancelled_fn,
+        )
+
+        if cancelled_fn and cancelled_fn():
+            return '<div class="module-error">Report generation was cancelled.</div>'
+
+        # ── Step 3: Build display data for each image ──────────────────
+        processed: List[Dict[str, Any]] = []
+        for row in images:
+            image_data = self._process_image(
+                row, date_format, translations, thumbnail_map.get(row["id"], "")
+            )
+            processed.append(image_data)
+
+        if progress_cb:
+            progress_cb(70, "Fetching metadata")
+
+        # ── Step 4: Enrich with sources, dates, URLs (chunked queries) ─
+        image_ids = [img["id"] for img in processed]
         if image_ids:
             image_sources = self._get_image_sources(db_conn, image_ids)
             fs_dates = self._get_filesystem_dates(db_conn, image_ids)
-            for img in images:
+            for img in processed:
                 raw_sources = image_sources.get(img["id"], [])
                 img["found_by"] = [_humanize_extractor(s) for s in raw_sources]
 
@@ -240,7 +286,6 @@ class AppendixImageListModule(BaseAppendixModule):
                         "creation_date", "Creation Date"
                     )
                 elif "filesystem_images" in raw_sources and not img.get("timestamp"):
-                    # Filesystem image but no date at all
                     img["timestamp_label"] = translations.get(
                         "creation_date", "Creation Date"
                     )
@@ -250,59 +295,65 @@ class AppendixImageListModule(BaseAppendixModule):
                     )
 
         # Fetch URLs for images if requested
-        if include_url and images:
+        if include_url and processed:
             image_urls = self._get_image_urls(db_conn, image_ids)
-            for img in images:
+            for img in processed:
                 img["urls"] = image_urls.get(img["id"], [])
+
+        if progress_cb:
+            progress_cb(80, "Rendering template")
 
         template_dir = get_module_template_dir(__file__)
         env = Environment(loader=FileSystemLoader(template_dir), autoescape=True)
         template = env.get_template("template.html")
 
         return template.render(
-            images=images,
-            total_count=len(images),
+            images=processed,
+            total_count=len(processed),
             include_filepath=include_filepath,
             include_url=include_url,
             t=translations,
             locale=locale,
         )
 
+    # ── Chunked batch query helpers ───────────────────────────────────
+
+    @staticmethod
+    def _chunked(lst: List[Any], size: int = _SQL_CHUNK_SIZE):
+        """Yield successive chunks of *lst* with at most *size* items."""
+        for i in range(0, len(lst), size):
+            yield lst[i : i + size]
+
     def _get_image_urls(
         self, db_conn: sqlite3.Connection, image_ids: List[int]
     ) -> Dict[int, List[str]]:
         """Fetch unique URLs associated with images from image_discoveries.
 
-        Args:
-            db_conn: Database connection
-            image_ids: List of image IDs to fetch URLs for
-
-        Returns:
-            Dict mapping image_id to list of unique URLs
+        Queries are chunked to stay within SQLite variable limits.
         """
         if not image_ids:
             return {}
 
         result: Dict[int, List[str]] = {}
-        placeholders = ",".join("?" * len(image_ids))
         try:
-            cursor = db_conn.execute(
-                f"""
-                SELECT image_id, cache_url
-                FROM image_discoveries
-                WHERE image_id IN ({placeholders})
-                  AND cache_url IS NOT NULL
-                  AND cache_url != ''
-                ORDER BY image_id, discovered_at
-                """,
-                image_ids,
-            )
-            for image_id, cache_url in cursor.fetchall():
-                if image_id not in result:
-                    result[image_id] = []
-                # Add only unique URLs per image
-                if cache_url not in result[image_id]:
-                    result[image_id].append(cache_url)
+            for chunk in self._chunked(image_ids):
+                placeholders = ",".join("?" * len(chunk))
+                cursor = db_conn.execute(
+                    f"""
+                    SELECT image_id, cache_url
+                    FROM image_discoveries
+                    WHERE image_id IN ({placeholders})
+                      AND cache_url IS NOT NULL
+                      AND cache_url != ''
+                    ORDER BY image_id, discovered_at
+                    """,
+                    chunk,
+                )
+                for image_id, cache_url in cursor.fetchall():
+                    if image_id not in result:
+                        result[image_id] = []
+                    if cache_url not in result[image_id]:
+                        result[image_id].append(cache_url)
         except Exception:
             pass
         return result
@@ -314,34 +365,29 @@ class AppendixImageListModule(BaseAppendixModule):
 
         Returns the best available filesystem timestamp (fs_crtime preferred,
         then fs_mtime as fallback) for images discovered by filesystem_images.
-
-        Args:
-            db_conn: Database connection
-            image_ids: List of image IDs to fetch dates for
-
-        Returns:
-            Dict mapping image_id to ISO datetime string
+        Queries are chunked to stay within SQLite variable limits.
         """
         if not image_ids:
             return {}
 
         result: Dict[int, str] = {}
-        placeholders = ",".join("?" * len(image_ids))
         try:
-            cursor = db_conn.execute(
-                f"""
-                SELECT image_id,
-                       COALESCE(fs_crtime, fs_mtime) AS best_date
-                FROM image_discoveries
-                WHERE image_id IN ({placeholders})
-                  AND discovered_by = 'filesystem_images'
-                  AND (fs_crtime IS NOT NULL OR fs_mtime IS NOT NULL)
-                """,
-                image_ids,
-            )
-            for image_id, best_date in cursor.fetchall():
-                if best_date and image_id not in result:
-                    result[image_id] = best_date
+            for chunk in self._chunked(image_ids):
+                placeholders = ",".join("?" * len(chunk))
+                cursor = db_conn.execute(
+                    f"""
+                    SELECT image_id,
+                           COALESCE(fs_crtime, fs_mtime) AS best_date
+                    FROM image_discoveries
+                    WHERE image_id IN ({placeholders})
+                      AND discovered_by = 'filesystem_images'
+                      AND (fs_crtime IS NOT NULL OR fs_mtime IS NOT NULL)
+                    """,
+                    chunk,
+                )
+                for image_id, best_date in cursor.fetchall():
+                    if best_date and image_id not in result:
+                        result[image_id] = best_date
         except Exception:
             pass
         return result
@@ -351,34 +397,30 @@ class AppendixImageListModule(BaseAppendixModule):
     ) -> Dict[int, List[str]]:
         """Fetch distinct extractor sources for images using v_image_sources.
 
-        Args:
-            db_conn: Database connection
-            image_ids: List of image IDs to fetch sources for
-
-        Returns:
-            Dict mapping image_id to list of extractor name strings
+        Queries are chunked to stay within SQLite variable limits.
         """
         if not image_ids:
             return {}
 
         result: Dict[int, List[str]] = {}
-        placeholders = ",".join("?" * len(image_ids))
         try:
-            cursor = db_conn.execute(
-                f"""
-                SELECT image_id, sources
-                FROM v_image_sources
-                WHERE image_id IN ({placeholders})
-                """,
-                image_ids,
-            )
-            for image_id, sources in cursor.fetchall():
-                if sources:
-                    result[image_id] = [
-                        s.strip() for s in sources.split(",") if s.strip()
-                    ]
-                else:
-                    result[image_id] = []
+            for chunk in self._chunked(image_ids):
+                placeholders = ",".join("?" * len(chunk))
+                cursor = db_conn.execute(
+                    f"""
+                    SELECT image_id, sources
+                    FROM v_image_sources
+                    WHERE image_id IN ({placeholders})
+                    """,
+                    chunk,
+                )
+                for image_id, sources in cursor.fetchall():
+                    if sources:
+                        result[image_id] = [
+                            s.strip() for s in sources.split(",") if s.strip()
+                        ]
+                    else:
+                        result[image_id] = []
         except Exception:
             pass
         return result
@@ -473,13 +515,19 @@ class AppendixImageListModule(BaseAppendixModule):
     def _process_image(
         self,
         row: Dict[str, Any],
-        case_folder: Optional[Path],
-        evidence_id: int,
-        evidence_label: Optional[str],
         date_format: str,
         t: Dict[str, str],
+        thumbnail_ref: str,
     ) -> Dict[str, Any]:
-        """Process an image row into display data."""
+        """Process an image row into display data.
+
+        Args:
+            row: Image database row as dict.
+            date_format: Date format preference ("eu" / "us").
+            t: Translation dict.
+            thumbnail_ref: Pre-computed thumbnail reference (file URI, data URI,
+                or empty string).
+        """
         # Parse EXIF if available
         exif_data = {}
         if row.get("exif_json"):
@@ -501,15 +549,6 @@ class AppendixImageListModule(BaseAppendixModule):
             if exif_key in exif_data:
                 exif_display.append(f"{label}: {exif_data[exif_key]}")
 
-        # Generate thumbnail as base64
-        thumbnail_b64 = self._generate_thumbnail(
-            row.get("rel_path"),
-            row.get("first_discovered_by"),
-            case_folder,
-            evidence_id,
-            evidence_label,
-        )
-
         return {
             "id": row["id"],
             "rel_path": row.get("rel_path", ""),
@@ -521,51 +560,190 @@ class AppendixImageListModule(BaseAppendixModule):
             "timestamp_label": t.get("source_date", "Source Date"),  # default; overridden in render()
             "size_bytes": row.get("size_bytes"),
             "exif_display": exif_display,
-            "thumbnail_b64": thumbnail_b64,
+            "thumbnail_src": thumbnail_ref,
             "filename": row.get("filename", ""),  # kept for alt text
         }
 
-    def _generate_thumbnail(
+    # ── Thumbnail generation (parallel + cached) ──────────────────────
+
+    @staticmethod
+    def _get_thumb_cache_dir(case_folder: Optional[Path]) -> Optional[Path]:
+        """Return (and create) the thumbnail cache directory under the case folder."""
+        if not case_folder:
+            return None
+        cache_dir = Path(case_folder) / "report_thumbs"
+        try:
+            cache_dir.mkdir(parents=True, exist_ok=True)
+        except OSError:
+            return None
+        return cache_dir
+
+    @staticmethod
+    def _thumb_cache_key(image_id: int, md5: Optional[str], rel_path: str) -> str:
+        """Deterministic cache key for a thumbnail.
+
+        Uses the image's MD5 hash when available, otherwise a hash of the
+        relative path combined with the DB id.
+        """
+        if md5:
+            return md5
+        raw = f"{image_id}:{rel_path}"
+        return hashlib.md5(raw.encode(), usedforsecurity=False).hexdigest()
+
+    def _generate_single_thumbnail(
         self,
-        rel_path: Optional[str],
-        discovered_by: Optional[str],
-        case_folder: Optional[Path],
-        evidence_id: int,
-        evidence_label: Optional[str],
+        image_path: Optional[Path],
+        cache_path: Optional[Path],
     ) -> str:
-        """Generate a base64 thumbnail for an image."""
-        if not rel_path or not HAS_PIL:
+        """Generate a thumbnail for one image, using cache when available.
+
+        Returns a ``file://`` URI if *cache_path* is provided and writable,
+        otherwise an inline ``data:image/jpeg;base64,...`` string.
+        *image_path* may be ``None`` when the caller already verified a
+        cache hit.
+        """
+        # Check disk cache first
+        if cache_path and cache_path.exists() and cache_path.stat().st_size > 100:
+            return cache_path.as_uri()
+
+        if not image_path:
             return ""
 
         try:
-            image_path = self._resolve_image_path(
-                rel_path, discovered_by, case_folder, evidence_id, evidence_label
-            )
-
-            if not image_path or not image_path.exists():
-                return ""
-
-            ensure_pillow_heif_registered()
-            # Open and create thumbnail
             with PILImage.open(image_path) as img:
-                # Convert to RGB if necessary (for PNG with transparency)
                 if img.mode in ("RGBA", "P"):
                     img = img.convert("RGB")
-
-                # Create thumbnail (maintains aspect ratio)
                 img.thumbnail(self.THUMB_SIZE, PILImage.Resampling.LANCZOS)
 
-                # Save to bytes
                 buffer = BytesIO()
                 img.save(buffer, format="JPEG", quality=85)
-                buffer.seek(0)
+                thumb_bytes = buffer.getvalue()
 
-                # Encode as base64
-                b64 = base64.b64encode(buffer.read()).decode("utf-8")
-                return f"data:image/jpeg;base64,{b64}"
+            # Try to write to disk cache
+            if cache_path:
+                try:
+                    cache_path.write_bytes(thumb_bytes)
+                    return cache_path.as_uri()
+                except OSError:
+                    pass
 
+            # Fallback: inline base64
+            b64 = base64.b64encode(thumb_bytes).decode("utf-8")
+            return f"data:image/jpeg;base64,{b64}"
         except Exception:
             return ""
+
+    def _generate_thumbnails_batch(
+        self,
+        image_rows: List[Dict[str, Any]],
+        case_folder: Optional[Path],
+        evidence_id: int,
+        evidence_label: Optional[str],
+        thumb_cache_dir: Optional[Path],
+        progress_cb: Optional[Callable[[int, str], None]] = None,
+        cancelled_fn: Optional[Callable[[], bool]] = None,
+    ) -> Dict[int, str]:
+        """Generate thumbnails for all images in parallel with disk caching.
+
+        Args:
+            image_rows: List of image database row dicts.
+            case_folder: Case workspace root.
+            evidence_id: Evidence ID.
+            evidence_label: Evidence label for slug construction.
+            thumb_cache_dir: Directory for cached thumbnails (may be None).
+            progress_cb: Optional ``(percent, message)`` callback.
+            cancelled_fn: Optional callable returning True when cancelled.
+
+        Returns:
+            Dict mapping image ID to a thumbnail reference string
+            (``file://`` URI, inline data URI, or empty string).
+        """
+        result: Dict[int, str] = {}
+        if not HAS_PIL or not image_rows:
+            return result
+
+        # Build work items: (image_id, source_path_or_None, cache_path_or_None)
+        # We check the cache FIRST — if a cached thumbnail exists we don't need
+        # the source image at all, so we can skip the (potentially expensive)
+        # path resolution.
+        work_items: List[tuple] = []
+        for row in image_rows:
+            rel_path = row.get("rel_path")
+            if not rel_path:
+                continue
+            image_id = row["id"]
+
+            cache_path: Optional[Path] = None
+            if thumb_cache_dir:
+                key = self._thumb_cache_key(
+                    image_id, row.get("md5"), rel_path
+                )
+                cache_path = thumb_cache_dir / f"{key}.jpg"
+
+                # Cache hit — no source resolution needed
+                if cache_path.exists() and cache_path.stat().st_size > 100:
+                    work_items.append((image_id, None, cache_path))
+                    continue
+
+            # Need to generate: resolve source path
+            source_path = self._resolve_image_path(
+                rel_path,
+                row.get("first_discovered_by"),
+                case_folder,
+                evidence_id,
+                evidence_label,
+            )
+            if not source_path or not source_path.exists():
+                continue
+
+            work_items.append((image_id, source_path, cache_path))
+
+        total = len(work_items)
+        if total == 0:
+            return result
+
+        # Fast path: serve entirely from cache if all work items are cache hits
+        uncached = [item for item in work_items if item[1] is not None]
+        all_cached = len(uncached) == 0
+
+        if all_cached:
+            # Everything is cached — no PIL work needed
+            logger.debug("All %d thumbnails served from cache", total)
+            for image_id, _src, cache_path in work_items:
+                result[image_id] = cache_path.as_uri()  # type: ignore[union-attr]
+            if progress_cb:
+                progress_cb(60, f"All {total} thumbnails loaded from cache")
+            return result
+
+        # Parallel generation
+        done_count = 0
+        workers = min(_THUMB_WORKERS, total)
+
+        def _task(item: tuple) -> tuple:
+            image_id, source_path, cache_path = item
+            ref = self._generate_single_thumbnail(source_path, cache_path)
+            return (image_id, ref)
+
+        with ThreadPoolExecutor(max_workers=workers) as executor:
+            futures = {executor.submit(_task, item): item for item in work_items}
+            for future in as_completed(futures):
+                if cancelled_fn and cancelled_fn():
+                    executor.shutdown(wait=False, cancel_futures=True)
+                    break
+                try:
+                    image_id, ref = future.result()
+                    result[image_id] = ref
+                except Exception:
+                    pass
+                done_count += 1
+                if progress_cb and done_count % 50 == 0:
+                    pct = 10 + int(50 * done_count / total)
+                    progress_cb(pct, f"Thumbnails: {done_count}/{total}")
+
+        if progress_cb:
+            progress_cb(60, f"Generated {len(result)} thumbnails")
+
+        return result
 
     def _resolve_image_path(
         self,

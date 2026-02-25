@@ -25,8 +25,9 @@ from PySide6.QtWidgets import (
     QComboBox,
     QCheckBox,
     QSizePolicy,
+    QProgressDialog,
 )
-from PySide6.QtCore import Qt, QDate, QUrl, Signal
+from PySide6.QtCore import Qt, QDate, QUrl, Signal, QThreadPool
 from PySide6.QtGui import QDesktopServices
 
 from .collapsible_group import CollapsibleGroupBox
@@ -532,7 +533,7 @@ class ReportTabWidget(QWidget):
         return layout
 
     def _build_report_html(self, mode: ReportMode = ReportMode.REPORT_ONLY):
-        """Build the report HTML from current state.
+        """Build the report HTML from current state (synchronous, for preview).
 
         Args:
             mode: Which parts to render.
@@ -540,6 +541,27 @@ class ReportTabWidget(QWidget):
         Returns:
             For REPORT_ONLY / APPENDIX_ONLY: HTML string, or None on error.
             For COMPLETE: tuple of (report_html, appendix_html), or None on error.
+        """
+        factory = self._create_builder_factory(mode)
+        if factory is None:
+            return None
+
+        builder = factory()
+
+        # Load data based on mode
+        if mode != ReportMode.APPENDIX_ONLY:
+            builder.load_sections_from_db()
+        if mode != ReportMode.REPORT_ONLY:
+            builder.load_appendix_from_db()
+
+        return builder.render_html(mode)
+
+    def _create_builder_factory(self, mode: ReportMode = ReportMode.REPORT_ONLY):
+        """Return a zero-arg callable that creates a configured ReportBuilder.
+
+        The factory captures all current UI state so it can be called safely
+        from a worker thread.  Returns ``None`` if preconditions fail
+        (missing evidence / title) — error dialogs are shown in that case.
         """
         if self._db_conn is None or self._evidence_id is None:
             QMessageBox.warning(
@@ -558,73 +580,83 @@ class ReportTabWidget(QWidget):
             )
             return None
 
-        # Get selected locale
+        # Snapshot all UI values now (main-thread only)
         locale = self._locale_combo.currentData() or DEFAULT_LOCALE
-
-        # Get selected date format
         date_format = self._date_format_combo.currentData() or "eu"
+        case_number = self._case_number
+        evidence_label = self._evidence_label
+        investigator = self._investigator
+        db_conn = self._db_conn
+        evidence_id = self._evidence_id
+        workspace_path = self._workspace_path
 
-        # Build the report
-        builder = ReportBuilder(
-            self._db_conn,
-            self._evidence_id,
-            case_folder=self._workspace_path,
-            locale=locale,
+        author_function = self._author_function_input.text().strip() or None
+        author_name = self._author_name_input.text().strip() or None
+        author_date = self._author_date_input.date().toString("dd.MM.yyyy") or None
+
+        branding_org = self._branding_org_input.text().strip() or None
+        branding_dept = self._branding_dept_input.text().strip() or None
+        branding_footer = self._branding_footer_input.text().strip() or None
+        branding_logo = self._branding_logo_input.text().strip() or None
+
+        show_case_number = self._show_case_number_cb.isChecked()
+        show_evidence = self._show_evidence_cb.isChecked()
+        show_investigator = self._show_investigator_cb.isChecked()
+        show_date = self._show_date_cb.isChecked()
+
+        show_footer_date = self._show_footer_date_cb.isChecked()
+        footer_ev = self._footer_evidence_input.text().strip() or None
+
+        # Appendix page number option
+        hide_appendix_page_numbers = getattr(
+            self, "_hide_appendix_page_numbers_cb", None
         )
-        builder.set_title(title)
-        builder.set_date_format(date_format)
-        builder.set_case_info(
-            case_number=self._case_number,
-            evidence_label=self._evidence_label,
-            investigator=self._investigator,
-        )
+        if hide_appendix_page_numbers is not None:
+            hide_appendix_page_numbers = hide_appendix_page_numbers.isChecked()
+        else:
+            hide_appendix_page_numbers = False
 
-        # Set author info from UI fields
-        author_function = self._author_function_input.text().strip()
-        author_name = self._author_name_input.text().strip()
-        author_date = self._author_date_input.date().toString("dd.MM.yyyy")
+        def _factory() -> ReportBuilder:
+            builder = ReportBuilder(
+                db_conn,
+                evidence_id,
+                case_folder=workspace_path,
+                locale=locale,
+            )
+            builder.set_title(title)
+            builder.set_date_format(date_format)
+            builder.set_case_info(
+                case_number=case_number,
+                evidence_label=evidence_label,
+                investigator=investigator,
+            )
+            builder.set_author_info(
+                function=author_function,
+                name=author_name,
+                date=author_date,
+            )
+            builder.set_branding(
+                org_name=branding_org,
+                department=branding_dept,
+                footer_text=branding_footer,
+                logo_path=branding_logo,
+            )
+            builder.set_title_page_options(
+                show_case_number=show_case_number,
+                show_evidence=show_evidence,
+                show_investigator=show_investigator,
+                show_date=show_date,
+            )
+            builder.set_footer_options(
+                show_footer_date=show_footer_date,
+                footer_evidence_label=footer_ev,
+            )
+            builder.set_appendix_options(
+                hide_page_numbers=hide_appendix_page_numbers,
+            )
+            return builder
 
-        builder.set_author_info(
-            function=author_function if author_function else None,
-            name=author_name if author_name else None,
-            date=author_date if author_date else None,
-        )
-
-        # Set branding info from UI fields
-        branding_org = self._branding_org_input.text().strip()
-        branding_dept = self._branding_dept_input.text().strip()
-        branding_footer = self._branding_footer_input.text().strip()
-        branding_logo = self._branding_logo_input.text().strip()
-
-        builder.set_branding(
-            org_name=branding_org if branding_org else None,
-            department=branding_dept if branding_dept else None,
-            footer_text=branding_footer if branding_footer else None,
-            logo_path=branding_logo if branding_logo else None,
-        )
-
-        # Set title page field visibility
-        builder.set_title_page_options(
-            show_case_number=self._show_case_number_cb.isChecked(),
-            show_evidence=self._show_evidence_cb.isChecked(),
-            show_investigator=self._show_investigator_cb.isChecked(),
-            show_date=self._show_date_cb.isChecked(),
-        )
-
-        # Set footer options
-        footer_ev = self._footer_evidence_input.text().strip()
-        builder.set_footer_options(
-            show_footer_date=self._show_footer_date_cb.isChecked(),
-            footer_evidence_label=footer_ev if footer_ev else None,
-        )
-
-        # Load data based on mode
-        if mode != ReportMode.APPENDIX_ONLY:
-            builder.load_sections_from_db()
-        if mode != ReportMode.REPORT_ONLY:
-            builder.load_appendix_from_db()
-
-        return builder.render_html(mode)
+        return _factory
 
     def _on_preview(self) -> None:
         """Handle Preview button click - open report in browser."""
@@ -701,90 +733,135 @@ class ReportTabWidget(QWidget):
             file_path += ".pdf"
         return file_path
 
-    # ── PDF creation slots ────────────────────────────────────────────
+    # ── PDF creation slots (background worker) ─────────────────────────
+
+    def _set_pdf_buttons_enabled(self, enabled: bool) -> None:
+        """Enable or disable all PDF generation buttons."""
+        self._create_report_pdf_btn.setEnabled(enabled)
+        self._create_appendix_pdf_btn.setEnabled(enabled)
+        self._create_complete_pdf_btn.setEnabled(enabled)
+
+    def _start_pdf_task(
+        self,
+        mode: ReportMode,
+        report_path: Optional[str] = None,
+        appendix_path: Optional[str] = None,
+    ) -> None:
+        """Launch a :class:`ReportBuildTask` in the global thread pool.
+
+        Shows a ``QProgressDialog`` and disables the PDF buttons until the
+        task finishes.
+        """
+        from app.services.workers import ReportBuildTask, start_task
+
+        factory = self._create_builder_factory(mode)
+        if factory is None:
+            return
+
+        rpath = Path(report_path) if report_path else None
+        apath = Path(appendix_path) if appendix_path else None
+
+        task = ReportBuildTask(
+            builder_factory=factory,
+            generator=self._generator,
+            mode=mode,
+            report_path=rpath,
+            appendix_path=apath,
+        )
+
+        # Keep a reference so it isn't garbage-collected
+        self._active_pdf_task = task
+
+        # Progress dialog
+        dlg = QProgressDialog("Preparing report…", "Cancel", 0, 100, self)
+        dlg.setWindowTitle("Generating PDF")
+        dlg.setWindowModality(Qt.WindowModal)
+        dlg.setMinimumDuration(0)  # show immediately
+        dlg.setValue(0)
+        self._pdf_progress_dlg = dlg
+
+        # Wire signals
+        task.signals.progress.connect(self._on_pdf_progress)
+        task.signals.result.connect(self._on_pdf_result)
+        task.signals.error.connect(self._on_pdf_error)
+        task.signals.finished.connect(self._on_pdf_finished)
+        dlg.canceled.connect(task.cancel)
+
+        self._set_pdf_buttons_enabled(False)
+        start_task(task)
+
+    def _on_pdf_progress(self, pct: int, msg: str) -> None:
+        dlg = getattr(self, "_pdf_progress_dlg", None)
+        if dlg and not dlg.wasCanceled():
+            dlg.setValue(min(pct, 99))
+            dlg.setLabelText(msg)
+
+    def _on_pdf_result(self, result: object) -> None:
+        data = result if isinstance(result, dict) else {}
+        paths = []
+        if data.get("report_path"):
+            paths.append(data["report_path"])
+        if data.get("appendix_path"):
+            paths.append(data["appendix_path"])
+
+        if not paths:
+            return
+
+        msg = "PDF(s) saved to:\n" + "\n".join(paths)
+        QMessageBox.information(self, "PDF Created", msg)
+        for p in paths:
+            QDesktopServices.openUrl(QUrl.fromLocalFile(p))
+
+    def _on_pdf_error(self, error: str, tb: str) -> None:
+        QMessageBox.critical(self, "PDF Error", f"Failed to create PDF:\n{error}")
+
+    def _on_pdf_finished(self) -> None:
+        dlg = getattr(self, "_pdf_progress_dlg", None)
+        if dlg:
+            dlg.close()
+            self._pdf_progress_dlg = None
+        self._active_pdf_task = None
+        self._set_pdf_buttons_enabled(True)
 
     def _on_create_report_pdf(self) -> None:
         """Generate report-only PDF (no appendix)."""
-        html = self._build_report_html(ReportMode.REPORT_ONLY)
-        if html is None or not self._check_weasyprint():
+        if not self._check_weasyprint():
             return
-
         file_path = self._ask_save_path(
             "Save Report PDF", self._default_pdf_path()
         )
         if not file_path:
             return
-
-        try:
-            self._generator.generate_pdf(html, file_path)
-            QMessageBox.information(
-                self, "PDF Created", f"Report saved to:\n{file_path}"
-            )
-            QDesktopServices.openUrl(QUrl.fromLocalFile(file_path))
-        except Exception as e:
-            QMessageBox.critical(
-                self, "PDF Error", f"Failed to create PDF: {e}"
-            )
+        self._start_pdf_task(ReportMode.REPORT_ONLY, report_path=file_path)
 
     def _on_create_appendix_pdf(self) -> None:
         """Generate appendix-only PDF."""
-        html = self._build_report_html(ReportMode.APPENDIX_ONLY)
-        if html is None or not self._check_weasyprint():
+        if not self._check_weasyprint():
             return
-
         file_path = self._ask_save_path(
             "Save Appendix PDF", self._default_pdf_path("_Appendix")
         )
         if not file_path:
             return
-
-        try:
-            self._generator.generate_pdf(html, file_path)
-            QMessageBox.information(
-                self, "PDF Created", f"Appendix saved to:\n{file_path}"
-            )
-            QDesktopServices.openUrl(QUrl.fromLocalFile(file_path))
-        except Exception as e:
-            QMessageBox.critical(
-                self, "PDF Error", f"Failed to create appendix PDF: {e}"
-            )
+        self._start_pdf_task(ReportMode.APPENDIX_ONLY, appendix_path=file_path)
 
     def _on_create_complete_pdf(self) -> None:
         """Generate both report and appendix PDFs at once."""
-        result = self._build_report_html(ReportMode.COMPLETE)
-        if result is None or not self._check_weasyprint():
+        if not self._check_weasyprint():
             return
-
-        report_html, appendix_html = result
-
-        # Ask for report path — derive appendix path from it
         report_path = self._ask_save_path(
             "Save Report PDF (appendix will be saved alongside)",
             self._default_pdf_path(),
         )
         if not report_path:
             return
-
-        # Derive appendix path: insert _Appendix before .pdf
         rp = Path(report_path)
         appendix_path = str(rp.with_name(f"{rp.stem}_Appendix{rp.suffix}"))
-
-        try:
-            self._generator.generate_pdf_pair(
-                report_html, appendix_html, report_path, appendix_path
-            )
-            QMessageBox.information(
-                self,
-                "PDFs Created",
-                f"Report saved to:\n{report_path}\n\n"
-                f"Appendix saved to:\n{appendix_path}",
-            )
-            QDesktopServices.openUrl(QUrl.fromLocalFile(report_path))
-            QDesktopServices.openUrl(QUrl.fromLocalFile(appendix_path))
-        except Exception as e:
-            QMessageBox.critical(
-                self, "PDF Error", f"Failed to create PDFs: {e}"
-            )
+        self._start_pdf_task(
+            ReportMode.COMPLETE,
+            report_path=report_path,
+            appendix_path=appendix_path,
+        )
 
     def _update_default_title(self) -> None:
         """Update the title input with default value based on case/evidence."""

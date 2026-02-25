@@ -2137,3 +2137,118 @@ class CaseWideExtractAndIngestWorker(QThread):
                 evidence_fs.close()
             except Exception:
                 pass
+
+
+# -----------------------------------------------------------------------------
+# Report Build Task — runs report/appendix generation off the GUI thread
+# -----------------------------------------------------------------------------
+
+class ReportBuildTask(BaseTask):
+    """Background task for building report HTML and generating PDFs.
+
+    Emits ``progress(percent, message)`` signals so the UI can show a
+    ``QProgressDialog``.  Supports cooperative cancellation via
+    :meth:`cancel`.
+
+    The task owns the heavy lifting:
+
+    1. ``ReportBuilder.load_sections_from_db()`` / ``load_appendix_from_db()``
+       (which generates thumbnails in parallel for image appendix modules)
+    2. ``ReportBuilder.render_html()``
+    3. ``ReportGenerator.generate_pdf()`` / ``generate_pdf_pair()``
+
+    **Result signal payload:** ``dict`` with keys ``mode``, ``report_path``,
+    ``appendix_path`` (paths may be ``None`` depending on mode).
+    """
+
+    def __init__(
+        self,
+        builder_factory: callable,
+        generator: "ReportGenerator",
+        mode: "ReportMode",
+        report_path: Optional[Path] = None,
+        appendix_path: Optional[Path] = None,
+    ) -> None:
+        """
+        Args:
+            builder_factory: A zero-arg callable that creates a configured
+                :class:`ReportBuilder`.  We call it *inside* ``run_task()``
+                to ensure the SQLite connection is used only from the worker
+                thread.
+            generator: A :class:`ReportGenerator` instance (thread-safe).
+            mode: Which report parts to generate.
+            report_path: Destination for the report PDF (if applicable).
+            appendix_path: Destination for the appendix PDF (if applicable).
+        """
+        super().__init__()
+        self._builder_factory = builder_factory
+        self._generator = generator
+        self._mode = mode
+        self._report_path = report_path
+        self._appendix_path = appendix_path
+
+    # Expose a progress bridge compatible with ReportBuilder's callback API
+    def _progress_bridge(self, pct: int, msg: str) -> None:
+        """Forward progress from ReportBuilder / modules to Qt signals."""
+        self.report_progress(pct, msg)
+
+    def run_task(self) -> Dict[str, Any]:
+        from reports.generator import ReportMode
+
+        self.report_progress(0, "Preparing report builder…")
+        builder = self._builder_factory()
+
+        mode = self._mode
+
+        # ── Load data ─────────────────────────────────────────────────
+        if mode != ReportMode.APPENDIX_ONLY:
+            self.raise_if_cancelled()
+            self.report_progress(2, "Loading report sections…")
+            builder.load_sections_from_db()
+
+        if mode != ReportMode.REPORT_ONLY:
+            self.raise_if_cancelled()
+            self.report_progress(5, "Loading appendix modules…")
+            builder.load_appendix_from_db(
+                progress_callback=self._progress_bridge,
+                cancelled_fn=self.is_cancelled,
+            )
+
+        self.raise_if_cancelled()
+
+        # ── Render HTML ───────────────────────────────────────────────
+        self.report_progress(82, "Rendering HTML…")
+        html_result = builder.render_html(mode)
+
+        self.raise_if_cancelled()
+
+        # ── Generate PDF(s) ──────────────────────────────────────────
+        result: Dict[str, Any] = {
+            "mode": mode,
+            "report_path": None,
+            "appendix_path": None,
+        }
+
+        if mode == ReportMode.COMPLETE:
+            report_html, appendix_html = html_result
+            self.report_progress(85, "Generating report PDF…")
+            self._generator.generate_pdf(report_html, self._report_path)
+            result["report_path"] = str(self._report_path)
+            self.raise_if_cancelled()
+
+            self.report_progress(92, "Generating appendix PDF…")
+            self._generator.generate_pdf(appendix_html, self._appendix_path)
+            result["appendix_path"] = str(self._appendix_path)
+
+        elif mode == ReportMode.REPORT_ONLY:
+            self.report_progress(85, "Generating report PDF…")
+            self._generator.generate_pdf(html_result, self._report_path)
+            result["report_path"] = str(self._report_path)
+
+        else:  # APPENDIX_ONLY
+            self.report_progress(85, "Generating appendix PDF…")
+            self._generator.generate_pdf(html_result, self._appendix_path)
+            result["appendix_path"] = str(self._appendix_path)
+
+        self.report_progress(100, "Done")
+        return result

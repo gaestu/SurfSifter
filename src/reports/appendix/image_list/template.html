@@ -150,8 +150,8 @@
         {% for image in images %}
         <div class="appendix-image-card">
             <div class="appendix-image-thumbnail">
-                {% if image.thumbnail_b64 %}
-                <img src="{{ image.thumbnail_b64 }}" alt="{{ image.filename }}" />
+                {% if image.thumbnail_src %}
+                <img src="{{ image.thumbnail_src }}" alt="{{ image.filename }}" />
                 {% else %}
                 <div class="appendix-no-thumbnail">🖼️<br/>{{ t.no_preview | default('No Preview') }}</div>
                 {% endif %}

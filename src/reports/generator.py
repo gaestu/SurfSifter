@@ -445,8 +445,18 @@ class ReportBuilder:
 
         return self
 
-    def load_appendix_from_db(self) -> "ReportBuilder":
+    def load_appendix_from_db(
+        self,
+        progress_callback: Optional[callable] = None,
+        cancelled_fn: Optional[callable] = None,
+    ) -> "ReportBuilder":
         """Load appendix modules from the database.
+
+        Args:
+            progress_callback: Optional ``(percent, message)`` callable for
+                reporting progress to the caller.
+            cancelled_fn: Optional callable returning ``True`` when the
+                operation should be aborted.
 
         Returns:
             self for method chaining
@@ -454,7 +464,8 @@ class ReportBuilder:
         self._data.appendix_modules.clear()
 
         modules = get_appendix_modules(self._db_conn, self._evidence_id)
-        for mod in modules:
+        total = len(modules) or 1
+        for idx, mod in enumerate(modules):
             module_id = mod.get("module_id", "")
             config = mod.get("config", {})
             title = (mod.get("title") or "").strip()
@@ -468,6 +479,16 @@ class ReportBuilder:
             render_config["_locale"] = self._locale
             render_config["_translations"] = self._translations
             render_config["_date_format"] = self._data.date_format
+            # Forward progress / cancellation hooks to modules
+            if progress_callback is not None:
+                render_config["_progress_callback"] = progress_callback
+            if cancelled_fn is not None:
+                render_config["_cancelled_fn"] = cancelled_fn
+
+            # Check for cancellation between modules
+            if cancelled_fn and cancelled_fn():
+                logger.info("Appendix build cancelled by user")
+                break
 
             module_instance = self._appendix_registry.get_module(module_id)
             if module_instance is not None:
@@ -506,6 +527,11 @@ class ReportBuilder:
                         "rendered_html": f'<p class="text-muted">Appendix module not found: {module_id}</p>',
                     }
                 )
+
+            # Report per-module progress
+            if progress_callback:
+                pct = int(80 * (idx + 1) / total)
+                progress_callback(pct, f"Rendered appendix module: {title or module_id}")
 
         return self
 
