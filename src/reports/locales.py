@@ -29,6 +29,7 @@ TRANSLATIONS: Dict[str, TranslationDict] = {
         "of": "of",
         "generated": "Generated",
         "appendix": "Appendix",
+        "appendix_page": "Appendix",
         "no_content": "No Content",
         "no_sections_message": "No sections have been added to this report. Use the Reports tab to add custom sections and modules.",
 
@@ -467,6 +468,7 @@ TRANSLATIONS: Dict[str, TranslationDict] = {
         "of": "von",
         "generated": "Erstellt",
         "appendix": "Anhang",
+        "appendix_page": "Anhang",
         "no_content": "Kein Inhalt",
         "no_sections_message": "Diesem Bericht wurden keine Abschnitte hinzugefügt. Verwenden Sie die Registerkarte Berichte, um benutzerdefinierte Abschnitte und Module hinzuzufügen.",
 

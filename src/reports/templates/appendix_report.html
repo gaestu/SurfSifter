@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>{{ report_title }}</title>
+    <title>{{ report_title }} — {{ t.appendix | default('Appendix') }}</title>
     <style>
         /* ===== CSS Reset & Base ===== */
         * {
@@ -27,14 +27,14 @@
             margin: 2.5cm 2cm;
 
             @top-left {
-                content: "{{ report_title }}";
+                content: "{{ report_title }} — {{ t.appendix_page | default('Appendix') }}";
                 font-family: Arial, 'Helvetica Neue', Helvetica, sans-serif;
                 font-size: 9pt;
                 color: #666;
             }
 
             @bottom-center {
-                content: "{{ t.page | default('Page') }} " counter(page) " {{ t.of | default('of') }} " counter(pages);
+                content: "{{ t.appendix_page | default('Appendix') }} — {{ t.page | default('Page') }} " counter(page) " {{ t.of | default('of') }} " counter(pages);
                 font-family: Arial, 'Helvetica Neue', Helvetica, sans-serif;
                 font-size: 9pt;
                 color: #666;
@@ -84,7 +84,6 @@
             display: flex;
             flex-direction: column;
             min-height: 80vh;
-            /* Keep title page aligned to normal page margins (from @page) */
             padding: 0 0 0.5cm 0;
         }
 
@@ -155,17 +154,6 @@
             color: #333;
         }
 
-        /* Legacy classes kept for backward compat */
-        .title-page .branding-logo {
-            max-width: 200px;
-            max-height: 100px;
-        }
-
-        .title-page .branding-org-name {
-            font-size: 14pt;
-            color: #555;
-        }
-
         /* ===== Table of Contents ===== */
         .toc-page {
             page-break-after: always;
@@ -233,10 +221,6 @@
             page-break-before: avoid;
         }
 
-        .report-section.appendix-section {
-            page-break-before: always;
-        }
-
         .section-header {
             background: none;
             color: #1a1a1a;
@@ -258,16 +242,6 @@
         .section-content p {
             margin-bottom: 0.4cm;
             text-align: left;
-        }
-
-        .section-content ul, .section-content ol {
-            margin: 0.4cm 0 0.4cm 0.8cm;
-            padding-left: 0.6cm;
-            list-style-position: outside;
-        }
-
-        .section-content li {
-            margin: 0.2cm 0;
         }
 
         /* ===== Module Content Styling ===== */
@@ -375,41 +349,6 @@
             page-break-after: always;
         }
 
-        /* ===== Author Signature Section ===== */
-        .author-section {
-            margin-top: 2cm;
-            padding-top: 1cm;
-            border-top: 1px solid #ddd;
-            page-break-inside: avoid;
-        }
-
-        .author-section h3 {
-            font-size: 12pt;
-            font-weight: 600;
-            color: #333;
-            margin-bottom: 0.5cm;
-        }
-
-        .author-table {
-            width: auto;
-            border-collapse: collapse;
-        }
-
-        .author-table td {
-            padding: 0.2cm 0.5cm 0.2cm 0;
-            vertical-align: top;
-        }
-
-        .author-table td:first-child {
-            font-weight: 600;
-            color: #555;
-            white-space: nowrap;
-        }
-
-        .author-table td:last-child {
-            min-width: 200px;
-        }
-
         /* ===== Print-specific adjustments ===== */
         @media print {
             body {
@@ -462,28 +401,29 @@
                 {% endif %}
             </div>
         </div>
-        
+
         <!-- Centered title and metadata -->
         <div class="title-page-body">
             <h1>{{ report_title }}</h1>
-            
+            <h1>{{ t.appendix | default('Appendix') }} </h1>
+
             <div class="metadata">
                 {% if show_title_case_number and case_number %}
                 <p><strong>{{ t.case_number | default('Case Number') }}:</strong> {{ case_number }}</p>
                 {% endif %}
-                
+
                 {% if show_title_evidence and evidence_label %}
                 <p><strong>{{ t.evidence | default('Evidence') }}:</strong> {{ evidence_label }}</p>
                 {% endif %}
-                
+
                 {% if show_title_investigator and investigator %}
                 <p><strong>{{ t.investigator | default('Investigator') }}:</strong> {{ investigator }}</p>
                 {% endif %}
-                
+
                 {% if show_title_date and author_date_formatted %}
                 <p><strong>{{ t.date | default('Date') }}:</strong> {{ author_date_formatted }}</p>
                 {% endif %}
-                
+
                 {% if notes %}
                 <p><strong>{{ t.notes | default('Notes') }}:</strong> {{ notes }}</p>
                 {% endif %}
@@ -492,101 +432,41 @@
     </div>
 
     <!-- ===== Table of Contents ===== -->
-    {% if sections or appendix_modules %}
+    {% if appendix_modules %}
     <div class="toc-page">
         <h2>{{ t.toc_title | default('Table of Contents') }}</h2>
         <table class="toc-table">
-            {% for section in sections %}
+            {% for module in appendix_modules %}
             <tr>
-                <td class="toc-title"><a href="#section-{{ loop.index }}">{{ loop.index }}. {{ section.title }}</a></td>
+                <td class="toc-title"><a href="#appendix-{{ loop.index }}">{{ loop.index }}. {{ module.title }}</a></td>
                 <td class="toc-dots"></td>
-                <td class="toc-page-num" href="#section-{{ loop.index }}"></td>
+                <td class="toc-page-num" href="#appendix-{{ loop.index }}"></td>
             </tr>
             {% endfor %}
-            {% if render_appendix and appendix_modules %}
-            <tr>
-                <td class="toc-title"><a href="#appendix">{{ (sections | length) + 1 }}. {{ t.appendix | default('Appendix') }}</a></td>
-                <td class="toc-dots"></td>
-                <td class="toc-page-num" href="#appendix"></td>
-            </tr>
-            {% endif %}
         </table>
     </div>
     {% endif %}
 
-    <!-- ===== Report Sections ===== -->
-    {% for section in sections %}
-    <div class="report-section" id="section-{{ loop.index }}">
+    <!-- ===== Appendix Modules ===== -->
+    {% for module in appendix_modules %}
+    <div class="report-section" id="appendix-{{ loop.index }}">
         <div class="section-header">
-            <h2>{{ loop.index }}. {{ section.title }}</h2>
+            <h2>{{ loop.index }}. {{ module.title }}</h2>
         </div>
-        
-        {% if section.content %}
-        <div class="section-content">
-            {{ section.content | safe }}
-        </div>
-        {% endif %}
-        
-        {% for module in section.modules %}
         <div class="module-content">
             {{ module.rendered_html | safe }}
         </div>
-        {% endfor %}
     </div>
     {% endfor %}
 
-    {% if not sections and not appendix_modules %}
+    {% if not appendix_modules %}
     <div class="report-section">
         <div class="section-header">
             <h2>{{ t.no_content | default('No Content') }}</h2>
         </div>
         <div class="section-content">
-            <p class="text-muted">{{ t.no_sections_message | default('No sections have been added to this report. Use the Reports tab to add custom sections and modules.') }}</p>
+            <p class="text-muted">{{ t.no_sections_message | default('No appendix modules have been added to this report.') }}</p>
         </div>
-    </div>
-    {% endif %}
-
-    {% if author_function or author_name or author_date %}
-    <!-- ===== Report Created By Section ===== -->
-    <div class="author-section">
-        <h3>{{ t.report_created_by | default('Report Created By') }}</h3>
-        <table class="author-table">
-            {% if author_function %}
-            <tr>
-                <td>{{ t.function | default('Function') }}:</td>
-                <td>{{ author_function }}</td>
-            </tr>
-            {% endif %}
-            {% if author_name %}
-            <tr>
-                <td>{{ t.name | default('Name') }}:</td>
-                <td>{{ author_name }}</td>
-            </tr>
-            {% endif %}
-            {% if author_date %}
-            <tr>
-                <td>{{ t.date | default('Date') }}:</td>
-                <td>{{ author_date }}</td>
-            </tr>
-            {% endif %}
-        </table>
-    </div>
-    {% endif %}
-
-    {% if render_appendix and appendix_modules %}
-    <!-- ===== Appendix Section ===== -->
-    <div class="report-section appendix-section" id="appendix">
-        <div class="section-header">
-            <h2>{{ (sections | length) + 1 }}. {{ t.appendix | default('Appendix') }}</h2>
-        </div>
-        {% for module in appendix_modules %}
-        <div class="appendix-module">
-            <h3 class="appendix-module-title">{{ module.title }}</h3>
-            <div class="module-content">
-                {{ module.rendered_html | safe }}
-            </div>
-        </div>
-        {% endfor %}
     </div>
     {% endif %}
 

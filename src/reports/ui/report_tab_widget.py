@@ -26,7 +26,8 @@ from PySide6.QtWidgets import (
     QCheckBox,
     QSizePolicy,
 )
-from PySide6.QtCore import Qt, QDate, Signal
+from PySide6.QtCore import Qt, QDate, QUrl, Signal
+from PySide6.QtGui import QDesktopServices
 
 from .collapsible_group import CollapsibleGroupBox
 from .section_editor import SectionEditorDialog
@@ -56,7 +57,7 @@ from ..database import (
     get_report_settings,
     save_report_settings,
 )
-from ..generator import ReportBuilder, ReportGenerator
+from ..generator import ReportBuilder, ReportGenerator, ReportMode
 from ..appendix import AppendixRegistry
 
 
@@ -336,15 +337,11 @@ class ReportTabWidget(QWidget):
         tp_row.addStretch()
         group_layout.addLayout(tp_row)
 
-        # Footer & Appendix options
+        # Footer options
         opts_row = QHBoxLayout()
         self._show_footer_date_cb = QCheckBox("Show creation date in footer")
         self._show_footer_date_cb.setChecked(True)
         opts_row.addWidget(self._show_footer_date_cb)
-
-        self._hide_appendix_pg_cb = QCheckBox("Hide page numbers in appendix")
-        self._hide_appendix_pg_cb.setChecked(False)
-        opts_row.addWidget(self._hide_appendix_pg_cb)
         opts_row.addStretch()
         group_layout.addLayout(opts_row)
 
@@ -495,7 +492,7 @@ class ReportTabWidget(QWidget):
         self.manage_text_blocks_requested.emit()
 
     def _build_generation_buttons(self) -> QHBoxLayout:
-        """Build the report generation buttons (Preview and Create PDF)."""
+        """Build the report generation buttons (Preview and PDF variants)."""
         layout = QHBoxLayout()
         layout.setSpacing(12)
 
@@ -509,20 +506,40 @@ class ReportTabWidget(QWidget):
         self._preview_btn.clicked.connect(self._on_preview)
         layout.addWidget(self._preview_btn)
 
-        # Create PDF button
-        self._create_pdf_btn = QPushButton("📄 Create PDF")
-        self._create_pdf_btn.setToolTip("Generate PDF report")
-        self._create_pdf_btn.setMinimumWidth(120)
-        self._create_pdf_btn.clicked.connect(self._on_create_pdf)
-        layout.addWidget(self._create_pdf_btn)
+        # Report-only PDF button
+        self._create_report_pdf_btn = QPushButton("📄 Report PDF")
+        self._create_report_pdf_btn.setToolTip("Generate report PDF (without appendix)")
+        self._create_report_pdf_btn.setMinimumWidth(120)
+        self._create_report_pdf_btn.clicked.connect(self._on_create_report_pdf)
+        layout.addWidget(self._create_report_pdf_btn)
+
+        # Appendix-only PDF button
+        self._create_appendix_pdf_btn = QPushButton("📎 Appendix PDF")
+        self._create_appendix_pdf_btn.setToolTip("Generate appendix PDF only")
+        self._create_appendix_pdf_btn.setMinimumWidth(120)
+        self._create_appendix_pdf_btn.clicked.connect(self._on_create_appendix_pdf)
+        layout.addWidget(self._create_appendix_pdf_btn)
+
+        # Complete PDF button (both files)
+        self._create_complete_pdf_btn = QPushButton("📄📎 Complete PDF")
+        self._create_complete_pdf_btn.setToolTip(
+            "Generate both report and appendix PDFs"
+        )
+        self._create_complete_pdf_btn.setMinimumWidth(140)
+        self._create_complete_pdf_btn.clicked.connect(self._on_create_complete_pdf)
+        layout.addWidget(self._create_complete_pdf_btn)
 
         return layout
 
-    def _build_report_html(self) -> Optional[str]:
+    def _build_report_html(self, mode: ReportMode = ReportMode.REPORT_ONLY):
         """Build the report HTML from current state.
 
+        Args:
+            mode: Which parts to render.
+
         Returns:
-            HTML string, or None if report cannot be built
+            For REPORT_ONLY / APPENDIX_ONLY: HTML string, or None on error.
+            For COMPLETE: tuple of (report_html, appendix_html), or None on error.
         """
         if self._db_conn is None or self._evidence_id is None:
             QMessageBox.warning(
@@ -594,24 +611,24 @@ class ReportTabWidget(QWidget):
             show_date=self._show_date_cb.isChecked(),
         )
 
-        # Set footer & appendix options
+        # Set footer options
         footer_ev = self._footer_evidence_input.text().strip()
         builder.set_footer_options(
             show_footer_date=self._show_footer_date_cb.isChecked(),
             footer_evidence_label=footer_ev if footer_ev else None,
         )
-        builder.set_appendix_options(
-            hide_page_numbers=self._hide_appendix_pg_cb.isChecked(),
-        )
 
-        builder.load_sections_from_db()
-        builder.load_appendix_from_db()
+        # Load data based on mode
+        if mode != ReportMode.APPENDIX_ONLY:
+            builder.load_sections_from_db()
+        if mode != ReportMode.REPORT_ONLY:
+            builder.load_appendix_from_db()
 
-        return builder.render_html()
+        return builder.render_html(mode)
 
     def _on_preview(self) -> None:
         """Handle Preview button click - open report in browser."""
-        html = self._build_report_html()
+        html = self._build_report_html(ReportMode.REPORT_ONLY)
         if html is None:
             return
 
@@ -624,13 +641,14 @@ class ReportTabWidget(QWidget):
                 f"Failed to open preview: {e}"
             )
 
-    def _on_create_pdf(self) -> None:
-        """Handle Create PDF button click - generate and save PDF."""
-        html = self._build_report_html()
-        if html is None:
-            return
+    # ── Helpers for PDF generation ────────────────────────────────────
 
-        # Check if WeasyPrint is available
+    def _check_weasyprint(self) -> bool:
+        """Check WeasyPrint availability and show warning if missing.
+
+        Returns:
+            True if WeasyPrint is available.
+        """
         if not self._generator.can_generate_pdf:
             QMessageBox.warning(
                 self,
@@ -639,52 +657,133 @@ class ReportTabWidget(QWidget):
                 "pip install weasyprint\n\n"
                 "Note: WeasyPrint requires additional system dependencies."
             )
-            return
+            return False
+        return True
 
-        # Build default filename
-        title = self.get_title()
+    def _default_pdf_path(self, suffix: str = "") -> str:
+        """Build a default save path for a PDF file.
+
+        Args:
+            suffix: Optional suffix appended before the timestamp
+                    (e.g. ``"_Appendix"``).
+
+        Returns:
+            Absolute path string (or bare filename when no workspace).
+        """
+        title = self.get_title() or "Report"
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        safe_title = "".join(c if c.isalnum() or c in " -_" else "_" for c in title)
-        safe_title = safe_title.replace(" ", "_")
-        default_filename = f"{safe_title}_{timestamp}.pdf"
+        safe_title = "".join(
+            c if c.isalnum() or c in " -_" else "_" for c in title
+        ).replace(" ", "_")
+        filename = f"{safe_title}{suffix}_{timestamp}.pdf"
 
-        # Determine default directory
-        default_dir = ""
         if self._workspace_path:
             reports_dir = self._workspace_path / "reports"
             reports_dir.mkdir(exist_ok=True)
-            default_dir = str(reports_dir / default_filename)
-        else:
-            default_dir = default_filename
+            return str(reports_dir / filename)
+        return filename
 
-        # Ask user where to save
+    def _ask_save_path(self, dialog_title: str, default_path: str) -> Optional[str]:
+        """Show a save-file dialog and return the chosen path.
+
+        Returns:
+            Chosen file path with ``.pdf`` extension, or ``None`` if cancelled.
+        """
         file_path, _ = QFileDialog.getSaveFileName(
             self,
-            "Save PDF Report",
-            default_dir,
+            dialog_title,
+            default_path,
             "PDF Files (*.pdf);;All Files (*)",
         )
-
         if not file_path:
-            # User cancelled
-            return
-
-        # Ensure .pdf extension
+            return None
         if not file_path.lower().endswith(".pdf"):
             file_path += ".pdf"
+        return file_path
+
+    # ── PDF creation slots ────────────────────────────────────────────
+
+    def _on_create_report_pdf(self) -> None:
+        """Generate report-only PDF (no appendix)."""
+        html = self._build_report_html(ReportMode.REPORT_ONLY)
+        if html is None or not self._check_weasyprint():
+            return
+
+        file_path = self._ask_save_path(
+            "Save Report PDF", self._default_pdf_path()
+        )
+        if not file_path:
+            return
 
         try:
             self._generator.generate_pdf(html, file_path)
             QMessageBox.information(
-                self,
-                "PDF Created",
-                f"Report saved to:\n{file_path}"
+                self, "PDF Created", f"Report saved to:\n{file_path}"
             )
+            QDesktopServices.openUrl(QUrl.fromLocalFile(file_path))
         except Exception as e:
             QMessageBox.critical(
+                self, "PDF Error", f"Failed to create PDF: {e}"
+            )
+
+    def _on_create_appendix_pdf(self) -> None:
+        """Generate appendix-only PDF."""
+        html = self._build_report_html(ReportMode.APPENDIX_ONLY)
+        if html is None or not self._check_weasyprint():
+            return
+
+        file_path = self._ask_save_path(
+            "Save Appendix PDF", self._default_pdf_path("_Appendix")
+        )
+        if not file_path:
+            return
+
+        try:
+            self._generator.generate_pdf(html, file_path)
+            QMessageBox.information(
+                self, "PDF Created", f"Appendix saved to:\n{file_path}"
+            )
+            QDesktopServices.openUrl(QUrl.fromLocalFile(file_path))
+        except Exception as e:
+            QMessageBox.critical(
+                self, "PDF Error", f"Failed to create appendix PDF: {e}"
+            )
+
+    def _on_create_complete_pdf(self) -> None:
+        """Generate both report and appendix PDFs at once."""
+        result = self._build_report_html(ReportMode.COMPLETE)
+        if result is None or not self._check_weasyprint():
+            return
+
+        report_html, appendix_html = result
+
+        # Ask for report path — derive appendix path from it
+        report_path = self._ask_save_path(
+            "Save Report PDF (appendix will be saved alongside)",
+            self._default_pdf_path(),
+        )
+        if not report_path:
+            return
+
+        # Derive appendix path: insert _Appendix before .pdf
+        rp = Path(report_path)
+        appendix_path = str(rp.with_name(f"{rp.stem}_Appendix{rp.suffix}"))
+
+        try:
+            self._generator.generate_pdf_pair(
+                report_html, appendix_html, report_path, appendix_path
+            )
+            QMessageBox.information(
                 self,
-                "PDF Error",
-                f"Failed to create PDF: {e}"
+                "PDFs Created",
+                f"Report saved to:\n{report_path}\n\n"
+                f"Appendix saved to:\n{appendix_path}",
+            )
+            QDesktopServices.openUrl(QUrl.fromLocalFile(report_path))
+            QDesktopServices.openUrl(QUrl.fromLocalFile(appendix_path))
+        except Exception as e:
+            QMessageBox.critical(
+                self, "PDF Error", f"Failed to create PDFs: {e}"
             )
 
     def _update_default_title(self) -> None:
@@ -1187,9 +1286,8 @@ class ReportTabWidget(QWidget):
         self._show_investigator_cb.stateChanged.connect(self._on_settings_changed)
         self._show_date_cb.stateChanged.connect(self._on_settings_changed)
 
-        # Footer / appendix options
+        # Footer options
         self._show_footer_date_cb.stateChanged.connect(self._on_settings_changed)
-        self._hide_appendix_pg_cb.stateChanged.connect(self._on_settings_changed)
         self._footer_evidence_input.textChanged.connect(self._on_settings_changed)
 
         # Preferences
@@ -1291,9 +1389,8 @@ class ReportTabWidget(QWidget):
         self._show_investigator_cb.setChecked(settings.get("show_title_investigator", True))
         self._show_date_cb.setChecked(settings.get("show_title_date", True))
 
-        # Footer / appendix options
+        # Footer options
         self._show_footer_date_cb.setChecked(settings.get("show_footer_date", True))
-        self._hide_appendix_pg_cb.setChecked(settings.get("hide_appendix_page_numbers", False))
         if settings.get("footer_evidence_label"):
             self._footer_evidence_input.setText(settings["footer_evidence_label"])
 
@@ -1364,11 +1461,9 @@ class ReportTabWidget(QWidget):
         if "default_show_title_date" in defaults:
             self._show_date_cb.setChecked(bool(defaults["default_show_title_date"]))
 
-        # Footer / appendix defaults
+        # Footer defaults
         if "default_show_footer_date" in defaults:
             self._show_footer_date_cb.setChecked(bool(defaults["default_show_footer_date"]))
-        if "default_hide_appendix_page_numbers" in defaults:
-            self._hide_appendix_pg_cb.setChecked(bool(defaults["default_hide_appendix_page_numbers"]))
 
     def _save_report_settings(self) -> None:
         """Save report settings to database."""
@@ -1410,7 +1505,6 @@ class ReportTabWidget(QWidget):
             show_title_date=self._show_date_cb.isChecked(),
             show_footer_date=self._show_footer_date_cb.isChecked(),
             footer_evidence_label=self._footer_evidence_input.text().strip() or None,
-            hide_appendix_page_numbers=self._hide_appendix_pg_cb.isChecked(),
         )
 
     def _copy_logo_to_workspace(self, source_path: str) -> Optional[str]:
