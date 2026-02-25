@@ -397,6 +397,42 @@ class SectionEditorDialog(QDialog):
         bullet_action.triggered.connect(self._insert_bullet_list)
         toolbar.addAction(bullet_action)
 
+        # Numbered list action
+        numbered_action = QAction("1. List", self)
+        numbered_action.setToolTip("Numbered List")
+        numbered_action.triggered.connect(self._insert_numbered_list)
+        toolbar.addAction(numbered_action)
+
+        toolbar.addSeparator()
+
+        # Code / monospace font action
+        code_action = QAction("</>  Code", self)
+        code_action.setToolTip("Code / Monospace (Ctrl+Shift+C)")
+        code_action.setShortcut("Ctrl+Shift+C")
+        code_action.setCheckable(True)
+        code_font = QFont("monospace")
+        code_font.setStyleHint(QFont.StyleHint.Monospace)
+        code_action.setFont(code_font)
+        code_action.triggered.connect(self._toggle_code)
+        toolbar.addAction(code_action)
+        self._code_action = code_action
+
+        toolbar.addSeparator()
+
+        # Indent action
+        indent_action = QAction("→ Indent", self)
+        indent_action.setToolTip("Increase Indent (Tab)")
+        indent_action.setShortcut("Ctrl+]")
+        indent_action.triggered.connect(self._increase_indent)
+        toolbar.addAction(indent_action)
+
+        # Outdent action
+        outdent_action = QAction("← Outdent", self)
+        outdent_action.setToolTip("Decrease Indent (Shift+Tab)")
+        outdent_action.setShortcut("Ctrl+[")
+        outdent_action.triggered.connect(self._decrease_indent)
+        toolbar.addAction(outdent_action)
+
         # Update toolbar state when cursor moves
         self._content_edit.cursorPositionChanged.connect(self._update_format_actions)
 
@@ -425,17 +461,69 @@ class SectionEditorDialog(QDialog):
 
     def _insert_bullet_list(self) -> None:
         """Insert or toggle bullet list at cursor."""
+        self._toggle_list(QTextListFormat.ListDisc)
+
+    def _insert_numbered_list(self) -> None:
+        """Insert or toggle numbered list at cursor."""
+        self._toggle_list(QTextListFormat.ListDecimal)
+
+    def _toggle_list(self, style: QTextListFormat.Style) -> None:
+        """Toggle a list style at the current cursor position.
+
+        If the cursor is already in a list of the same style, remove it.
+        If in a different list style, switch to the requested style.
+        Otherwise create a new list.
+        """
         cursor = self._content_edit.textCursor()
         current_list = cursor.currentList()
 
         if current_list:
-            # Remove from list
-            block_fmt = cursor.blockFormat()
-            block_fmt.setIndent(0)
-            cursor.setBlockFormat(block_fmt)
+            if current_list.format().style() == style:
+                # Same style — remove from list
+                block_fmt = cursor.blockFormat()
+                block_fmt.setIndent(0)
+                cursor.setBlockFormat(block_fmt)
+                current_list.remove(cursor.block())
+            else:
+                # Different style — switch
+                list_fmt = current_list.format()
+                list_fmt.setStyle(style)
+                current_list.setFormat(list_fmt)
         else:
-            # Create bullet list
-            cursor.createList(QTextListFormat.ListDisc)
+            cursor.createList(style)
+
+    def _toggle_code(self) -> None:
+        """Toggle monospace / code font on selection."""
+        cursor = self._content_edit.textCursor()
+        if not cursor.hasSelection():
+            cursor.select(cursor.WordUnderCursor)
+
+        current_family = cursor.charFormat().fontFamily()
+        fmt = QTextCharFormat()
+
+        if current_family and current_family.lower() in ("monospace", "courier", "courier new"):
+            # Remove monospace — revert to default
+            fmt.setFontFamily("")
+        else:
+            fmt.setFontFamily("monospace")
+
+        cursor.mergeCharFormat(fmt)
+        self._content_edit.mergeCurrentCharFormat(fmt)
+
+    def _increase_indent(self) -> None:
+        """Increase the indent level of the current block."""
+        cursor = self._content_edit.textCursor()
+        block_fmt = cursor.blockFormat()
+        block_fmt.setIndent(block_fmt.indent() + 1)
+        cursor.setBlockFormat(block_fmt)
+
+    def _decrease_indent(self) -> None:
+        """Decrease the indent level of the current block."""
+        cursor = self._content_edit.textCursor()
+        block_fmt = cursor.blockFormat()
+        new_indent = max(0, block_fmt.indent() - 1)
+        block_fmt.setIndent(new_indent)
+        cursor.setBlockFormat(block_fmt)
 
     def _merge_format(self, fmt: QTextCharFormat) -> None:
         """Apply format to current selection or cursor position."""
@@ -452,6 +540,10 @@ class SectionEditorDialog(QDialog):
         )
         self._italic_action.setChecked(self._content_edit.fontItalic())
         self._underline_action.setChecked(self._content_edit.fontUnderline())
+
+        # Code font state
+        family = self._content_edit.currentFont().family().lower()
+        self._code_action.setChecked(family in ("monospace", "courier", "courier new"))
 
     def _on_save(self) -> None:
         """Validate and accept the dialog."""
