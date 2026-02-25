@@ -213,6 +213,18 @@ def ingest_blockfile_directory(
 
         discovered_by = f"cache_blockfile:{extractor_version}:{run_id}"
 
+        # Derive forensic provenance from file entries (directory-level)
+        base_forensic_path: Optional[str] = None
+        base_logical_path: Optional[str] = None
+        if file_entries:
+            for fe in file_entries:
+                if fe.get("forensic_path") and not base_forensic_path:
+                    base_forensic_path = str(Path(fe["forensic_path"]).parent)
+                if fe.get("logical_path") and not base_logical_path:
+                    base_logical_path = str(Path(fe["logical_path"]).parent)
+                if base_forensic_path and base_logical_path:
+                    break
+
         # Process each entry
         for entry in entries:
             try:
@@ -227,6 +239,8 @@ def ingest_blockfile_directory(
                     discovered_by=discovered_by,
                     warning_collector=warning_collector,
                     stats=stats,
+                    base_forensic_path=base_forensic_path,
+                    base_logical_path=base_logical_path,
                 )
             except Exception as e:
                 LOGGER.warning("Failed to process blockfile entry %s: %s", entry.url[:50], e)
@@ -264,6 +278,8 @@ def _process_blockfile_entry(
     discovered_by: str,
     warning_collector: Optional["ExtractionWarningCollector"],
     stats: Dict[str, int],
+    base_forensic_path: Optional[str] = None,
+    base_logical_path: Optional[str] = None,
 ) -> None:
     """Process a single blockfile cache entry."""
     timestamp = entry.last_used_time or entry.creation_time
@@ -281,6 +297,14 @@ def _process_blockfile_entry(
         if stream0_data:
             http_info = parse_http_headers(stream0_data)
 
+    # Build source_path from forensic provenance (prefer forensic > logical > workstation)
+    if base_forensic_path:
+        source_path = f"{base_forensic_path}/{entry.source_file}"
+    elif base_logical_path:
+        source_path = f"{base_logical_path}/{entry.source_file}"
+    else:
+        source_path = str(cache_dir / entry.source_file)
+
     # Insert URL record
     url_record = {
         "url": entry.url,
@@ -289,7 +313,7 @@ def _process_blockfile_entry(
         "discovered_by": discovered_by,
         "first_seen_utc": timestamp_str,
         "last_seen_utc": timestamp_str,
-        "source_path": str(cache_dir / entry.source_file),
+        "source_path": source_path,
         "notes": f"Blockfile cache entry (offset {entry.block_offset})",
         "context": None,
         "run_id": run_id,
@@ -307,6 +331,8 @@ def _process_blockfile_entry(
             "creation_time": entry.creation_time.isoformat() if entry.creation_time else None,
             "last_used_time": entry.last_used_time.isoformat() if entry.last_used_time else None,
             "raw_cache_key": entry.raw_cache_key,
+            "forensic_path": f"{base_forensic_path}/{entry.source_file}" if base_forensic_path else None,
+            "logical_path": f"{base_logical_path}/{entry.source_file}" if base_logical_path else None,
         }),
     }
 

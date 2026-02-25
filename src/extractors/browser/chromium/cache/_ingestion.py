@@ -222,6 +222,13 @@ def parse_and_ingest_cache_file(
         else:
             timestamp_str = datetime.now(timezone.utc).isoformat()
 
+        # Build source_path from forensic provenance (prefer forensic > logical > workstation)
+        source_path = (
+            file_entry.get("forensic_path")
+            or file_entry.get("logical_path")
+            or str(cache_file_path)
+        )
+
         # Insert URL record
         url_record = {
             "url": entry.url,
@@ -230,7 +237,7 @@ def parse_and_ingest_cache_file(
             "discovered_by": discovered_by,
             "first_seen_utc": timestamp_str,
             "last_seen_utc": timestamp_str,
-            "source_path": file_entry.get("logical_path", str(cache_file_path)),
+            "source_path": source_path,
             "notes": None,
             "context": None,
             "run_id": run_id,
@@ -245,6 +252,8 @@ def parse_and_ingest_cache_file(
                 "entry_version": entry.version,
                 "last_used_time": timestamp_str if last_used_time else None,
                 "index_entry_size": index_entry_size,
+                "forensic_path": file_entry.get("forensic_path"),
+                "logical_path": file_entry.get("logical_path"),
             }),
         }
 

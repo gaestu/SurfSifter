@@ -5,6 +5,8 @@ import sqlite3
 import pytest
 
 from extractors.browser.chromium._embedded_discovery import (
+    _detect_signal,
+    _extract_profile_root,
     discover_artifacts_with_embedded_roots,
     discover_embedded_roots,
     get_embedded_root_paths,
@@ -105,3 +107,158 @@ def test_discovery_scopes_embedded_patterns_per_partition(evidence_db):
     assert get_embedded_root_paths(roots, partition_index=2) == ["ProgramData/ScopedApp/User Data"]
     assert result.matches_by_partition.get(2)
     assert result.matches_by_partition.get(0) is None
+
+
+# ---------------------------------------------------------------------------
+# Signal detection unit tests
+# ---------------------------------------------------------------------------
+
+class TestDetectSignal:
+    """Unit tests for _detect_signal."""
+
+    def test_visited_links_by_path(self):
+        assert _detect_signal("/iPoint/cache/Visited Links", "Visited Links") == "visited_links"
+
+    def test_visited_links_by_filename(self):
+        assert _detect_signal("/some/path/Visited Links", "Visited Links") == "visited_links"
+
+    def test_old_localstorage_by_path(self):
+        assert _detect_signal(
+            "/iPoint/cache/Local Storage/https_ggslot.net_0.localstorage",
+            "https_ggslot.net_0.localstorage",
+        ) == "local_storage"
+
+    def test_modern_localstorage_still_works(self):
+        assert _detect_signal(
+            "/App/User Data/Default/Local Storage/leveldb/000003.log",
+            "000003.log",
+        ) == "local_storage"
+
+    def test_cache_index(self):
+        assert _detect_signal("/App/Default/Cache/index", "index") == "cache"
+
+    def test_cookies(self):
+        assert _detect_signal("/App/Default/Cookies", "Cookies") == "cookies"
+
+    def test_network_cookies(self):
+        assert _detect_signal("/App/Default/Network/Cookies", "Cookies") == "cookies"
+
+    def test_unrelated_file_returns_none(self):
+        assert _detect_signal("/some/random/file.txt", "file.txt") is None
+
+
+# ---------------------------------------------------------------------------
+# Profile root extraction unit tests
+# ---------------------------------------------------------------------------
+
+class TestExtractProfileRoot:
+    """Unit tests for _extract_profile_root."""
+
+    def test_cache_strips_only_index(self):
+        """Cache signal should strip /index, not /cache/index — supports flat CefSharp layouts."""
+        root = _extract_profile_root("/iPoint/cache/index", "cache")
+        assert root == "/iPoint/cache"
+
+    def test_cache_standard_layout(self):
+        """Standard Cache/index still yields parent of the Cache/ directory."""
+        root = _extract_profile_root("/App/User Data/Default/Cache/index", "cache")
+        assert root == "/App/User Data/Default/Cache"
+
+    def test_cache_cache_data_index(self):
+        """Cache_Data/index (modern simple cache) strip to parent of Cache_Data."""
+        root = _extract_profile_root("/App/Default/Cache/Cache_Data/index", "cache")
+        assert root == "/App/Default/Cache/Cache_Data"
+
+    def test_visited_links(self):
+        root = _extract_profile_root("/iPoint/cache/Visited Links", "visited_links")
+        assert root == "/iPoint/cache"
+
+    def test_old_localstorage(self):
+        root = _extract_profile_root(
+            "/iPoint/cache/Local Storage/https_ggslot.net_0.localstorage",
+            "local_storage",
+        )
+        assert root == "/iPoint/cache"
+
+    def test_modern_localstorage_leveldb(self):
+        root = _extract_profile_root(
+            "/App/User Data/Default/Local Storage/leveldb/000003.log",
+            "local_storage",
+        )
+        assert root == "/App/User Data/Default"
+
+
+# ---------------------------------------------------------------------------
+# CefSharp flat layout integration test (iPoint-style)
+# ---------------------------------------------------------------------------
+
+def test_cefsharp_flat_layout_discovered(evidence_db):
+    """
+    CefSharp/CEF flat layout: blockfile cache data, Cookies, Visited Links,
+    and old-format Local Storage all live directly under the same directory.
+    The directory may be named 'cache' which previously confused root extraction.
+    """
+    evidence_id = 1
+    rows = [
+        # iPoint CefSharp layout: everything under /iPoint/cache/
+        (evidence_id, "/iPoint/cache/Cookies", "Cookies", "", 1024, 10, 0, 0),
+        (evidence_id, "/iPoint/cache/Visited Links", "Visited Links", "", 512, 11, 0, 0),
+        (evidence_id, "/iPoint/cache/Local Storage/https_ggslot.net_0.localstorage", "https_ggslot.net_0.localstorage", ".localstorage", 256, 12, 0, 0),
+        (evidence_id, "/iPoint/cache/index", "index", "", 256, 13, 0, 0),
+        (evidence_id, "/iPoint/cache/data_0", "data_0", "", 4096, 14, 0, 0),
+        (evidence_id, "/iPoint/cache/data_1", "data_1", "", 4096, 15, 0, 0),
+        (evidence_id, "/iPoint/cache/data_2", "data_2", "", 4096, 16, 0, 0),
+        (evidence_id, "/iPoint/cache/data_3", "data_3", "", 4096, 17, 0, 0),
+    ]
+    _insert_rows(evidence_db, rows)
+
+    roots = discover_embedded_roots(evidence_db, evidence_id)
+
+    assert len(roots) == 1
+    root = roots[0]
+    assert root.root_path == "/iPoint/cache"
+    assert root.partition_index == 0
+    # Must have at least cookies + visited_links (possibly also cache, local_storage)
+    assert "cookies" in root.signals
+    assert "visited_links" in root.signals
+    assert root.signal_count >= 2
+
+
+def test_cefsharp_flat_layout_cookies_plus_visited_links_only(evidence_db):
+    """Minimal CefSharp root: just Cookies + Visited Links suffices for acceptance."""
+    evidence_id = 1
+    rows = [
+        (evidence_id, "/SomeApp/data/Cookies", "Cookies", "", 1024, 20, 0, 1),
+        (evidence_id, "/SomeApp/data/Visited Links", "Visited Links", "", 512, 21, 0, 1),
+    ]
+    _insert_rows(evidence_db, rows)
+
+    roots = discover_embedded_roots(evidence_db, evidence_id)
+
+    assert len(roots) == 1
+    assert roots[0].root_path == "/SomeApp/data"
+    assert set(roots[0].signals) == {"cookies", "visited_links"}
+
+
+def test_standard_embedded_unchanged_after_cache_fix(evidence_db):
+    """
+    Standard embedded layout (EBWebView-style with Default/ profile subfolder)
+    must still be discovered correctly after cache root extraction changes.
+    """
+    evidence_id = 1
+    rows = [
+        (evidence_id, "/AppData/Local/SomeApp/EBWebView/Default/History", "History", "", 1, 30, 0, 0),
+        (evidence_id, "/AppData/Local/SomeApp/EBWebView/Default/Cookies", "Cookies", "", 1, 31, 0, 0),
+        (evidence_id, "/AppData/Local/SomeApp/EBWebView/Default/Cache/index", "index", "", 1, 32, 0, 0),
+    ]
+    _insert_rows(evidence_db, rows)
+
+    roots = discover_embedded_roots(evidence_db, evidence_id)
+
+    # History + Cookies cluster at /AppData/Local/SomeApp/EBWebView
+    # Cache now sits at .../Default/Cache (1 signal) — harmless extra root, rejected
+    ebwebview_roots = [r for r in roots if "EBWebView" in r.root_path and r.signal_count >= 2]
+    assert len(ebwebview_roots) == 1
+    assert ebwebview_roots[0].root_path == "/AppData/Local/SomeApp/EBWebView"
+    assert "cookies" in ebwebview_roots[0].signals
+    assert "history" in ebwebview_roots[0].signals

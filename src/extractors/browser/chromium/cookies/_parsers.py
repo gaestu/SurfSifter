@@ -30,17 +30,66 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Dict, Iterator, Optional, Set, TYPE_CHECKING
 
+from core.logging import get_logger
 from ...._shared.sqlite_helpers import safe_execute, table_exists
 from ...._shared.timestamps import webkit_to_datetime, webkit_to_iso
 from ._schemas import (
     KNOWN_COOKIES_COLUMNS,
     KNOWN_SAMESITE_VALUES,
+    LEGACY_COLUMN_ALIASES,
+    LEGACY_COLUMN_NAMES,
     SAMESITE_VALUES,
     get_samesite_name,
 )
 
+LOGGER = get_logger("extractors.chromium.cookies.parsers")
+
 if TYPE_CHECKING:
     from extractors._shared.extraction_warnings import ExtractionWarningCollector
+
+
+# =============================================================================
+# Column Name Resolution (Legacy Schema Support)
+# =============================================================================
+
+def _resolve_column_names(conn: sqlite3.Connection) -> Optional[Dict[str, str]]:
+    """
+    Resolve modern column names to whatever the actual database uses.
+
+    Old Chromium (<67) and CefSharp/CEF embedded browsers used shorter
+    column names that were later prefixed with ``is_`` in modern Chromium.
+    This function checks which variant is present and returns a mapping
+    from the *modern* name to the *actual* column name in the database.
+
+    Returns:
+        Dict mapping modern name → actual column name found in the DB,
+        or ``None`` if the ``cookies`` table cannot be introspected.
+    """
+    try:
+        cursor = conn.execute("PRAGMA table_info(cookies)")
+        actual_columns = {row[1].lower() for row in cursor.fetchall()}
+    except Exception:
+        return None
+
+    result: Dict[str, str] = {}
+    for modern_name, legacy_alternatives in LEGACY_COLUMN_ALIASES.items():
+        if modern_name in actual_columns:
+            result[modern_name] = modern_name
+        else:
+            # Try legacy alternatives
+            for legacy in legacy_alternatives:
+                if legacy in actual_columns:
+                    result[modern_name] = legacy
+                    LOGGER.debug(
+                        "Legacy column detected: %s → %s", modern_name, legacy,
+                    )
+                    break
+            else:
+                # Neither modern nor legacy found — use modern name and let
+                # the query fail gracefully downstream
+                result[modern_name] = modern_name
+
+    return result
 
 
 # =============================================================================
@@ -172,12 +221,25 @@ def parse_cookies(
     if warning_collector and source_file:
         discover_and_warn_unknown_columns(conn, warning_collector, source_file)
 
+    # Detect actual column names to handle legacy schemas (Chromium <67, CefSharp)
+    column_map = _resolve_column_names(conn)
+    if column_map is None:
+        # Could not determine columns — table may be corrupt
+        LOGGER.warning("Cannot determine cookies table columns for %s", source_file)
+        return
+
+    col_secure = column_map.get("is_secure", "is_secure")
+    col_httponly = column_map.get("is_httponly", "is_httponly")
+    col_persistent = column_map.get("is_persistent", "is_persistent")
+    col_samesite = column_map.get("samesite", "samesite")
+
     # Track samesite values we encounter
     found_samesite_values: Set[int] = set()
 
-    # Query all cookie fields
-    # Note: Schema evolved over Chrome versions; use COALESCE for optional columns
-    query = """
+    # Query all cookie fields — column names are resolved dynamically
+    # to support legacy schemas (Chromium <67 used "secure" instead of
+    # "is_secure", "httponly" instead of "is_httponly", etc.)
+    query = f"""
         SELECT
             host_key,
             name,
@@ -186,10 +248,10 @@ def parse_cookies(
             creation_utc,
             expires_utc,
             last_access_utc,
-            is_secure,
-            is_httponly,
-            COALESCE(samesite, -1) as samesite,
-            is_persistent,
+            {col_secure} as is_secure,
+            {col_httponly} as is_httponly,
+            COALESCE({col_samesite}, -1) as samesite,
+            {col_persistent} as is_persistent,
             has_expires,
             COALESCE(priority, 1) as priority,
             encrypted_value
@@ -200,6 +262,7 @@ def parse_cookies(
     try:
         rows = safe_execute(conn, query)
     except Exception:
+        LOGGER.warning("Failed to query cookies table for %s", source_file, exc_info=True)
         return
 
     for row in rows:

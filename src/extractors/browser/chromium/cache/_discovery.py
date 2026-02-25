@@ -96,6 +96,15 @@ def discover_cache_directories(
                     )
                     cache_directories.extend(dirs)
 
+                # CefSharp/CEF flat layouts: the blockfile cache data
+                # (data_0 … data_3, index, f_*) may reside directly inside
+                # the embedded root itself rather than in a Cache/ subdir.
+                # Check whether the root looks like a blockfile directory.
+                dirs = scan_cache_pattern(
+                    evidence_fs, root, "chromium_embedded", "disk_cache", callbacks
+                )
+                cache_directories.extend(dirs)
+
         # Scan CacheStorage if enabled - use legacy browser_patterns for now
         # TODO: Add cache_storage to chromium/_patterns.CHROMIUM_ARTIFACTS
         if include_cache_storage:
