@@ -101,7 +101,7 @@ def _parse_origin_from_localstorage_filename(filename: str) -> str:
         ``{scheme}_{host}_{port}.localstorage``
 
     Examples:
-        ``https_ggslot.net_0.localstorage``        → ``https://ggslot.net``
+        ``https_example.net_0.localstorage``        → ``https://example.net``
         ``https_www.youtube-nocookie.com_0.localstorage`` → ``https://www.youtube-nocookie.com``
         ``http_localhost_8080.localstorage``         → ``http://localhost:8080``
 

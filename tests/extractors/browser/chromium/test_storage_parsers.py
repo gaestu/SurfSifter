@@ -32,8 +32,8 @@ class TestParseOriginFromFilename:
 
     def test_https_default_port(self):
         assert _parse_origin_from_localstorage_filename(
-            "https_ggslot.net_0.localstorage"
-        ) == "https://ggslot.net"
+            "https_test.net_0.localstorage"
+        ) == "https://test.net"
 
     def test_https_subdomain(self):
         assert _parse_origin_from_localstorage_filename(
