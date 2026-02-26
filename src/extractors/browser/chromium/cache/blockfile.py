@@ -76,14 +76,25 @@ LOGGER = get_logger("extractors.cache_simple.blockfile")
 # - " " (space) separator
 # - The actual resource URL
 #
+# Code Cache key format (V8 compiled code):
+# - "_key" prefix + script URL + " \n" + top-level site URL
+# - Or a pure SHA-256 hash (64 uppercase hex chars) for inline scripts
+#
+# GPU Cache key format:
+# - base64-encoded hash pair: "hash1:hash2"
+#
 # Examples:
 # - Simple: "1/0/https://example.com/image.png"
 # - Double-keyed: "1/0/_dk_https://toplevel.com https://frame.com https://cdn.example.com/image.png"
+# - Code Cache: "_keyhttps://cdn.example.com/script.js \nhttps://example.com/"
+# - Code Cache hash: "AB2A39155883DE91B9EFDA1DBD40620716B544996393D10FCD674C426DA1A250"
+# - GPU Cache: "HYN18Fl2bqKa6GEqZSRCWOIq1vc=:L4uLPxDuFfI2ovodjJe3qn+JmNw="
 #
 # The rightmost space after "_dk_" marks the start of the actual URL.
 
 DOUBLE_KEY_PREFIX = "_dk_"
 DOUBLE_KEY_SEPARATOR = " "
+CODE_CACHE_KEY_PREFIX = "_key"
 
 
 def extract_url_from_cache_key(cache_key: str) -> str:
@@ -102,7 +113,7 @@ def extract_url_from_cache_key(cache_key: str) -> str:
         cache_key: The raw cache key (URL field from EntryStore)
 
     Returns:
-        The extracted resource URL, or the original key if not double-keyed
+        The extracted resource URL, or the original key if no URL found
 
     Examples:
         "1/0/_dk_https://msn.com https://msn.com https://cdn.msn.com/image.jpg"
@@ -113,6 +124,9 @@ def extract_url_from_cache_key(cache_key: str) -> str:
 
         "https://example.com/simple.html"
         -> "https://example.com/simple.html"
+
+        "_keyhttps://cdn.example.com/script.js \\nhttps://example.com/"
+        -> "https://cdn.example.com/script.js"
     """
     if not cache_key:
         return cache_key
@@ -133,8 +147,51 @@ def extract_url_from_cache_key(cache_key: str) -> str:
         if last_space != -1:
             return remaining[last_space + 1:]
 
+    # Check for _key prefix (Code Cache / V8 compiled code cache)
+    # Format: _key<script_url> \n<top_level_site>
+    # or:     _key<script_url>\n<top_level_site>
+    if remaining.startswith(CODE_CACHE_KEY_PREFIX):
+        key_content = remaining[len(CODE_CACHE_KEY_PREFIX):]
+        # URLs never contain literal newlines — use \n as separator
+        newline_idx = key_content.find('\n')
+        if newline_idx > 0:
+            return key_content[:newline_idx].rstrip()
+        # No separator; return everything after _key
+        return key_content
+
     # Not double-keyed, return the URL part (after credential/upload prefix)
     return remaining
+
+
+# Typical URL schemes seen in browser caches
+_CACHE_URL_SCHEMES = frozenset({
+    "http", "https", "ftp", "ftps", "ws", "wss",
+    "chrome", "chrome-extension", "edge", "blob", "data",
+})
+
+
+def is_cache_url(value: str) -> bool:
+    """
+    Check whether *value* looks like a URL rather than an opaque cache key.
+
+    Opaque keys include SHA-256 hashes (Code Cache compiled entries) and
+    base64 hash pairs (GPUCache shader keys).  These are legitimate cache
+    keys but do **not** represent network resources and should not be
+    inserted into the ``urls`` table.
+
+    Args:
+        value: Result from :func:`extract_url_from_cache_key`.
+
+    Returns:
+        ``True`` if *value* appears to be a URL with a recognised scheme.
+    """
+    if not value:
+        return False
+    colon = value.find(':')
+    if colon <= 0:
+        return False
+    scheme = value[:colon].lower()
+    return scheme in _CACHE_URL_SCHEMES
 
 
 # =============================================================================
@@ -498,13 +555,36 @@ def parse_index_header(data: bytes) -> Optional[IndexHeader]:
         if version >= 0x30000 and len(data) >= 64:
             num_bytes = struct.unpack_from('<q', data, 56)[0]
 
+        # Validate table_len against file size.
+        # The hash table starts at INDEX_HEADER_SIZE (256 bytes) and each
+        # bucket is 4 bytes.  Some older Chromium builds (e.g. CefSharp /
+        # embedded Chromium ≤50) write a bogus table_len (like 0 or 1) while
+        # the file is actually sized for DEFAULT_TABLE_SIZE buckets.
+        # Chromium itself falls back to kIndexTablesize (65536) when
+        # table_len is 0; we extend this to any value < 256 (no legitimate
+        # Chromium cache has fewer than 256 buckets).
+        effective_table_len = table_len
+        if effective_table_len <= 0 or effective_table_len < 256:
+            max_from_file = (len(data) - INDEX_HEADER_SIZE) // 4 if len(data) > INDEX_HEADER_SIZE else 0
+            if max_from_file >= DEFAULT_TABLE_SIZE:
+                effective_table_len = DEFAULT_TABLE_SIZE
+            elif max_from_file > 0:
+                # Round down to nearest power of 2
+                effective_table_len = 1 << (max_from_file.bit_length() - 1)
+            else:
+                effective_table_len = DEFAULT_TABLE_SIZE
+            LOGGER.debug(
+                "table_len=%d seems invalid, using %d (file can hold %d buckets)",
+                table_len, effective_table_len, max_from_file,
+            )
+
         return IndexHeader(
             magic=magic,
             version=version,
             num_entries=num_entries,
             last_file=last_file,
             this_id=this_id,
-            table_len=table_len if table_len > 0 else DEFAULT_TABLE_SIZE,
+            table_len=effective_table_len,
             create_time=create_time,
             num_bytes=num_bytes,
         )

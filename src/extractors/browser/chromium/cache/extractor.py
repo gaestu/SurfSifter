@@ -121,6 +121,7 @@ from ._workers import (
     get_entry_hash_from_filename as _get_entry_hash_from_filename,
     stream_copy_hash as _stream_copy_hash,
     extraction_worker as _extraction_worker,
+    cache_dir_id as _cache_dir_id,
     CHUNK_SIZE,
 )
 from ._discovery import (
@@ -1075,7 +1076,9 @@ class CacheSimpleExtractor(BaseExtractor):
             entry_hash = _get_entry_hash_from_filename(filename)
 
             try:
-                profile_dir = run_output / f"p{partition_index}_{browser}_{profile}"
+                source_cache_path = cache_dir_info.get("path", "")
+                subdir_id = _cache_dir_id(source_cache_path)
+                profile_dir = run_output / f"p{partition_index}_{browser}_{profile}" / subdir_id
                 profile_dir.mkdir(parents=True, exist_ok=True)
 
                 dest_path = profile_dir / filename

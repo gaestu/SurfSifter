@@ -31,6 +31,7 @@ from ._decompression import decompress_body
 from ._carving import carve_and_hash_image, detect_image_format
 from ._index import IndexEntry, parse_index_file
 from ._workers import CHUNK_SIZE
+from .blockfile import is_cache_url
 
 if TYPE_CHECKING:
     from ....callbacks import ExtractorCallbacks
@@ -229,37 +230,42 @@ def parse_and_ingest_cache_file(
             or str(cache_file_path)
         )
 
-        # Insert URL record
-        url_record = {
-            "url": entry.url,
-            "domain": parsed_url.netloc,
-            "scheme": parsed_url.scheme,
-            "discovered_by": discovered_by,
-            "first_seen_utc": timestamp_str,
-            "last_seen_utc": timestamp_str,
-            "source_path": source_path,
-            "notes": None,
-            "context": None,
-            "run_id": run_id,
-            "cache_key": entry.url,
-            "cache_filename": filename,
-            "response_code": http_info.get("response_code"),
-            "content_type": http_info.get("content_type"),
-            "tags": json.dumps({
-                "stream0_size": entry.stream0_size,
-                "stream1_size": entry.stream1_size,
-                "content_encoding": http_info.get("content_encoding"),
-                "entry_version": entry.version,
-                "last_used_time": timestamp_str if last_used_time else None,
-                "index_entry_size": index_entry_size,
-                "forensic_path": file_entry.get("forensic_path"),
-                "logical_path": file_entry.get("logical_path"),
-            }),
-        }
+        # Insert URL record only for entries with actual URLs.
+        # Code Cache SHA-256 hash keys and GPUCache base64 hash pairs are
+        # legitimate cache keys but do not represent network resources.
+        if is_cache_url(entry.url):
+            url_record = {
+                "url": entry.url,
+                "domain": parsed_url.netloc,
+                "scheme": parsed_url.scheme,
+                "discovered_by": discovered_by,
+                "first_seen_utc": timestamp_str,
+                "last_seen_utc": timestamp_str,
+                "source_path": source_path,
+                "notes": None,
+                "context": None,
+                "run_id": run_id,
+                "cache_key": entry.url,
+                "cache_filename": filename,
+                "response_code": http_info.get("response_code"),
+                "content_type": http_info.get("content_type"),
+                "tags": json.dumps({
+                    "stream0_size": entry.stream0_size,
+                    "stream1_size": entry.stream1_size,
+                    "content_encoding": http_info.get("content_encoding"),
+                    "entry_version": entry.version,
+                    "last_used_time": timestamp_str if last_used_time else None,
+                    "index_entry_size": index_entry_size,
+                    "forensic_path": file_entry.get("forensic_path"),
+                    "logical_path": file_entry.get("logical_path"),
+                }),
+            }
 
-        insert_urls(evidence_conn, evidence_id, [url_record])
-        stats["urls"] += 1
-        stats["records"] += 1
+            insert_urls(evidence_conn, evidence_id, [url_record])
+            stats["urls"] += 1
+            stats["records"] += 1
+        else:
+            LOGGER.debug("Skipping non-URL cache key: %s", entry.url[:80])
 
         # Process body stream for images
         if entry.stream1_size > 0:

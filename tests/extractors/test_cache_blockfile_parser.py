@@ -20,6 +20,7 @@ from extractors.browser.chromium.cache.blockfile import (
     ENTRY_STORE_SIZE,
     DOUBLE_KEY_PREFIX,
     DOUBLE_KEY_SEPARATOR,
+    CODE_CACHE_KEY_PREFIX,
     # Data classes
     CacheAddr,
     EntryStore,
@@ -40,6 +41,7 @@ from extractors.browser.chromium.cache.blockfile import (
     parse_blockfile_cache,
     load_cache_files,
     extract_url_from_cache_key,
+    is_cache_url,
     MAX_INTERNAL_KEY_LENGTH,
 )
 
@@ -202,6 +204,185 @@ class TestExtractUrlFromCacheKey:
         """Double-keyed blob URL should extract the blob URL."""
         cache_key = "1/0/_dk_https://toplevel.com blob:https://example.com/uuid-5678"
         assert extract_url_from_cache_key(cache_key) == "blob:https://example.com/uuid-5678"
+
+    # --- Code Cache _key prefix tests ---
+
+    def test_code_cache_key_with_newline_separator(self):
+        """Code Cache key: _key<url> \\n<top_level_site> should extract the script URL."""
+        cache_key = "_keyhttps://cdn.example.com/script.js \nhttps://example.com/"
+        assert extract_url_from_cache_key(cache_key) == "https://cdn.example.com/script.js"
+
+    def test_code_cache_key_with_only_newline(self):
+        """Code Cache key with bare newline separator."""
+        cache_key = "_keyhttps://assets.msn.com/bundles/v1/shell.js\nhttps://msn.com/"
+        assert extract_url_from_cache_key(cache_key) == "https://assets.msn.com/bundles/v1/shell.js"
+
+    def test_code_cache_key_no_separator(self):
+        """Code Cache key without separator returns full content after _key."""
+        cache_key = "_keyhttps://cdn.example.com/single.js"
+        assert extract_url_from_cache_key(cache_key) == "https://cdn.example.com/single.js"
+
+    def test_code_cache_key_with_credential_prefix(self):
+        """Code Cache key might also have N/N/ prefix."""
+        cache_key = "1/0/_keyhttps://cdn.example.com/script.js \nhttps://example.com/"
+        assert extract_url_from_cache_key(cache_key) == "https://cdn.example.com/script.js"
+
+    def test_code_cache_key_real_ipoint(self):
+        """Real-world iPoint/EBWebView Code Cache key from evidence."""
+        cache_key = "_keyhttps://assets.msn.com/bundles/v1/windowsShell/latest/common-utils.f35aee6163747e34f107.js \nhttps://msn.com/"
+        expected = "https://assets.msn.com/bundles/v1/windowsShell/latest/common-utils.f35aee6163747e34f107.js"
+        assert extract_url_from_cache_key(cache_key) == expected
+
+    def test_code_cache_key_trailing_space_before_newline(self):
+        """Trailing space before newline should be stripped."""
+        cache_key = "_keyhttps://example.com/app.js  \nhttps://example.com/"
+        assert extract_url_from_cache_key(cache_key) == "https://example.com/app.js"
+
+    def test_sha256_hash_key_passthrough(self):
+        """SHA-256 hash-only key (no _key prefix) should pass through as-is."""
+        hash_key = "AB2A39155883DE91B9EFDA1DBD40620716B544996393D10FCD674C426DA1A250"
+        assert extract_url_from_cache_key(hash_key) == hash_key
+
+    def test_gpu_cache_hash_key_passthrough(self):
+        """GPUCache base64 hash pair should pass through as-is."""
+        gpu_key = "HYN18Fl2bqKa6GEqZSRCWOIq1vc=:L4uLPxDuFfI2ovodjJe3qn+JmNw="
+        assert extract_url_from_cache_key(gpu_key) == gpu_key
+
+    def test_code_cache_key_prefix_constant(self):
+        """CODE_CACHE_KEY_PREFIX should be '_key'."""
+        assert CODE_CACHE_KEY_PREFIX == "_key"
+
+
+class TestIsCacheUrl:
+    """Test the is_cache_url helper that distinguishes URLs from opaque cache keys."""
+
+    def test_http_url(self):
+        assert is_cache_url("http://example.com/page.html") is True
+
+    def test_https_url(self):
+        assert is_cache_url("https://cdn.msn.com/image.jpg") is True
+
+    def test_chrome_extension_url(self):
+        assert is_cache_url("chrome-extension://abcdef/popup.html") is True
+
+    def test_blob_url(self):
+        assert is_cache_url("blob:https://example.com/uuid") is True
+
+    def test_data_uri(self):
+        assert is_cache_url("data:image/png;base64,iVBORw0KGgo=") is True
+
+    def test_ftp_url(self):
+        assert is_cache_url("ftp://files.example.com/data.zip") is True
+
+    def test_sha256_hash(self):
+        """SHA-256 hash (Code Cache compiled code key) is NOT a URL."""
+        assert is_cache_url("AB2A39155883DE91B9EFDA1DBD40620716B544996393D10FCD674C426DA1A250") is False
+
+    def test_gpu_cache_hash(self):
+        """GPUCache base64 hash pair is NOT a URL."""
+        assert is_cache_url("HYN18Fl2bqKa6GEqZSRCWOIq1vc=:L4uLPxDuFfI2ovodjJe3qn+JmNw=") is False
+
+    def test_empty_string(self):
+        assert is_cache_url("") is False
+
+    def test_none_value(self):
+        assert is_cache_url(None) is False
+
+    def test_plain_text(self):
+        """Random text without colon is not a URL."""
+        assert is_cache_url("just-some-text") is False
+
+    def test_colon_at_start(self):
+        """String starting with colon is not a URL."""
+        assert is_cache_url(":not-a-scheme") is False
+
+    def test_ws_websocket(self):
+        assert is_cache_url("ws://example.com/socket") is True
+
+    def test_wss_websocket(self):
+        assert is_cache_url("wss://example.com/socket") is True
+
+    def test_edge_scheme(self):
+        assert is_cache_url("edge://settings/") is True
+
+
+class TestParseIndexHeaderTableLen:
+    """Test parse_index_header table_len validation and correction."""
+
+    def _make_index_data(self, table_len: int, num_entries: int = 10,
+                          table_size: int = 65536) -> bytes:
+        """Build a minimal index file with configurable table_len."""
+        # Header fields (48 bytes of useful data + 208 bytes padding = 256 header)
+        header = struct.pack(
+            '<II ii ii Ii ii Q',
+            BLOCKFILE_INDEX_MAGIC,  # magic
+            0x00020001,             # version 2.1
+            num_entries,            # num_entries
+            0,                      # old_num_bytes
+            0,                      # last_file
+            1,                      # this_id
+            0,                      # stats_addr
+            table_len,              # table_len (the field under test)
+            0,                      # crash
+            0,                      # experiment
+            0,                      # create_time
+        )
+        # Pad header to 256 bytes
+        header += b'\x00' * (256 - len(header))
+        # Append empty hash table to reach the expected file size
+        table_data = b'\x00' * (table_size * 4)
+        return header + table_data
+
+    def test_normal_table_len_65536(self):
+        """Normal table_len of 65536 should be preserved."""
+        data = self._make_index_data(table_len=65536)
+        header = parse_index_header(data)
+        assert header is not None
+        assert header.table_len == 65536
+
+    def test_table_len_zero_uses_default(self):
+        """table_len=0 should fall back to DEFAULT_TABLE_SIZE (65536)."""
+        data = self._make_index_data(table_len=0)
+        header = parse_index_header(data)
+        assert header is not None
+        assert header.table_len == 65536
+
+    def test_table_len_one_corrected(self):
+        """table_len=1 with large file should be corrected to 65536."""
+        data = self._make_index_data(table_len=1)
+        header = parse_index_header(data)
+        assert header is not None
+        assert header.table_len == 65536
+
+    def test_table_len_small_corrected(self):
+        """table_len < 256 should be corrected based on file size."""
+        data = self._make_index_data(table_len=100)
+        header = parse_index_header(data)
+        assert header is not None
+        assert header.table_len == 65536
+
+    def test_table_len_256_preserved(self):
+        """table_len=256 (>= threshold) should be preserved if file is big enough."""
+        data = self._make_index_data(table_len=256)
+        header = parse_index_header(data)
+        assert header is not None
+        assert header.table_len == 256
+
+    def test_table_len_small_file(self):
+        """Small file with bogus table_len should compute from file size."""
+        # File has room for only 512 buckets (header 256 + 512*4 = 2304)
+        data = self._make_index_data(table_len=1, table_size=512)
+        header = parse_index_header(data)
+        assert header is not None
+        # Should be 512 (largest power of 2 <= file capacity)
+        assert header.table_len == 512
+
+    def test_table_len_negative_corrected(self):
+        """Negative table_len should be corrected."""
+        data = self._make_index_data(table_len=-1)
+        header = parse_index_header(data)
+        assert header is not None
+        assert header.table_len == 65536
 
 
 class TestCacheAddrParsing:
@@ -1176,5 +1357,168 @@ class TestBlockfileIngestionIntegration:
         urls = [r[0] for r in url_rows]
 
         assert long_url in urls, f"Long URL should be ingested. Got: {urls}"
+
+        db_manager.close_all()
+
+
+class TestOrphanFileCarving:
+    """Test orphan data file carving when blockfile index has no valid entries."""
+
+    def _make_empty_blockfile_cache(self, cache_dir: Path, f_files: dict):
+        """
+        Create a blockfile cache dir with valid magic but zeroed entries,
+        plus external f_* files containing image data.
+        """
+        # Index: valid magic, version 2.1, but empty hash table
+        header = struct.pack(
+            '<II ii ii Ii ii Q',
+            BLOCKFILE_INDEX_MAGIC,  # magic
+            0x00020001,             # version 2.1
+            0,                      # num_entries
+            0,                      # num_bytes
+            0,                      # last_file
+            1,                      # this_id
+            0,                      # stats_addr
+            0x10000,                # table_len (65536)
+            0,                      # crash
+            0,                      # experiment
+            0,                      # create_time
+        )
+        header += b'\x00' * (256 - len(header))
+        # Write index (header + empty table)
+        (cache_dir / 'index').write_bytes(header + b'\x00' * (65536 * 4))
+
+        # data_0 and data_1: valid magic + empty blocks
+        for i in range(4):
+            bh = struct.pack('<II hh iii', 0xC104CAC3, 0x20001, i, 0, BLOCK_SIZES.get(i + 1, 256), 0, 0)
+            bh += b'\x00' * (8192 - len(bh))
+            (cache_dir / f'data_{i}').write_bytes(bh)
+
+        # Write external f_* files
+        for name, content in f_files.items():
+            (cache_dir / name).write_bytes(content)
+
+    def test_orphan_carving_detects_images(self, tmp_path):
+        """Orphan carving should detect and carve images from f_* files."""
+        from extractors.browser.chromium.cache._blockfile_ingestion import (
+            _carve_orphan_data_files,
+        )
+        from core.database.manager import DatabaseManager
+
+        cache_dir = tmp_path / "cache"
+        cache_dir.mkdir()
+
+        # Create a minimal JPEG
+        jpeg_data = b'\xff\xd8\xff\xe0' + b'\x00' * 100 + b'\xff\xd9'
+        # Create a minimal PNG
+        png_data = b'\x89PNG\r\n\x1a\n' + b'\x00' * 100
+
+        self._make_empty_blockfile_cache(cache_dir, {
+            "f_000001": jpeg_data,
+            "f_000002": png_data,
+            "f_000003": b'not-an-image-just-text',
+        })
+
+        # Verify no entries from index
+        entries = parse_blockfile_cache(cache_dir)
+        assert len(entries) == 0
+
+        # Setup DB
+        case_folder = tmp_path / "case"
+        case_folder.mkdir()
+        case_db_path = case_folder / "test.sqlite"
+        db_manager = DatabaseManager(case_folder, case_db_path=case_db_path)
+        evidence_conn = db_manager.get_evidence_conn(1, "test_evidence")
+
+        extraction_dir = tmp_path / "output"
+        extraction_dir.mkdir()
+
+        count = _carve_orphan_data_files(
+            evidence_conn=evidence_conn,
+            evidence_id=1,
+            cache_dir=cache_dir,
+            extraction_dir=extraction_dir,
+            run_id="test_run",
+            extractor_version="1.0.0",
+        )
+
+        # Should have carved at least the JPEG (PNG might fail without
+        # valid chunk structure, but JPEG magic is enough for detection)
+        assert count >= 1, f"Expected at least 1 carved image, got {count}"
+
+        # Check images were inserted
+        rows = evidence_conn.execute("SELECT count(*) FROM images").fetchone()
+        assert rows[0] >= 1
+
+        db_manager.close_all()
+
+    def test_orphan_carving_skips_non_images(self, tmp_path):
+        """Orphan carving should skip non-image files."""
+        from extractors.browser.chromium.cache._blockfile_ingestion import (
+            _carve_orphan_data_files,
+        )
+        from core.database.manager import DatabaseManager
+
+        cache_dir = tmp_path / "cache"
+        cache_dir.mkdir()
+
+        self._make_empty_blockfile_cache(cache_dir, {
+            "f_000001": b'Hello World - just text',
+            "f_000002": b'\x50\x4b\x03\x04zip-file-data',
+        })
+
+        case_folder = tmp_path / "case"
+        case_folder.mkdir()
+        case_db_path = case_folder / "test.sqlite"
+        db_manager = DatabaseManager(case_folder, case_db_path=case_db_path)
+        evidence_conn = db_manager.get_evidence_conn(1, "test_evidence")
+
+        extraction_dir = tmp_path / "output"
+        extraction_dir.mkdir()
+
+        count = _carve_orphan_data_files(
+            evidence_conn=evidence_conn,
+            evidence_id=1,
+            cache_dir=cache_dir,
+            extraction_dir=extraction_dir,
+            run_id="test_run",
+            extractor_version="1.0.0",
+        )
+
+        assert count == 0
+
+        db_manager.close_all()
+
+    def test_orphan_carving_no_f_files(self, tmp_path):
+        """Orphan carving returns 0 when no f_* files exist."""
+        from extractors.browser.chromium.cache._blockfile_ingestion import (
+            _carve_orphan_data_files,
+        )
+        from core.database.manager import DatabaseManager
+
+        cache_dir = tmp_path / "cache"
+        cache_dir.mkdir()
+
+        self._make_empty_blockfile_cache(cache_dir, {})
+
+        case_folder = tmp_path / "case"
+        case_folder.mkdir()
+        case_db_path = case_folder / "test.sqlite"
+        db_manager = DatabaseManager(case_folder, case_db_path=case_db_path)
+        evidence_conn = db_manager.get_evidence_conn(1, "test_evidence")
+
+        extraction_dir = tmp_path / "output"
+        extraction_dir.mkdir()
+
+        count = _carve_orphan_data_files(
+            evidence_conn=evidence_conn,
+            evidence_id=1,
+            cache_dir=cache_dir,
+            extraction_dir=extraction_dir,
+            run_id="test_run",
+            extractor_version="1.0.0",
+        )
+
+        assert count == 0
 
         db_manager.close_all()

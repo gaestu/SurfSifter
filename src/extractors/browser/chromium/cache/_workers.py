@@ -14,7 +14,7 @@ import threading
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
-from typing import List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 
 from core.logging import get_logger
 
@@ -125,6 +125,28 @@ def stream_copy_hash(
     return size, (md5.hexdigest() if md5 else None), (sha256.hexdigest() if sha256 else None)
 
 
+def cache_dir_id(source_cache_path: str) -> str:
+    """
+    Derive a short, deterministic subdirectory name from a source cache path.
+
+    Different source cache directories that share the same (partition,
+    browser, profile) tuple need distinct output subdirectories to avoid
+    file-name collisions (e.g. multiple blockfile caches each containing
+    ``index``, ``data_0``, etc.).
+
+    Args:
+        source_cache_path: The ``cache_dir_info["path"]`` value, i.e.
+            the logical path on the evidence filesystem to the cache
+            directory (e.g. ``"iPoint/cache"`` or
+            ``"Users/PC/.../Cache/Cache_Data"``).
+
+    Returns:
+        An 8-character lowercase hex string (MD5 digest prefix) that
+        is safe for use as a directory name.
+    """
+    return hashlib.md5(source_cache_path.encode("utf-8", errors="replace")).hexdigest()[:8]
+
+
 def extraction_worker(
     ewf_paths: List[Path],
     partition_index: int,
@@ -185,8 +207,10 @@ def extraction_worker(
                 file_type = get_cache_file_type(filename)
                 entry_hash = get_entry_hash_from_filename(filename)
 
-                # Create profile-specific subdirectory
-                profile_dir = output_dir / run_id / f"p{partition_index}_{browser}_{profile}"
+                # Create profile-specific subdirectory per source cache dir
+                source_cache_path = cache_dir_info.get("path", "")
+                subdir_id = cache_dir_id(source_cache_path)
+                profile_dir = output_dir / run_id / f"p{partition_index}_{browser}_{profile}" / subdir_id
                 profile_dir.mkdir(parents=True, exist_ok=True)
 
                 # Destination path
@@ -256,3 +280,4 @@ _get_cache_file_type = get_cache_file_type
 _get_entry_hash_from_filename = get_entry_hash_from_filename
 _stream_copy_hash = stream_copy_hash
 _extraction_worker = extraction_worker
+_cache_dir_id = cache_dir_id
