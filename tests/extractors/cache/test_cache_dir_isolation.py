@@ -35,12 +35,12 @@ class TestCacheDirId:
 
     def test_deterministic(self):
         """Same input should always produce the same output."""
-        path = "iPoint/cache"
+        path = "Application/cache"
         assert cache_dir_id(path) == cache_dir_id(path)
 
     def test_different_paths_different_ids(self):
         """Different source paths should (overwhelmingly) produce different IDs."""
-        id1 = cache_dir_id("iPoint/cache")
+        id1 = cache_dir_id("Application/cache")
         id2 = cache_dir_id("Users/PC/AppData/Local/EBWebView/Default/Cache/Cache_Data")
         assert id1 != id2
 

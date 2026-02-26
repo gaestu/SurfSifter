@@ -315,13 +315,13 @@ class TestFindAppcacheDirectories:
             files.append({
                 "extracted_path": str(fpath),
                 "browser": "chromium_embedded",
-                "profile": "iPoint",
+                "profile": "Application",
             })
         # Also include Index file
         files.append({
             "extracted_path": str(index_path),
             "browser": "chromium_embedded",
-            "profile": "iPoint",
+            "profile": "Application",
         })
 
         result = find_appcache_directories(files, tmp_path)
@@ -330,7 +330,7 @@ class TestFindAppcacheDirectories:
         assert result[0]["path"] == cache_dir
         assert result[0]["index_path"] == index_path
         assert result[0]["browser"] == "chromium_embedded"
-        assert result[0]["profile"] == "iPoint"
+        assert result[0]["profile"] == "Application"
 
     def test_ignores_regular_blockfile(self, tmp_path):
         """Should not match a regular blockfile cache without SQLite Index."""
@@ -417,7 +417,7 @@ class TestIngestAppcacheDirectory:
             cache_dir=appcache_fixture["cache_dir"],
             index_path=appcache_fixture["index_path"],
             browser="chromium_embedded",
-            profile="iPoint",
+            profile="Application",
             extraction_dir=tmp_path / "output",
             callbacks=mock_callbacks,
             extractor_version="1.0.0",
@@ -446,7 +446,7 @@ class TestIngestAppcacheDirectory:
             cache_dir=appcache_fixture["cache_dir"],
             index_path=appcache_fixture["index_path"],
             browser="chromium_embedded",
-            profile="iPoint",
+            profile="Application",
             extraction_dir=tmp_path / "output",
             callbacks=mock_callbacks,
             extractor_version="1.0.0",
@@ -523,7 +523,7 @@ class TestIngestAppcacheDirectory:
             cache_dir=appcache_fixture["cache_dir"],
             index_path=appcache_fixture["index_path"],
             browser="chromium_embedded",
-            profile="iPoint",
+            profile="Application",
             extraction_dir=tmp_path / "output",
             callbacks=mock_callbacks,
             extractor_version="1.0.0",
@@ -584,10 +584,10 @@ class TestIngestAppcacheDirectory:
         assert result["groups"] == 2
 
 
-class TestAppcacheWithIPointData:
-    """Integration test using real iPoint Application Cache data if available."""
+class TestAppcacheWithApplicationData:
+    """Integration test using real Application Application Cache data if available."""
 
-    IPOINT_APPCACHE = Path("test_cases/iPoint/cache/Application Cache")
+    Application_APPCACHE = Path("test_cases/Application/cache/Application Cache")
 
     @pytest.fixture
     def evidence_conn(self, tmp_path):
@@ -606,12 +606,12 @@ class TestAppcacheWithIPointData:
         return cb
 
     @pytest.mark.skipif(
-        not Path("test_cases/iPoint/cache/Application Cache/Index").exists(),
-        reason="iPoint test data not available",
+        not Path("test_cases/Application/cache/Application Cache/Index").exists(),
+        reason="Application test data not available",
     )
-    def test_read_ipoint_index(self):
-        """Read the real iPoint Application Cache Index."""
-        result = _read_appcache_index(self.IPOINT_APPCACHE / "Index")
+    def test_read_Application_index(self):
+        """Read the real Application Application Cache Index."""
+        result = _read_appcache_index(self.Application_APPCACHE / "Index")
 
         assert result["total_entries"] == 18
         assert len(result["groups"]) == 5
@@ -624,24 +624,24 @@ class TestAppcacheWithIPointData:
         assert any("stickers" in u for u in urls)
         assert any("bollywoodstory" in u for u in urls)
 
-        # All entries should be from cdnc4.grandx.org
+        # All entries should be from cdnc4.example.org
         for url in urls:
-            assert "cdnc4.grandx.org" in url
+            assert "cdnc4.example.org" in url
 
     @pytest.mark.skipif(
-        not Path("test_cases/iPoint/cache/Application Cache/Index").exists(),
-        reason="iPoint test data not available",
+        not Path("test_cases/Application/cache/Application Cache/Index").exists(),
+        reason="Application test data not available",
     )
-    def test_ingest_ipoint_appcache(self, evidence_conn, mock_callbacks, tmp_path):
-        """Full ingestion of iPoint Application Cache data."""
+    def test_ingest_Application_appcache(self, evidence_conn, mock_callbacks, tmp_path):
+        """Full ingestion of Application Application Cache data."""
         result = ingest_appcache_directory(
             evidence_conn=evidence_conn,
             evidence_id=1,
-            run_id="test_ipoint_appcache",
-            cache_dir=self.IPOINT_APPCACHE / "Cache",
-            index_path=self.IPOINT_APPCACHE / "Index",
+            run_id="test_Application_appcache",
+            cache_dir=self.Application_APPCACHE / "Cache",
+            index_path=self.Application_APPCACHE / "Index",
             browser="chromium_embedded",
-            profile="iPoint",
+            profile="Application",
             extraction_dir=tmp_path / "output",
             callbacks=mock_callbacks,
             extractor_version="1.0.0",
@@ -657,10 +657,10 @@ class TestAppcacheWithIPointData:
         url_count = cursor.fetchone()[0]
         assert url_count == 18
 
-        # Verify all URLs are from cdnc4.grandx.org
+        # Verify all URLs are from cdnc4.example.org
         cursor.execute("SELECT DISTINCT domain FROM urls")
         domains = {row[0] for row in cursor.fetchall()}
-        assert domains == {"cdnc4.grandx.org"}
+        assert domains == {"cdnc4.example.org"}
 
         # Verify manifest URLs
         cursor.execute("SELECT url FROM urls WHERE url LIKE '%cache.manifest%'")

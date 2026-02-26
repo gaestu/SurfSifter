@@ -15,7 +15,7 @@ Companion "-blob" files contain the response body when not stored inline.
 
 Binary layout (Version 12):
   [uint32]          version (e.g. 12)
-  [lf_string]       partition domain (e.g. "grandx.org")
+  [lf_string]       partition domain (e.g. "example.org")
   [lf_string]       record type (e.g. "Resource")
   [lf_string]       URL
   [0xFFFFFFFF]      key hash marker

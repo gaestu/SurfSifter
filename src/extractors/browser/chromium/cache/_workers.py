@@ -137,7 +137,7 @@ def cache_dir_id(source_cache_path: str) -> str:
     Args:
         source_cache_path: The ``cache_dir_info["path"]`` value, i.e.
             the logical path on the evidence filesystem to the cache
-            directory (e.g. ``"iPoint/cache"`` or
+            directory (e.g. ``"APPLICATION/cache"`` or
             ``"Users/PC/.../Cache/Cache_Data"``).
 
     Returns:

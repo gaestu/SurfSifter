@@ -117,15 +117,15 @@ class TestDetectSignal:
     """Unit tests for _detect_signal."""
 
     def test_visited_links_by_path(self):
-        assert _detect_signal("/iPoint/cache/Visited Links", "Visited Links") == "visited_links"
+        assert _detect_signal("/Application/cache/Visited Links", "Visited Links") == "visited_links"
 
     def test_visited_links_by_filename(self):
         assert _detect_signal("/some/path/Visited Links", "Visited Links") == "visited_links"
 
     def test_old_localstorage_by_path(self):
         assert _detect_signal(
-            "/iPoint/cache/Local Storage/https_ggslot.net_0.localstorage",
-            "https_ggslot.net_0.localstorage",
+            "/Application/cache/Local Storage/https_example.net_0.localstorage",
+            "https_example.net_0.localstorage",
         ) == "local_storage"
 
     def test_modern_localstorage_still_works(self):
@@ -156,8 +156,8 @@ class TestExtractProfileRoot:
 
     def test_cache_strips_only_index(self):
         """Cache signal should strip /index, not /cache/index — supports flat CefSharp layouts."""
-        root = _extract_profile_root("/iPoint/cache/index", "cache")
-        assert root == "/iPoint/cache"
+        root = _extract_profile_root("/Application/cache/index", "cache")
+        assert root == "/Application/cache"
 
     def test_cache_standard_layout(self):
         """Standard Cache/index still yields parent of the Cache/ directory."""
@@ -170,15 +170,15 @@ class TestExtractProfileRoot:
         assert root == "/App/Default/Cache/Cache_Data"
 
     def test_visited_links(self):
-        root = _extract_profile_root("/iPoint/cache/Visited Links", "visited_links")
-        assert root == "/iPoint/cache"
+        root = _extract_profile_root("/Application/cache/Visited Links", "visited_links")
+        assert root == "/Application/cache"
 
     def test_old_localstorage(self):
         root = _extract_profile_root(
-            "/iPoint/cache/Local Storage/https_ggslot.net_0.localstorage",
+            "/Application/cache/Local Storage/https_example.net_0.localstorage",
             "local_storage",
         )
-        assert root == "/iPoint/cache"
+        assert root == "/Application/cache"
 
     def test_modern_localstorage_leveldb(self):
         root = _extract_profile_root(
@@ -189,7 +189,7 @@ class TestExtractProfileRoot:
 
 
 # ---------------------------------------------------------------------------
-# CefSharp flat layout integration test (iPoint-style)
+# CefSharp flat layout integration test (Application-style)
 # ---------------------------------------------------------------------------
 
 def test_cefsharp_flat_layout_discovered(evidence_db):
@@ -200,15 +200,15 @@ def test_cefsharp_flat_layout_discovered(evidence_db):
     """
     evidence_id = 1
     rows = [
-        # iPoint CefSharp layout: everything under /iPoint/cache/
-        (evidence_id, "/iPoint/cache/Cookies", "Cookies", "", 1024, 10, 0, 0),
-        (evidence_id, "/iPoint/cache/Visited Links", "Visited Links", "", 512, 11, 0, 0),
-        (evidence_id, "/iPoint/cache/Local Storage/https_ggslot.net_0.localstorage", "https_ggslot.net_0.localstorage", ".localstorage", 256, 12, 0, 0),
-        (evidence_id, "/iPoint/cache/index", "index", "", 256, 13, 0, 0),
-        (evidence_id, "/iPoint/cache/data_0", "data_0", "", 4096, 14, 0, 0),
-        (evidence_id, "/iPoint/cache/data_1", "data_1", "", 4096, 15, 0, 0),
-        (evidence_id, "/iPoint/cache/data_2", "data_2", "", 4096, 16, 0, 0),
-        (evidence_id, "/iPoint/cache/data_3", "data_3", "", 4096, 17, 0, 0),
+        # Application CefSharp layout: everything under /Application/cache/
+        (evidence_id, "/Application/cache/Cookies", "Cookies", "", 1024, 10, 0, 0),
+        (evidence_id, "/Application/cache/Visited Links", "Visited Links", "", 512, 11, 0, 0),
+        (evidence_id, "/Application/cache/Local Storage/https_example.net_0.localstorage", "https_example.net_0.localstorage", ".localstorage", 256, 12, 0, 0),
+        (evidence_id, "/Application/cache/index", "index", "", 256, 13, 0, 0),
+        (evidence_id, "/Application/cache/data_0", "data_0", "", 4096, 14, 0, 0),
+        (evidence_id, "/Application/cache/data_1", "data_1", "", 4096, 15, 0, 0),
+        (evidence_id, "/Application/cache/data_2", "data_2", "", 4096, 16, 0, 0),
+        (evidence_id, "/Application/cache/data_3", "data_3", "", 4096, 17, 0, 0),
     ]
     _insert_rows(evidence_db, rows)
 
@@ -216,7 +216,7 @@ def test_cefsharp_flat_layout_discovered(evidence_db):
 
     assert len(roots) == 1
     root = roots[0]
-    assert root.root_path == "/iPoint/cache"
+    assert root.root_path == "/Application/cache"
     assert root.partition_index == 0
     # Must have at least cookies + visited_links (possibly also cache, local_storage)
     assert "cookies" in root.signals

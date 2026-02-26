@@ -46,7 +46,7 @@ def _create_evidence_db(db_path: Path, evidence_id: int = 1) -> Path:
         INSERT INTO closed_tabs
             (evidence_id, browser, profile, url, title, closed_at_utc,
              original_window_id, original_tab_index, run_id, source_path)
-        VALUES (?, 'safari', 'Yans', 'http://grandx.org/', 'grandx.org',
+        VALUES (?, 'safari', 'Yans', 'http://example.org/', 'example.org',
                 '2023-10-04T19:30:33+00:00', 0, 0, 'run1', '/path/to/file')
     """, (evidence_id,))
     conn.execute("""
@@ -117,9 +117,9 @@ class TestClosedTabsTableModel:
         model = ClosedTabsTableModel(mgr, evidence_id=1, evidence_label="ev1")
         model.load(browser_filter="safari")
 
-        # First row: http://grandx.org/
+        # First row: http://example.org/
         idx = model.index(0, ClosedTabsTableModel.COL_URL)
-        assert "grandx.org" in model.data(idx, Qt.DisplayRole)
+        assert "example.org" in model.data(idx, Qt.DisplayRole)
 
         idx = model.index(0, ClosedTabsTableModel.COL_BROWSER)
         assert model.data(idx, Qt.DisplayRole) == "Safari"

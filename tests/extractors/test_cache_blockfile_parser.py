@@ -228,8 +228,8 @@ class TestExtractUrlFromCacheKey:
         cache_key = "1/0/_keyhttps://cdn.example.com/script.js \nhttps://example.com/"
         assert extract_url_from_cache_key(cache_key) == "https://cdn.example.com/script.js"
 
-    def test_code_cache_key_real_ipoint(self):
-        """Real-world iPoint/EBWebView Code Cache key from evidence."""
+    def test_code_cache_key_real_Application(self):
+        """Real-world Application/EBWebView Code Cache key from evidence."""
         cache_key = "_keyhttps://assets.msn.com/bundles/v1/windowsShell/latest/common-utils.f35aee6163747e34f107.js \nhttps://msn.com/"
         expected = "https://assets.msn.com/bundles/v1/windowsShell/latest/common-utils.f35aee6163747e34f107.js"
         assert extract_url_from_cache_key(cache_key) == expected

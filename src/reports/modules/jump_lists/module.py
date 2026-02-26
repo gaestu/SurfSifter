@@ -353,8 +353,8 @@ class JumpListsModule(BaseReportModule):
 
         Priority:
         1. Browser name (e.g. "Chrome", "Firefox")
-        2. Executable name from target_path (e.g. "iPoint" from "C:\\iPoint\\iPoint.exe")
-        3. Last folder component from target_path (e.g. "iPoint" from "C:\\iPoint")
+        2. Executable name from target_path (e.g. "Application" from "C:\\Application\\Application.exe")
+        3. Last folder component from target_path (e.g. "Application" from "C:\\Application")
         4. Raw appid as fallback
 
         Args:
