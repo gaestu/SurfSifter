@@ -357,6 +357,14 @@ TRANSLATIONS: Dict[str, TranslationDict] = {
         "applications": "applications",
 
         # ===================
+        # Application Execution module
+        # ===================
+        "application_execution_title": "Application Execution",
+        "application_execution_description": "Application execution artifacts are derived from Windows UserAssist entries and indicate which programs were launched by a user. They can include execution counts, focus data, and the last observed run time for each application path.",
+        "application_path": "Application Path",
+        "no_application_execution_found": "No application execution entries found matching the filter criteria.",
+
+        # ===================
         # Bookmarks module
         # ===================
         "bookmarks_title": "Bookmarks",
@@ -794,6 +802,14 @@ TRANSLATIONS: Dict[str, TranslationDict] = {
         "installed_applications_title": "Installierte Anwendungen",
         "no_installed_applications_found": "Keine installierten Anwendungen gefunden, die den Filterkriterien entsprechen.",
         "applications": "Anwendungen",
+
+        # ===================
+        # Application Execution module
+        # ===================
+        "application_execution_title": "Anwendungsausführung",
+        "application_execution_description": "Artefakte zur Anwendungsausführung stammen aus Windows-UserAssist-Einträgen und zeigen, welche Programme von einem Benutzer gestartet wurden. Sie können Ausführungsanzahl, Fokusdaten und die zuletzt beobachtete Ausführungszeit pro Anwendungspfad enthalten.",
+        "application_path": "Anwendungspfad",
+        "no_application_execution_found": "Keine Anwendungsausführungs-Einträge gefunden, die den Filterkriterien entsprechen.",
 
         # ===================
         # Bookmarks module

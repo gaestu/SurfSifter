@@ -1,0 +1,143 @@
+{# Application Execution Module Template #}
+<div class="module-application-execution">
+    {% if section_title %}
+    <h3 class="module-title">{{ section_title }}</h3>
+    {% endif %}
+
+    {% if section_description %}
+    <p class="module-description">{{ section_description }}</p>
+    {% elif show_default_description %}
+    <p class="module-description">{{ t.application_execution_description | default('Application execution artifacts are derived from Windows UserAssist entries and indicate which programs were launched by a user. They can include execution counts, focus data, and the last observed run time for each application path.') }}</p>
+    {% endif %}
+
+    <table class="application-execution-table">
+        <thead>
+            <tr>
+                <th class="col-app-path">{{ t.application_path | default('Application Path') }}</th>
+                {% if show_run_count %}
+                <th class="col-run-count">{{ t.run_count | default('Run Count') }}</th>
+                {% endif %}
+                <th class="col-last-run">{{ t.last_run | default('Last Run') }}</th>
+                {% if show_focus_time %}
+                <th class="col-focus-time">{{ t.focus_time | default('Focus Time') }}</th>
+                {% endif %}
+                {% if show_focus_count %}
+                <th class="col-focus-count">{{ t.focus_count | default('Focus Count') }}</th>
+                {% endif %}
+                {% if show_source %}
+                <th class="col-source">{{ t.source | default('Source') }}</th>
+                {% endif %}
+            </tr>
+        </thead>
+        <tbody>
+            {% for entry in entries %}
+            <tr>
+                <td class="col-app-path">{{ entry.application_path if entry.application_path else '—' }}</td>
+                {% if show_run_count %}
+                <td class="col-run-count">{{ entry.run_count if entry.run_count is not none else '—' }}</td>
+                {% endif %}
+                <td class="col-last-run">{{ entry.last_run if entry.last_run else '—' }}</td>
+                {% if show_focus_time %}
+                <td class="col-focus-time">{{ entry.focus_time if entry.focus_time else '—' }}</td>
+                {% endif %}
+                {% if show_focus_count %}
+                <td class="col-focus-count">{{ entry.focus_count if entry.focus_count is not none else '—' }}</td>
+                {% endif %}
+                {% if show_source %}
+                <td class="col-source">{{ entry.source if entry.source else '—' }}</td>
+                {% endif %}
+            </tr>
+            {% else %}
+            <tr>
+                <td colspan="{{ 2 + (1 if show_run_count else 0) + (1 if show_focus_time else 0) + (1 if show_focus_count else 0) + (1 if show_source else 0) }}" class="empty-message">
+                    {{ t.no_application_execution_found | default('No application execution entries found matching the filter criteria.') }}
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+
+<style>
+.module-application-execution {
+    margin: 1em 0;
+}
+
+.module-application-execution .module-title {
+    margin: 0 0 0.75em 0;
+    font-size: 1.1em;
+    font-weight: 600;
+    color: #333;
+}
+
+.module-application-execution .module-description {
+    margin: 0 0 1em 0;
+    color: #555;
+    font-size: 0.9em;
+    line-height: 1.5;
+}
+
+.application-execution-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.85em;
+    table-layout: fixed;
+}
+
+.application-execution-table th,
+.application-execution-table td {
+    border: 1px solid #ddd;
+    padding: 6px 8px;
+    text-align: left;
+    vertical-align: top;
+}
+
+.application-execution-table th {
+    background-color: #f5f5f5;
+    font-weight: 600;
+}
+
+.application-execution-table tbody tr:nth-child(even) {
+    background-color: #fafafa;
+}
+
+.application-execution-table tbody tr:hover {
+    background-color: #f0f7ff;
+}
+
+.application-execution-table .col-app-path {
+    width: 48%;
+    word-break: break-all;
+}
+
+.application-execution-table .col-run-count,
+.application-execution-table .col-focus-count {
+    width: 9%;
+    text-align: center;
+    white-space: nowrap;
+}
+
+.application-execution-table .col-last-run,
+.application-execution-table .col-focus-time {
+    width: 14%;
+    white-space: nowrap;
+}
+
+.application-execution-table .col-source {
+    width: 12%;
+    white-space: nowrap;
+}
+
+.application-execution-table .empty-message {
+    text-align: center;
+    color: #888;
+    font-style: italic;
+    padding: 2em;
+}
+
+@media print {
+    .application-execution-table {
+        font-size: 0.8em;
+    }
+}
+</style>

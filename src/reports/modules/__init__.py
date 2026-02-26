@@ -21,6 +21,7 @@ from .registry import ModuleRegistry
 
 # Built-in module exports
 from .activity_summary import ActivitySummaryModule
+from .application_execution import ApplicationExecutionModule
 from .autofill import AutofillModule
 from .autofill_form_data import AutofillFormDataModule
 from .bookmarks import BookmarksModule
@@ -47,6 +48,7 @@ __all__ = [
     "ModuleRegistry",
     # Built-in modules
     "ActivitySummaryModule",
+    "ApplicationExecutionModule",
     "AutofillModule",
     "AutofillFormDataModule",
     "BookmarksModule",
