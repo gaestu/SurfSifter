@@ -147,6 +147,10 @@ from ._blockfile_ingestion import (
     find_blockfile_directories,
     ingest_blockfile_directory,
 )
+from ._appcache_ingestion import (
+    find_appcache_directories,
+    ingest_appcache_directory,
+)
 
 # Blockfile cache support
 from .blockfile import (
@@ -1261,6 +1265,61 @@ class CacheSimpleExtractor(BaseExtractor):
                     LOGGER.error("Failed to process blockfile cache %s: %s", cache_dir, e, exc_info=True)
                     callbacks.on_error(f"Blockfile cache error: {e}", str(cache_dir))
 
+        # Phase 0b: Detect and process Application Cache directories
+        # AppCache has a SQLite Index + blockfile Cache/ with numeric keys
+        appcache_dirs = self._find_appcache_directories(files, output_dir)
+
+        if appcache_dirs:
+            callbacks.on_step(f"Processing {len(appcache_dirs)} Application Cache directories")
+            for appcache_info in appcache_dirs:
+                cache_dir = appcache_info["path"]
+                browser = appcache_info.get("browser", "chrome")
+                profile = appcache_info.get("profile", "Default")
+                index_path = appcache_info["index_path"]
+
+                appcache_file_entries = [
+                    fe for fe in files
+                    if fe.get("extracted_path", "") in appcache_info["files"]
+                ]
+
+                try:
+                    appcache_result = self._ingest_appcache_directory(
+                        evidence_conn=evidence_conn,
+                        evidence_id=evidence_id,
+                        run_id=run_id,
+                        cache_dir=cache_dir,
+                        index_path=index_path,
+                        browser=browser,
+                        profile=profile,
+                        extraction_dir=output_dir,
+                        callbacks=callbacks,
+                        warning_collector=warning_collector,
+                        manifest_data=manifest_data,
+                        file_entries=appcache_file_entries,
+                    )
+                    stats["urls"] += appcache_result["urls"]
+                    stats["images"] += appcache_result["images"]
+                    stats["records"] += appcache_result["records"]
+                    stats["blockfile_entries"] += appcache_result.get("entries", 0)
+                    stats["inventory_entries"] += appcache_result.get("inventory_entries", 0)
+
+                    callbacks.on_log(
+                        f"Application Cache {browser}/{profile}: "
+                        f"{appcache_result.get('groups', 0)} groups, "
+                        f"{appcache_result['urls']} URLs, "
+                        f"{appcache_result['images']} images"
+                    )
+
+                    for f in appcache_info["files"]:
+                        blockfile_processed_files.add(f)
+
+                except Exception as e:
+                    LOGGER.error(
+                        "Failed to process Application Cache %s: %s",
+                        cache_dir, e, exc_info=True,
+                    )
+                    callbacks.on_error(f"Application Cache error: {e}", str(cache_dir))
+
         # Phase 1: Parse index files
         callbacks.on_progress(0, len(files), "Parsing index files")
         index_lookup = self._build_index_lookup(files, output_dir, callbacks)
@@ -1466,6 +1525,51 @@ class CacheSimpleExtractor(BaseExtractor):
             evidence_id=evidence_id,
             run_id=run_id,
             cache_dir=cache_dir,
+            browser=browser,
+            profile=profile,
+            extraction_dir=extraction_dir,
+            callbacks=callbacks,
+            extractor_version=self.metadata.version,
+            warning_collector=warning_collector,
+            manifest_data=manifest_data,
+            file_entries=file_entries,
+        )
+
+    # -------------------------------------------------------------------------
+    # Application Cache Support
+    # -------------------------------------------------------------------------
+
+    def _find_appcache_directories(
+        self,
+        files: List[Dict[str, Any]],
+        output_dir: Path,
+    ) -> List[Dict[str, Any]]:
+        """Find directories containing Application Cache (Index + Cache/)."""
+        return find_appcache_directories(files, output_dir)
+
+    def _ingest_appcache_directory(
+        self,
+        evidence_conn,
+        evidence_id: int,
+        run_id: str,
+        cache_dir: Path,
+        index_path: Path,
+        browser: str,
+        profile: str,
+        extraction_dir: Path,
+        callbacks: ExtractorCallbacks,
+        *,
+        warning_collector: Optional[ExtractionWarningCollector] = None,
+        manifest_data: Optional[Dict[str, Any]] = None,
+        file_entries: Optional[List[Dict[str, Any]]] = None,
+    ) -> Dict[str, int]:
+        """Parse and ingest an Application Cache directory."""
+        return ingest_appcache_directory(
+            evidence_conn=evidence_conn,
+            evidence_id=evidence_id,
+            run_id=run_id,
+            cache_dir=cache_dir,
+            index_path=index_path,
             browser=browser,
             profile=profile,
             extraction_dir=extraction_dir,

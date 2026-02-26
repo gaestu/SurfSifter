@@ -73,11 +73,17 @@ def discover_storage_multi_partition(
 
         # Query file_list for directories matching storage patterns
         # We look for files INSIDE the storage directories (e.g., MANIFEST, .ldb files)
+        # For local_storage, also look for old-format *.localstorage SQLite files
+        # (pre-LevelDB CefSharp/CEF), which are parsed by _parse_old_localstorage_files()
+        filename_pats = ["MANIFEST-*", "*.ldb", "*.log", "CURRENT", "LOCK"]
+        if storage_type == "local_storage":
+            filename_pats.append("*.localstorage")
+
         result, embedded_roots = discover_artifacts_with_embedded_roots(
             evidence_conn,
             evidence_id,
             artifact=storage_type,
-            filename_patterns=["MANIFEST-*", "*.ldb", "*.log", "CURRENT", "LOCK"],
+            filename_patterns=filename_pats,
             path_patterns=combined_patterns if combined_patterns else None,
         )
 
