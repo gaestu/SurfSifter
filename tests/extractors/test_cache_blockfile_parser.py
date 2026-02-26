@@ -42,6 +42,7 @@ from extractors.browser.chromium.cache.blockfile import (
     load_cache_files,
     extract_url_from_cache_key,
     is_cache_url,
+    scan_data1_orphan_entries,
     MAX_INTERNAL_KEY_LENGTH,
 )
 
@@ -384,6 +385,21 @@ class TestParseIndexHeaderTableLen:
         assert header is not None
         assert header.table_len == 65536
 
+    def test_table_len_too_large_capped(self):
+        """table_len larger than file can hold should be capped to file capacity."""
+        # table_len=1000000 — exceeds file's 65536 actual buckets
+        data = self._make_index_data(table_len=1000000, table_size=65536)
+        header = parse_index_header(data)
+        assert header is not None
+        assert header.table_len == 65536
+
+    def test_table_len_moderately_large_capped(self):
+        """table_len=100000 with 65536-bucket file should be capped."""
+        data = self._make_index_data(table_len=100000, table_size=65536)
+        header = parse_index_header(data)
+        assert header is not None
+        assert header.table_len == 65536
+
 
 class TestCacheAddrParsing:
     """Test CacheAddr 32-bit address parsing."""
@@ -544,29 +560,33 @@ class TestIndexHeaderParsing:
 
     def test_parse_valid_index_header(self):
         """Parse a valid index file header."""
-        data = bytearray(368)  # Minimal header size
+        # Build header (256 bytes) + hash table large enough for table_len=65536
+        header = bytearray(256)
 
         # magic: uint32 at offset 0
-        struct.pack_into('<I', data, 0, BLOCKFILE_INDEX_MAGIC)
+        struct.pack_into('<I', header, 0, BLOCKFILE_INDEX_MAGIC)
         # version: uint32 at offset 4
-        struct.pack_into('<I', data, 4, 0x20001)  # version 2.1
+        struct.pack_into('<I', header, 4, 0x20001)  # version 2.1
         # num_entries: int32 at offset 8
-        struct.pack_into('<i', data, 8, 1000)
+        struct.pack_into('<i', header, 8, 1000)
         # num_bytes: int32 at offset 12
-        struct.pack_into('<i', data, 12, 50000)
+        struct.pack_into('<i', header, 12, 50000)
         # last_file: int32 at offset 16
-        struct.pack_into('<i', data, 16, 3)
+        struct.pack_into('<i', header, 16, 3)
         # this_id: int32 at offset 20
-        struct.pack_into('<i', data, 20, 1)
+        struct.pack_into('<i', header, 20, 1)
         # table_len: int32 at offset 28
-        struct.pack_into('<i', data, 28, 0x10000)
+        struct.pack_into('<i', header, 28, 0x10000)
 
-        header = parse_index_header(bytes(data))
-        assert header is not None
-        assert header.magic == BLOCKFILE_INDEX_MAGIC
-        assert header.version == 0x20001
-        assert header.num_entries == 1000
-        assert header.table_len == 0x10000
+        # Append hash table so file can hold 65536 buckets
+        data = bytes(header) + b'\x00' * (0x10000 * 4)
+
+        result = parse_index_header(data)
+        assert result is not None
+        assert result.magic == BLOCKFILE_INDEX_MAGIC
+        assert result.version == 0x20001
+        assert result.num_entries == 1000
+        assert result.table_len == 0x10000
 
     def test_parse_index_header_invalid_magic(self):
         """Invalid magic should return None."""
@@ -1522,3 +1542,182 @@ class TestOrphanFileCarving:
         assert count == 0
 
         db_manager.close_all()
+
+
+class TestScanData1OrphanEntries:
+    """Test scan_data1_orphan_entries block scanning for orphaned cache entries."""
+
+    def _make_data1_with_entries(self, cache_dir: Path, entries: list):
+        """
+        Create a blockfile cache with valid data_1 containing EntryStore
+        entries at specified blocks, but an empty index hash table.
+
+        Each entry in *entries* is a dict: {block, url, data_sizes, data_addrs}.
+        """
+        # Index: valid magic and header but empty hash table
+        header = struct.pack(
+            '<II ii ii Ii ii Q',
+            BLOCKFILE_INDEX_MAGIC,  # magic
+            0x00020001,             # version 2.1
+            0,                      # num_entries
+            0,                      # num_bytes
+            0,                      # last_file
+            1,                      # this_id
+            0,                      # stats_addr
+            0x10000,                # table_len (65536)
+            0,                      # crash
+            0,                      # experiment
+            0,                      # create_time
+        )
+        header += b'\x00' * (256 - len(header))
+        (cache_dir / 'index').write_bytes(header + b'\x00' * (65536 * 4))
+
+        # data_0: rankings blocks (8192 header + 36*N blocks)
+        bh0 = struct.pack('<II hh iii', 0xC104CAC3, 0x20001, 0, 0, 36, 0, 0)
+        bh0 += b'\x00' * (8192 - len(bh0))
+        (cache_dir / 'data_0').write_bytes(bh0 + b'\x00' * (36 * 1024))
+
+        # data_1: entry store blocks (8192 header + 256-byte blocks)
+        bh1 = struct.pack('<II hh iii', 0xC104CAC3, 0x20001, 1, 0, 256, 0, 1024)
+        bh1 += b'\x00' * (8192 - len(bh1))
+        blocks = bytearray(256 * 1024)  # 1024 blocks
+
+        for entry_spec in entries:
+            block_idx = entry_spec['block']
+            url = entry_spec['url']
+            dsizes = entry_spec.get('data_sizes', [0, 0, 0, 0])
+            daddrs = entry_spec.get('data_addrs', [0, 0, 0, 0])
+
+            url_bytes = url.encode('utf-8')
+            url_hash = sum(url_bytes) & 0xFFFFFFFF  # simple hash
+            key_len = len(url_bytes)
+
+            # Build 256-byte EntryStore
+            es = bytearray(256)
+            struct.pack_into('<I', es, 0, url_hash)         # hash
+            struct.pack_into('<I', es, 4, 0)                # next
+            struct.pack_into('<I', es, 8, 0)                # rankings_node
+            struct.pack_into('<i', es, 12, 1)               # reuse_count
+            struct.pack_into('<i', es, 16, 0)               # refetch_count
+            struct.pack_into('<i', es, 20, 0)               # state (ENTRY_NORMAL)
+            struct.pack_into('<Q', es, 24, 13393778057014640)  # creation_time
+            struct.pack_into('<i', es, 32, key_len)         # key_len
+            struct.pack_into('<I', es, 36, 0)               # long_key
+            for j in range(4):
+                struct.pack_into('<i', es, 40 + j * 4, dsizes[j])
+                struct.pack_into('<I', es, 56 + j * 4, daddrs[j])
+            struct.pack_into('<I', es, 72, 0)               # flags
+            # pad[4] at 76-91 = zeros
+            struct.pack_into('<I', es, 92, 0)               # self_hash
+            # key at offset 96
+            es[96:96 + min(key_len, 160)] = url_bytes[:160]
+
+            offset = block_idx * 256
+            blocks[offset:offset + 256] = es
+
+        (cache_dir / 'data_1').write_bytes(bytes(bh1) + bytes(blocks))
+
+        # data_2 and data_3: empty blocks
+        for i in (2, 3):
+            bh = struct.pack('<II hh iii', 0xC104CAC3, 0x20001, i, 0,
+                             BLOCK_SIZES.get(i + 1, 4096), 0, 0)
+            bh += b'\x00' * (8192 - len(bh))
+            (cache_dir / f'data_{i}').write_bytes(bh)
+
+    def test_scan_recovers_entries(self, tmp_path):
+        """Block scan should recover valid URL entries from data_1."""
+        cache_dir = tmp_path / "cache"
+        cache_dir.mkdir()
+
+        self._make_data1_with_entries(cache_dir, [
+            {'block': 2, 'url': 'https://example.com/page.html'},
+            {'block': 5, 'url': 'https://example.com/image.jpg',
+             'data_sizes': [512, 50000, 0, 0],
+             'data_addrs': [0xB0020010, 0x80000001, 0, 0]},
+            {'block': 10, 'url': 'https://cdn.example.com/style.css'},
+        ])
+
+        entries = scan_data1_orphan_entries(cache_dir)
+        assert len(entries) == 3
+        urls = {e.url for e in entries}
+        assert 'https://example.com/page.html' in urls
+        assert 'https://example.com/image.jpg' in urls
+        assert 'https://cdn.example.com/style.css' in urls
+
+    def test_scan_skips_non_url_blocks(self, tmp_path):
+        """Block scan should skip blocks that don't contain URL keys."""
+        cache_dir = tmp_path / "cache"
+        cache_dir.mkdir()
+
+        self._make_data1_with_entries(cache_dir, [
+            {'block': 2, 'url': 'https://example.com/valid.html'},
+            # SHA-256 hash key — should be filtered by is_cache_url()
+            {'block': 5, 'url': 'AB2A39155883DE91B9EFDA1DBD40620716B544996393D10FCD674C426DA1A250'},
+        ])
+
+        entries = scan_data1_orphan_entries(cache_dir)
+        assert len(entries) == 1
+        assert entries[0].url == 'https://example.com/valid.html'
+
+    def test_scan_empty_data1(self, tmp_path):
+        """Block scan on all-zero data_1 should return no entries."""
+        cache_dir = tmp_path / "cache"
+        cache_dir.mkdir()
+
+        self._make_data1_with_entries(cache_dir, [])
+
+        entries = scan_data1_orphan_entries(cache_dir)
+        assert len(entries) == 0
+
+    def test_scan_preserves_data_addrs(self, tmp_path):
+        """Block scan should preserve data stream addresses for body retrieval."""
+        cache_dir = tmp_path / "cache"
+        cache_dir.mkdir()
+
+        # External file body address: 0x80000005 = EXTERNAL file 5
+        ext_addr = 0x80000005
+        self._make_data1_with_entries(cache_dir, [
+            {'block': 3, 'url': 'https://example.com/image.png',
+             'data_sizes': [1024, 80000, 0, 0],
+             'data_addrs': [0xB0020010, ext_addr, 0, 0]},
+        ])
+
+        entries = scan_data1_orphan_entries(cache_dir)
+        assert len(entries) == 1
+        entry = entries[0]
+        assert entry.data_sizes == [1024, 80000, 0, 0]
+        assert entry.data_addrs[1].is_initialized
+        assert entry.data_addrs[1].is_external
+        assert entry.data_addrs[1].file_number == 5
+        assert entry.data_addrs[1].data_file_name() == 'f_000005'
+
+    def test_scan_no_data1_file(self, tmp_path):
+        """Block scan should return empty list when data_1 doesn't exist."""
+        cache_dir = tmp_path / "cache"
+        cache_dir.mkdir()
+        # Just create index, no data_1
+        header = struct.pack(
+            '<II ii ii Ii ii Q',
+            BLOCKFILE_INDEX_MAGIC, 0x00020001, 0, 0, 0, 1, 0, 0x10000, 0, 0, 0,
+        )
+        header += b'\x00' * (256 - len(header))
+        (cache_dir / 'index').write_bytes(header + b'\x00' * (65536 * 4))
+
+        entries = scan_data1_orphan_entries(cache_dir)
+        assert len(entries) == 0
+
+    def test_scan_entries_have_source_file(self, tmp_path):
+        """Recovered entries should have source_file='data_1'."""
+        cache_dir = tmp_path / "cache"
+        cache_dir.mkdir()
+
+        self._make_data1_with_entries(cache_dir, [
+            {'block': 7, 'url': 'https://example.com/test.html'},
+        ])
+
+        entries = scan_data1_orphan_entries(cache_dir)
+        assert len(entries) == 1
+        assert entries[0].source_file == 'data_1'
+        # block_offset should be BLOCK_HEADER_SIZE + block_idx * 256
+        expected_offset = BLOCK_HEADER_SIZE + 7 * ENTRY_STORE_SIZE
+        assert entries[0].block_offset == expected_offset

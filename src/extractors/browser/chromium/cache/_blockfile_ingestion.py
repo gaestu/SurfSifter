@@ -25,6 +25,7 @@ from .blockfile import (
     is_cache_url,
     parse_blockfile_cache,
     read_stream_data,
+    scan_data1_orphan_entries,
 )
 from ._parser import parse_http_headers
 from ._decompression import decompress_body
@@ -208,33 +209,46 @@ def ingest_blockfile_directory(
         stats["entries"] = len(entries)
 
         if not entries:
-            # Index parsed but no valid entries.  The metadata (EntryStore)
-            # may have been zeroed-out while external data files (f_*)
-            # still contain cached content.  Attempt orphan image carving.
-            orphan_images = _carve_orphan_data_files(
-                evidence_conn=evidence_conn,
-                evidence_id=evidence_id,
-                cache_dir=cache_dir,
-                extraction_dir=extraction_dir,
-                run_id=run_id,
-                extractor_version=extractor_version,
-                warning_collector=warning_collector,
+            # Index parsed but yielded no valid entries.  Try scanning
+            # data_1 blocks directly — orphaned EntryStore structures may
+            # still be intact even when the index hash table is
+            # cleared/corrupted.
+            entries = scan_data1_orphan_entries(
+                cache_dir, warning_collector=warning_collector,
             )
-            stats["images"] += orphan_images
+            stats["entries"] = len(entries)
 
-            status = "no_entries" if orphan_images == 0 else "orphan_carved"
-            notes = (
-                "Blockfile cache parsed but no entries found"
-                + (f"; carved {orphan_images} images from orphan files"
-                   if orphan_images else "")
-            )
-            for inv_id in inventory_ids:
-                update_inventory_ingestion_status(
-                    evidence_conn, inv_id,
-                    status=status,
-                    notes=notes,
+            if entries:
+                callbacks.on_log(
+                    f"Recovered {len(entries)} orphaned entries from data_1 block scan"
                 )
-            return stats
+            else:
+                # No structured entries at all — fall back to blind image
+                # carving on external f_* files as a last resort.
+                orphan_images = _carve_orphan_data_files(
+                    evidence_conn=evidence_conn,
+                    evidence_id=evidence_id,
+                    cache_dir=cache_dir,
+                    extraction_dir=extraction_dir,
+                    run_id=run_id,
+                    extractor_version=extractor_version,
+                    warning_collector=warning_collector,
+                )
+                stats["images"] += orphan_images
+
+                status = "no_entries" if orphan_images == 0 else "orphan_carved"
+                notes = (
+                    "Blockfile cache parsed but no entries found"
+                    + (f"; carved {orphan_images} images from orphan files"
+                       if orphan_images else "")
+                )
+                for inv_id in inventory_ids:
+                    update_inventory_ingestion_status(
+                        evidence_conn, inv_id,
+                        status=status,
+                        notes=notes,
+                    )
+                return stats
 
         callbacks.on_log(f"Parsed {len(entries)} entries from blockfile cache")
 

@@ -563,9 +563,11 @@ def parse_index_header(data: bytes) -> Optional[IndexHeader]:
         # Chromium itself falls back to kIndexTablesize (65536) when
         # table_len is 0; we extend this to any value < 256 (no legitimate
         # Chromium cache has fewer than 256 buckets).
+        # Corrupted headers may also report absurdly *large* values (e.g.
+        # 0xA1010000); cap at the maximum the file can physically hold.
+        max_from_file = (len(data) - INDEX_HEADER_SIZE) // 4 if len(data) > INDEX_HEADER_SIZE else 0
         effective_table_len = table_len
-        if effective_table_len <= 0 or effective_table_len < 256:
-            max_from_file = (len(data) - INDEX_HEADER_SIZE) // 4 if len(data) > INDEX_HEADER_SIZE else 0
+        if effective_table_len <= 0 or effective_table_len < 256 or effective_table_len > max_from_file:
             if max_from_file >= DEFAULT_TABLE_SIZE:
                 effective_table_len = DEFAULT_TABLE_SIZE
             elif max_from_file > 0:
@@ -1085,6 +1087,146 @@ def iter_index_entries_lazy(
             addr = entry_store.next
 
     LOGGER.debug("Parsed %d cache entries (%d with long keys)", entries_found, long_keys_found)
+
+
+def scan_data1_orphan_entries(
+    cache_dir: Path,
+    *,
+    warning_collector: Optional['ExtractionWarningCollector'] = None,
+) -> List[BlockfileCacheEntry]:
+    """
+    Scan data_1 block file for orphaned EntryStore structures.
+
+    When the index hash table is empty or corrupted but data_1 still contains
+    valid 256-byte EntryStore blocks, this function recovers them by scanning
+    every block in data_1 and validating the structure heuristically.
+
+    This is typical of old CefSharp / embedded Chromium caches where the index
+    metadata was cleared (e.g. on exit) but the block/external data files were
+    left intact.
+
+    For each recovered entry the function resolves:
+    - The cache key (URL) from inline storage or long-key lookup
+    - Data stream addresses so callers can read HTTP headers and body data
+    - RankingsNode timestamps (last_used) when available
+
+    Args:
+        cache_dir: Path to blockfile cache directory.
+        warning_collector: Optional collector for extraction warnings.
+
+    Returns:
+        List of recovered :class:`BlockfileCacheEntry` objects.
+    """
+    data1_path = cache_dir / "data_1"
+    if not data1_path.exists():
+        return []
+
+    try:
+        data1 = data1_path.read_bytes()
+    except Exception as e:
+        LOGGER.warning("Failed to read data_1 for block scan: %s", e)
+        return []
+
+    # Verify block file header
+    bf_header = parse_block_file_header(data1)
+    if not bf_header:
+        LOGGER.debug("data_1 has invalid block file header, skipping scan")
+        return []
+
+    if bf_header.entry_size != ENTRY_STORE_SIZE:
+        LOGGER.debug(
+            "data_1 entry_size=%d (expected %d), skipping scan",
+            bf_header.entry_size, ENTRY_STORE_SIZE,
+        )
+        return []
+
+    total_blocks = (len(data1) - BLOCK_HEADER_SIZE) // ENTRY_STORE_SIZE
+    if total_blocks <= 0:
+        return []
+
+    LOGGER.info(
+        "Scanning %d blocks in data_1 for orphaned entries in %s",
+        total_blocks, cache_dir,
+    )
+
+    file_cache: Dict[str, bytes] = {}
+    entries: List[BlockfileCacheEntry] = []
+
+    for block_idx in range(total_blocks):
+        block_offset = BLOCK_HEADER_SIZE + block_idx * ENTRY_STORE_SIZE
+        block_data = data1[block_offset:block_offset + ENTRY_STORE_SIZE]
+
+        # Skip empty blocks quickly
+        if all(b == 0 for b in block_data):
+            continue
+
+        entry_store = parse_entry_store(block_data)
+        if entry_store is None:
+            continue
+
+        # Heuristic validation for orphaned entries:
+        # - key_len must be positive and reasonable (<= inline key size for
+        #   most entries, or < 10 KB for long-key entries)
+        # - state is often 0 (ENTRY_NORMAL) for orphaned entries whose state
+        #   field wasn't fully written, but we also accept known states.
+        #   However, very large or negative states indicate garbage data.
+        if entry_store.key_len <= 0 or entry_store.key_len > 10 * 1024 * 1024:
+            continue
+
+        # Validate data_size values are non-negative and reasonable
+        if any(s < 0 or s > 500_000_000 for s in entry_store.data_size):
+            continue
+
+        # Resolve key (URL)
+        if entry_store.key_len <= MAX_INTERNAL_KEY_LENGTH:
+            url = entry_store.get_key()
+        else:
+            url = read_long_key(cache_dir, entry_store, _file_cache=file_cache)
+
+        if not url:
+            continue
+
+        # Require a URL-like key to avoid false positives from garbage blocks
+        extracted_url = extract_url_from_cache_key(url)
+        if not is_cache_url(extracted_url):
+            continue
+
+        # Get creation time
+        creation_time = entry_store.get_creation_datetime()
+
+        # Try to get last_used from RankingsNode
+        last_used_time = None
+        if entry_store.rankings_node.is_initialized:
+            rankings_data = read_block_data(
+                cache_dir,
+                entry_store.rankings_node,
+                _file_cache=file_cache,
+            )
+            if rankings_data:
+                rankings = parse_rankings_node(rankings_data)
+                if rankings:
+                    last_used_time = rankings.get_last_used_datetime()
+
+        cache_entry = BlockfileCacheEntry(
+            url=extracted_url,
+            creation_time=creation_time,
+            last_used_time=last_used_time,
+            state=entry_store.state,
+            data_sizes=entry_store.data_size,
+            data_addrs=entry_store.data_addr,
+            entry_hash=entry_store.hash,
+            source_file="data_1",
+            block_offset=block_offset,
+            raw_cache_key=url if url != extracted_url else None,
+        )
+        entries.append(cache_entry)
+
+    LOGGER.info(
+        "Block scan recovered %d orphaned entries from %d blocks in data_1",
+        len(entries), total_blocks,
+    )
+
+    return entries
 
 
 def detect_blockfile_cache(cache_dir: Path) -> bool:
