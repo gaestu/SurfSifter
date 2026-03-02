@@ -1130,6 +1130,7 @@ class MainWindow(QMainWindow):
         evidence_id: int,
         evidence_label: str,
         ewf_segments: List[Path],
+        partition_info: Optional[list] = None,
     ) -> bool:
         """
         Auto-generate file list from E01 using SleuthKit fls.
@@ -1142,6 +1143,10 @@ class MainWindow(QMainWindow):
             evidence_id: Database ID of the evidence
             evidence_label: Evidence label for database connection
             ewf_segments: List of EWF segment paths
+            partition_info: Optional pre-detected partition info from
+                list_ewf_partitions(). Passed to the generator to avoid
+                re-detecting partitions via mmls (which can fail in some
+                threading contexts).
 
         Returns:
             True if generation succeeded, False otherwise
@@ -1187,12 +1192,13 @@ class MainWindow(QMainWindow):
         # to intermittent "database is locked" or corruption errors when
         # QApplication.processEvents() triggers other DB access on the main thread.
         class FileListGenerationThread(QThread):
-            def __init__(self, db_manager, evidence_id, evidence_label, ewf_segments, parent=None):
+            def __init__(self, db_manager, evidence_id, evidence_label, ewf_segments, partition_info=None, parent=None):
                 super().__init__(parent)
                 self.db_manager = db_manager
                 self.evidence_id = evidence_id
                 self.evidence_label = evidence_label
                 self.ewf_segments = ewf_segments
+                self.partition_info = partition_info
                 self.result = None
                 self.error = None
                 self._cancelled = False
@@ -1212,6 +1218,7 @@ class MainWindow(QMainWindow):
                         evidence_conn=evidence_conn,
                         evidence_id=self.evidence_id,
                         ewf_paths=self.ewf_segments,
+                        partition_info=self.partition_info,
                     )
 
                     if not generator.fls_available:
@@ -1236,7 +1243,8 @@ class MainWindow(QMainWindow):
                             pass
 
         gen_thread = FileListGenerationThread(
-            self.db_manager, evidence_id, evidence_label, ewf_segments, self
+            self.db_manager, evidence_id, evidence_label, ewf_segments,
+            partition_info=partition_info, parent=self
         )
         gen_thread.start()
 
@@ -1473,6 +1481,7 @@ class MainWindow(QMainWindow):
                             evidence_id=evidence_id,
                             evidence_label=evidence_label,
                             ewf_segments=ewf_segments,
+                            partition_info=partitions,
                         )
 
                     self.logger.info(
@@ -1513,6 +1522,7 @@ class MainWindow(QMainWindow):
                         )
 
                     # Auto-generate file list even on partition detection failure
+                    # No partition_info available since detection failed
                     if self.app_config.extraction.auto_generate_file_list:
                         self._auto_generate_file_list(
                             evidence_id=evidence_id,

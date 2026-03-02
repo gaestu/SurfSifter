@@ -32,9 +32,13 @@ from typing import Callable, List, Optional
 from .bodyfile_parser import BodyfileEntry, BodyfileParser
 from .sleuthkit_utils import get_sleuthkit_bin
 
-__all__ = ["SleuthKitFileListGenerator", "GenerationResult"]
+try:
+    from core.logging import get_logger
+    logger = get_logger("extractors.system.file_list.sleuthkit_generator")
+except Exception:
+    logger = logging.getLogger(__name__)
 
-logger = logging.getLogger(__name__)
+__all__ = ["SleuthKitFileListGenerator", "GenerationResult"]
 
 
 # Indexes to drop before bulk insert and recreate after
@@ -107,6 +111,7 @@ class SleuthKitFileListGenerator:
         evidence_conn: sqlite3.Connection,
         evidence_id: int,
         ewf_paths: List[Path],
+        partition_info: Optional[list] = None,
     ):
         """
         Initialize generator.
@@ -115,10 +120,16 @@ class SleuthKitFileListGenerator:
             evidence_conn: SQLite connection to evidence database
             evidence_id: Evidence ID for file_list records
             ewf_paths: List of EWF segment paths (E01, E02, etc.)
+            partition_info: Optional pre-detected partition info from
+                list_ewf_partitions(). If provided, skips mmls detection
+                and uses these partitions directly. Each dict must have
+                at least 'index', 'offset', 'block_size', 'description',
+                and 'filesystem_readable' keys.
         """
         self.evidence_conn = evidence_conn
         self.evidence_id = evidence_id
         self.ewf_paths = ewf_paths
+        self._partition_info = partition_info
         self._fls_path = get_sleuthkit_bin("fls")
         self._mmls_path = get_sleuthkit_bin("mmls")
 
@@ -285,6 +296,113 @@ class SleuthKitFileListGenerator:
         logger.info("Found %d partition(s) via mmls", len(partitions))
         return partitions
 
+    def _get_partitions_via_pyewf(self) -> Optional[List[dict]]:
+        """
+        Fallback partition detection using pyewf/pytsk3 (list_ewf_partitions).
+
+        Used when mmls fails or produces no results. This is more reliable
+        than mmls for some EWF images but requires pyewf/pytsk3 libraries
+        and may have threading issues if the image is already open elsewhere.
+
+        Returns:
+            List of partition dicts, or None if pyewf/pytsk3 unavailable.
+        """
+        try:
+            from core.evidence_fs import list_ewf_partitions
+        except ImportError:
+            logger.debug("pyewf/pytsk3 not available for fallback partition detection")
+            return None
+
+        try:
+            logger.info("Attempting partition detection via pyewf/pytsk3 fallback")
+            raw_partitions = list_ewf_partitions(self.ewf_paths)
+
+            if not raw_partitions:
+                return None
+
+            # Convert to the format expected by _process_partition
+            # list_ewf_partitions returns dicts with keys:
+            #   index, addr, offset, length, block_size, description, filesystem_readable
+            # We need: index, offset, length, block_size, description, filesystem_readable
+            partitions = []
+            for p in raw_partitions:
+                partitions.append({
+                    'index': p.get('index', 0),
+                    'offset': p.get('offset', 0),
+                    'length': p.get('length', 0),
+                    'block_size': p.get('block_size', 512),
+                    'description': p.get('description', ''),
+                    'filesystem_readable': p.get('filesystem_readable', True),
+                })
+
+            logger.info("Found %d partition(s) via pyewf/pytsk3 fallback", len(partitions))
+            return partitions
+
+        except Exception as e:
+            logger.warning("pyewf/pytsk3 fallback partition detection failed: %s", e)
+            return None
+
+    def _detect_partitions(self) -> List[dict]:
+        """
+        Detect partitions using best available method.
+
+        Priority:
+        1. Pre-detected partition info (from constructor, avoids re-detection)
+        2. mmls command (SleuthKit, avoids pyewf threading issues)
+        3. pyewf/pytsk3 fallback (when mmls fails)
+        4. Direct filesystem at offset 0 (last resort)
+
+        Returns:
+            List of partition dicts for _process_partition().
+        """
+        # 1. Use pre-detected partition info if available
+        if self._partition_info:
+            logger.info(
+                "Using pre-detected partition info (%d partitions)",
+                len(self._partition_info)
+            )
+            # Convert from list_ewf_partitions format to our internal format
+            partitions = []
+            for p in self._partition_info:
+                partitions.append({
+                    'index': p.get('index', 0),
+                    'offset': p.get('offset', 0),
+                    'length': p.get('length', 0),
+                    'block_size': p.get('block_size', 512),
+                    'description': p.get('description', ''),
+                    'filesystem_readable': p.get('filesystem_readable', True),
+                })
+            readable = [p for p in partitions if p['filesystem_readable']]
+            if readable:
+                return readable
+            logger.warning(
+                "Pre-detected partition info had 0 readable partitions, "
+                "falling through to mmls detection"
+            )
+
+        # 2. Try mmls
+        mmls_partitions = self._get_partitions_via_mmls()
+        # mmls always returns at least 1 partition (direct filesystem fallback)
+        # If it found >1, trust the result
+        if len(mmls_partitions) > 1:
+            return mmls_partitions
+
+        # mmls returned 1 partition — could be a real single partition or
+        # the "direct filesystem" fallback from a failed mmls run.
+        # Try pyewf to verify before accepting.
+
+        # 3. Try pyewf/pytsk3 fallback
+        pyewf_partitions = self._get_partitions_via_pyewf()
+        if pyewf_partitions and len(pyewf_partitions) > 1:
+            logger.info(
+                "mmls found 1 partition but pyewf found %d — using pyewf results",
+                len(pyewf_partitions)
+            )
+            return pyewf_partitions
+
+        # 4. Accept mmls result (either genuine single partition or fallback)
+        return mmls_partitions
+
     def generate(
         self,
         progress_callback: Optional[Callable[[int, int, str], None]] = None,
@@ -335,10 +453,11 @@ class SleuthKitFileListGenerator:
         error_message: Optional[str] = None
 
         try:
-            # Get partition info via mmls (avoids pyewf threading issues)
-            logger.info("Getting partition info via mmls...")
-            partitions = self._get_partitions_via_mmls()
-            logger.info("Got %d partitions from mmls", len(partitions))
+            # Detect partitions using best available method
+            # (pre-detected info → mmls → pyewf fallback → direct filesystem)
+            logger.info("Detecting partitions...")
+            partitions = self._detect_partitions()
+            logger.info("Got %d partitions for processing", len(partitions))
             readable_partitions = [p for p in partitions if p['filesystem_readable']]
 
             if not readable_partitions:
