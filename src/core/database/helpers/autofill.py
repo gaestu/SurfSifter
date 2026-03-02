@@ -318,6 +318,7 @@ def get_credentials(
         evidence_id,
         filters=filters or None,
         limit=limit,
+        include_excluded=True,  # password_value_encrypted BLOBs are small (31-42 bytes)
     )
 
 
