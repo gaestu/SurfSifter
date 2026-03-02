@@ -60,14 +60,6 @@
     line-height: 1.3;
 }
 
-.appendix-image-filename {
-    font-weight: 600;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    margin-bottom: 3px;
-}
-
 .appendix-image-hash {
     color: #666;
     font-family: monospace;
@@ -87,7 +79,19 @@
 
 .appendix-image-timestamp {
     color: #666;
+}
+
+.appendix-image-found-by {
+    color: #666;
     margin-top: 3px;
+}
+
+.appendix-found-by-label {
+    color: #888;
+}
+
+.appendix-found-by-value {
+    color: #333;
 }
 
 .appendix-image-exif {
@@ -146,22 +150,30 @@
         {% for image in images %}
         <div class="appendix-image-card">
             <div class="appendix-image-thumbnail">
-                {% if image.thumbnail_b64 %}
-                <img src="{{ image.thumbnail_b64 }}" alt="{{ image.filename }}" />
+                {% if image.thumbnail_src %}
+                <img src="{{ image.thumbnail_src }}" alt="{{ image.filename }}" />
                 {% else %}
                 <div class="appendix-no-thumbnail">🖼️<br/>{{ t.no_preview | default('No Preview') }}</div>
                 {% endif %}
             </div>
             <div class="appendix-image-info">
-                <div class="appendix-image-filename" title="{{ image.filename }}">{{ image.filename }}</div>
                 {% if image.md5 %}
                 <div class="appendix-image-hash" title="{{ t.md5 | default('MD5') }}: {{ image.md5 }}">
                     <span class="appendix-hash-label">{{ t.md5 | default('MD5') }}:</span> 
-                    <span class="appendix-hash-value">{{ image.md5[:16] }}...</span>
+                    <span class="appendix-hash-value">{{ image.md5 }}</span>
                 </div>
                 {% endif %}
                 {% if image.timestamp %}
-                <div class="appendix-image-timestamp">{{ image.timestamp }}</div>
+                <div class="appendix-image-timestamp">
+                    <span class="appendix-hash-label">{{ image.timestamp_label | default(t.source_date | default('Source Date')) }}:</span>
+                    {{ image.timestamp }}
+                </div>
+                {% endif %}
+                {% if image.found_by %}
+                <div class="appendix-image-found-by">
+                    <span class="appendix-found-by-label">{{ t.found_by | default('Found by') }}:</span>
+                    <span class="appendix-found-by-value">{{ image.found_by | join(', ') }}</span>
+                </div>
                 {% endif %}
                 {% if image.exif_display %}
                 <div class="appendix-image-exif">

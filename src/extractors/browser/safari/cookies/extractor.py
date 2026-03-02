@@ -23,10 +23,10 @@ from ....base import BaseExtractor, ExtractorMetadata
 from ....callbacks import ExtractorCallbacks
 from ....widgets import MultiPartitionWidget
 from ...._shared.file_list_discovery import (
-    discover_from_file_list,
     open_partition_for_extraction,
     get_ewf_paths_from_evidence_fs,
 )
+from .._discovery import discover_safari_files, discover_safari_files_fallback
 from .._patterns import get_patterns, extract_user_from_path
 from .._parsers import parse_cookies, get_cookie_stats
 
@@ -161,43 +161,69 @@ class SafariCookiesExtractor(BaseExtractor):
             "notes": ["Safari support is EXPERIMENTAL"],
         }
 
-        patterns = get_patterns("cookies")
-        discovered_files = []
-
+        # Multi-partition discovery with fallback to filesystem iteration
         callbacks.on_step("Discovering Safari cookies files")
+        evidence_conn = config.get("evidence_conn")
 
-        for pattern in patterns:
-            try:
-                for path_str in evidence_fs.iter_paths(pattern):
-                    discovered_files.append(path_str)
-            except Exception as e:
-                LOGGER.debug("Pattern %s failed: %s", pattern, e)
+        files_by_partition = discover_safari_files(
+            evidence_conn, evidence_id,
+            artifact_names=["cookies"],
+            callbacks=callbacks,
+        )
+        if not files_by_partition:
+            files_by_partition = discover_safari_files_fallback(
+                evidence_fs, artifact_names=["cookies"], callbacks=callbacks,
+            )
+
+        manifest_data["multi_partition"] = len(files_by_partition) > 1
+        manifest_data["partitions_scanned"] = sorted(files_by_partition.keys())
+        total_discovered = sum(len(v) for v in files_by_partition.values())
 
         if collector:
-            collector.report_discovered(evidence_id, self.metadata.name, files=len(discovered_files))
+            collector.report_discovered(evidence_id, self.metadata.name, files=total_discovered)
 
-        if not discovered_files:
+        if not files_by_partition:
             LOGGER.info("No Safari cookies files found")
             manifest_data["notes"].append("No Safari cookies files found")
         else:
-            callbacks.on_step(f"Extracting {len(discovered_files)} Safari cookies files")
+            callbacks.on_step(f"Extracting {total_discovered} Safari cookies files")
 
-            for path_str in discovered_files:
-                if callbacks.is_cancelled():
-                    manifest_data["status"] = "cancelled"
-                    manifest_data["notes"].append("Extraction cancelled by user")
-                    break
+            ewf_paths = get_ewf_paths_from_evidence_fs(evidence_fs)
+            current_partition = getattr(evidence_fs, "partition_index", 0)
+            multi = len(files_by_partition) > 1
 
-                try:
-                    file_info = self._extract_file(evidence_fs, path_str, files_dir, run_id)
-                    if file_info:
-                        manifest_data["files"].append(file_info)
-                        callbacks.on_log(f"Copied: {path_str}", "info")
-                except Exception as e:
-                    LOGGER.warning("Failed to extract %s: %s", path_str, e)
-                    manifest_data["notes"].append(f"Failed: {path_str}: {e}")
-                    if collector:
-                        collector.report_failed(evidence_id, self.metadata.name, files=1)
+            for partition_idx in sorted(files_by_partition.keys()):
+                partition_files = files_by_partition[partition_idx]
+
+                if ewf_paths is not None and partition_idx != current_partition:
+                    ctx = open_partition_for_extraction(ewf_paths, partition_idx)
+                else:
+                    ctx = open_partition_for_extraction(evidence_fs, None)
+
+                with ctx as fs_to_use:
+                    for file_data in partition_files:
+                        if callbacks.is_cancelled():
+                            manifest_data["status"] = "cancelled"
+                            manifest_data["notes"].append("Extraction cancelled by user")
+                            break
+
+                        try:
+                            path_str = file_data["logical_path"]
+                            file_info = self._extract_file(
+                                fs_to_use, path_str, files_dir, run_id,
+                                partition_index=partition_idx if multi else None,
+                            )
+                            if file_info:
+                                file_info["partition_index"] = partition_idx
+                                if file_data.get("inode"):
+                                    file_info["inode"] = file_data["inode"]
+                                manifest_data["files"].append(file_info)
+                                callbacks.on_log(f"Copied: {path_str}", "info")
+                        except Exception as e:
+                            LOGGER.warning("Failed to extract %s: %s", file_data.get("logical_path", "?"), e)
+                            manifest_data["notes"].append(f"Failed: {file_data.get('logical_path', '?')}: {e}")
+                            if collector:
+                                collector.report_failed(evidence_id, self.metadata.name, files=1)
 
         # Finish statistics tracking (exactly once)
         if collector:
@@ -419,7 +445,8 @@ class SafariCookiesExtractor(BaseExtractor):
         evidence_fs,
         path_str: str,
         output_dir: Path,
-        run_id: str
+        run_id: str,
+        partition_index: Optional[int] = None,
     ) -> Optional[Dict[str, Any]]:
         """Extract a single file from evidence."""
         try:
@@ -427,7 +454,10 @@ class SafariCookiesExtractor(BaseExtractor):
 
             original_name = Path(path_str).name
             user = extract_user_from_path(path_str) or "unknown"
-            safe_name = f"safari_{user}_{original_name}"
+            if partition_index is not None:
+                safe_name = f"safari_{user}_p{partition_index}_{original_name}"
+            else:
+                safe_name = f"safari_{user}_{original_name}"
 
             dest_path = output_dir / safe_name
             dest_path.write_bytes(content)

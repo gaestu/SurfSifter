@@ -76,6 +76,7 @@ class ImagePreviewDialog(QDialog):
         parent: Optional[QWidget] = None,
         *,
         discoveries: Optional[List[Dict[str, Any]]] = None,
+        hash_matches: Optional[List[Dict[str, Any]]] = None,
     ) -> None:
         """
         Initialize image preview dialog.
@@ -86,12 +87,14 @@ class ImagePreviewDialog(QDialog):
             full_image_path: Path to full-size image
             parent: Parent widget
             discoveries: Optional list of discovery records (from image_discoveries table)
+            hash_matches: Optional list of hash match records (from hash_matches table)
         """
         super().__init__(parent)
         self.image_data = image_data
         self.thumbnail_path = thumbnail_path
         self.full_image_path = full_image_path
         self.discoveries = discoveries or []
+        self.hash_matches = hash_matches or []
         self._loader_thread: Optional[ImageLoaderThread] = None
         self._full_pixmap = None
 
@@ -335,15 +338,27 @@ class ImagePreviewDialog(QDialog):
         # === HASHES ===
         lines.append(f"<b>MD5:</b> <code>{self.image_data.get('md5', 'N/A')}</code>")
         sha256 = self.image_data.get('sha256', 'N/A')
-        # Break long SHA256 for display
-        if sha256 and len(sha256) > 40:
-            sha256_display = f"{sha256[:32]}<br/>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;{sha256[32:]}"
-        else:
-            sha256_display = sha256
-        lines.append(f"<b>SHA256:</b> <code>{sha256_display}</code>")
+        lines.append(f"<b>SHA256:</b> <code>{sha256 if sha256 else 'N/A'}</code>")
         phash = self.image_data.get('phash')
         lines.append(f"<b>pHash:</b> <code>{phash if phash else 'N/A'}</code>")
         lines.append("")
+
+        # === HASH MATCHES ===
+        if self.hash_matches:
+            lines.append(f"<b>Hash Matches ({len(self.hash_matches)}):</b>")
+            for match in self.hash_matches:
+                list_name = match.get("list_name") or match.get("db_name", "Unknown")
+                matched_at = match.get("matched_at_utc", "")
+                note = match.get("note", "")
+                parts = [f"🔒 {list_name}"]
+                if matched_at:
+                    parts.append(f"matched {matched_at}")
+                line = " — ".join(parts)
+                if note:
+                    line += f" <small>({note})</small>"
+                lines.append(f"&nbsp;&nbsp;{line}")
+        else:
+            lines.append("<b>Hash Matches:</b> None")
         lines.append("")
 
         # Size info

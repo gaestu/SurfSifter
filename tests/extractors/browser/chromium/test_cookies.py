@@ -26,6 +26,7 @@ from extractors.browser.chromium._parsers import (
     parse_cookies,
     get_cookie_stats,
 )
+from extractors.browser.chromium.cookies._parsers import _resolve_column_names
 from extractors.browser.chromium._patterns import (
     CHROMIUM_BROWSERS,
     CHROMIUM_ARTIFACTS,
@@ -406,3 +407,228 @@ class TestErrorHandling:
 
         # Should have queried multiple browsers
         assert mock_fs.iter_paths.call_count > 0
+
+
+# =============================================================================
+# Test Legacy Schema Support (Chromium <67 / CefSharp)
+# =============================================================================
+
+class TestResolveColumnNames:
+    """Test _resolve_column_names with various schema layouts."""
+
+    def _make_db(self, tmp_path, schema_sql):
+        """Helper to create a cookie db with a given schema."""
+        db_path = tmp_path / "Cookies"
+        conn = sqlite3.connect(db_path)
+        conn.execute(schema_sql)
+        conn.commit()
+        return conn
+
+    def test_modern_schema(self, tmp_path):
+        """Modern schema returns modern names."""
+        conn = self._make_db(tmp_path, """
+            CREATE TABLE cookies (
+                host_key TEXT, name TEXT, value TEXT, path TEXT,
+                creation_utc INTEGER, expires_utc INTEGER, last_access_utc INTEGER,
+                is_secure INTEGER, is_httponly INTEGER, samesite INTEGER,
+                is_persistent INTEGER, has_expires INTEGER, priority INTEGER,
+                encrypted_value BLOB
+            )
+        """)
+        result = _resolve_column_names(conn)
+        conn.close()
+        assert result is not None
+        assert result["is_secure"] == "is_secure"
+        assert result["is_httponly"] == "is_httponly"
+        assert result["is_persistent"] == "is_persistent"
+        assert result["samesite"] == "samesite"
+
+    def test_legacy_schema(self, tmp_path):
+        """Old CefSharp schema maps legacy names correctly."""
+        conn = self._make_db(tmp_path, """
+            CREATE TABLE cookies (
+                host_key TEXT, name TEXT, value TEXT, path TEXT,
+                creation_utc INTEGER, expires_utc INTEGER, last_access_utc INTEGER,
+                secure INTEGER, httponly INTEGER, firstpartyonly INTEGER,
+                persistent INTEGER, has_expires INTEGER, priority INTEGER,
+                encrypted_value BLOB
+            )
+        """)
+        result = _resolve_column_names(conn)
+        conn.close()
+        assert result is not None
+        assert result["is_secure"] == "secure"
+        assert result["is_httponly"] == "httponly"
+        assert result["is_persistent"] == "persistent"
+        assert result["samesite"] == "firstpartyonly"
+
+    def test_no_cookies_table(self, tmp_path):
+        """Returns empty mapping when cookies table is missing."""
+        db_path = tmp_path / "Cookies"
+        conn = sqlite3.connect(db_path)
+        # No table at all — PRAGMA table_info returns nothing
+        result = _resolve_column_names(conn)
+        conn.close()
+        # Even with no matching columns, it returns a dict (not None)
+        assert result is not None
+
+    def test_mixed_columns_prefers_modern(self, tmp_path):
+        """If both modern and legacy names exist, modern wins."""
+        conn = self._make_db(tmp_path, """
+            CREATE TABLE cookies (
+                host_key TEXT, name TEXT, value TEXT, path TEXT,
+                creation_utc INTEGER, expires_utc INTEGER, last_access_utc INTEGER,
+                is_secure INTEGER, secure INTEGER,
+                is_httponly INTEGER, httponly INTEGER,
+                samesite INTEGER, firstpartyonly INTEGER,
+                is_persistent INTEGER, persistent INTEGER,
+                has_expires INTEGER, priority INTEGER,
+                encrypted_value BLOB
+            )
+        """)
+        result = _resolve_column_names(conn)
+        conn.close()
+        assert result["is_secure"] == "is_secure"
+        assert result["is_httponly"] == "is_httponly"
+        assert result["is_persistent"] == "is_persistent"
+        assert result["samesite"] == "samesite"
+
+
+class TestLegacySchemaParsing:
+    """Test parse_cookies against old Chromium / CefSharp cookie schemas."""
+
+    @pytest.fixture
+    def legacy_cookies_db(self, tmp_path):
+        """Create a test Cookies database with legacy (Chromium <67) schema.
+
+        This mimics old CefSharp embedded browsers that used:
+        - secure instead of is_secure
+        - httponly instead of is_httponly
+        - persistent instead of is_persistent
+        - firstpartyonly instead of samesite
+        """
+        db_path = tmp_path / "Cookies"
+        conn = sqlite3.connect(db_path)
+        conn.execute("""
+            CREATE TABLE cookies (
+                creation_utc INTEGER NOT NULL,
+                host_key TEXT NOT NULL,
+                name TEXT NOT NULL,
+                value TEXT NOT NULL DEFAULT '',
+                path TEXT NOT NULL,
+                expires_utc INTEGER NOT NULL,
+                secure INTEGER NOT NULL DEFAULT 0,
+                httponly INTEGER NOT NULL DEFAULT 0,
+                last_access_utc INTEGER NOT NULL,
+                has_expires INTEGER NOT NULL DEFAULT 1,
+                persistent INTEGER NOT NULL DEFAULT 1,
+                priority INTEGER NOT NULL DEFAULT 1,
+                encrypted_value BLOB DEFAULT '',
+                firstpartyonly INTEGER NOT NULL DEFAULT 0
+            )
+        """)
+
+        # Insert test data mimicking old CefSharp cookies
+        conn.execute("""
+            INSERT INTO cookies (
+                creation_utc, host_key, name, value, path, expires_utc,
+                secure, httponly, last_access_utc, has_expires, persistent,
+                priority, encrypted_value, firstpartyonly
+            ) VALUES
+            (13100000000000000, '.example.com', 'session', 'abc123', '/', 13200000000000000, 1, 1, 13150000000000000, 1, 1, 1, NULL, 0),
+            (13050000000000000, '.test.org', 'pref', 'dark', '/settings', 13150000000000000, 0, 0, 13100000000000000, 1, 0, 1, NULL, 0),
+            (13000000000000000, 'localhost', 'token', '', '/', 13100000000000000, 0, 1, 13050000000000000, 0, 0, 0, X'763130001234', 0)
+        """)
+        conn.commit()
+        conn.close()
+        return db_path
+
+    def test_parse_legacy_cookies_count(self, legacy_cookies_db):
+        """Legacy schema cookies are parsed without error."""
+        conn = sqlite3.connect(legacy_cookies_db)
+        conn.row_factory = sqlite3.Row
+        cookies = list(parse_cookies(conn))
+        conn.close()
+        assert len(cookies) == 3
+
+    def test_parse_legacy_cookies_secure_flag(self, legacy_cookies_db):
+        """is_secure maps from legacy 'secure' column."""
+        conn = sqlite3.connect(legacy_cookies_db)
+        conn.row_factory = sqlite3.Row
+        cookies = list(parse_cookies(conn))
+        conn.close()
+
+        session = next(c for c in cookies if c.name == "session")
+        pref = next(c for c in cookies if c.name == "pref")
+        assert session.is_secure is True
+        assert pref.is_secure is False
+
+    def test_parse_legacy_cookies_httponly_flag(self, legacy_cookies_db):
+        """is_httponly maps from legacy 'httponly' column."""
+        conn = sqlite3.connect(legacy_cookies_db)
+        conn.row_factory = sqlite3.Row
+        cookies = list(parse_cookies(conn))
+        conn.close()
+
+        session = next(c for c in cookies if c.name == "session")
+        pref = next(c for c in cookies if c.name == "pref")
+        assert session.is_httponly is True
+        assert pref.is_httponly is False
+
+    def test_parse_legacy_cookies_persistent_flag(self, legacy_cookies_db):
+        """is_persistent maps from legacy 'persistent' column."""
+        conn = sqlite3.connect(legacy_cookies_db)
+        conn.row_factory = sqlite3.Row
+        cookies = list(parse_cookies(conn))
+        conn.close()
+
+        session = next(c for c in cookies if c.name == "session")
+        pref = next(c for c in cookies if c.name == "pref")
+        assert session.is_persistent is True
+        assert pref.is_persistent is False
+
+    def test_parse_legacy_cookies_samesite(self, legacy_cookies_db):
+        """samesite maps from legacy 'firstpartyonly' column (defaults to 0)."""
+        conn = sqlite3.connect(legacy_cookies_db)
+        conn.row_factory = sqlite3.Row
+        cookies = list(parse_cookies(conn))
+        conn.close()
+
+        session = next(c for c in cookies if c.name == "session")
+        # firstpartyonly=0 → samesite=0 → "no_restriction"
+        assert session.samesite_raw == 0
+        assert session.samesite == "no_restriction"
+
+    def test_parse_legacy_cookies_encryption(self, legacy_cookies_db):
+        """Encrypted cookies are detected in legacy schema."""
+        conn = sqlite3.connect(legacy_cookies_db)
+        conn.row_factory = sqlite3.Row
+        cookies = list(parse_cookies(conn))
+        conn.close()
+
+        token = next(c for c in cookies if c.name == "token")
+        assert token.is_encrypted is True
+        assert token.encrypted_value is not None
+
+    def test_parse_legacy_cookies_timestamps(self, legacy_cookies_db):
+        """Timestamps are correctly converted in legacy schema."""
+        conn = sqlite3.connect(legacy_cookies_db)
+        conn.row_factory = sqlite3.Row
+        cookies = list(parse_cookies(conn))
+        conn.close()
+
+        session = next(c for c in cookies if c.name == "session")
+        assert session.creation_utc is not None
+        assert session.creation_utc_iso is not None
+        assert session.last_access_utc is not None
+
+    def test_get_cookie_stats_legacy(self, legacy_cookies_db):
+        """Cookie stats work with legacy schema."""
+        conn = sqlite3.connect(legacy_cookies_db)
+        conn.row_factory = sqlite3.Row
+        stats = get_cookie_stats(conn)
+        conn.close()
+
+        assert stats["cookie_count"] == 3
+        assert stats["domain_count"] == 3
+        assert stats["encrypted_count"] >= 1

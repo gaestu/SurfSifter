@@ -105,10 +105,10 @@ class TestModuleMetadata:
 class TestFilterFields:
     """Tests for filter field definitions."""
 
-    def test_has_seven_filters(self, module):
-        """Test module defines 7 filter fields."""
+    def test_has_eight_filters(self, module):
+        """Test module defines 8 filter fields."""
         fields = module.get_filter_fields()
-        assert len(fields) == 7
+        assert len(fields) == 8
 
     def test_show_title_field(self, module):
         """Test show_title field properties."""
@@ -130,6 +130,14 @@ class TestFilterFields:
         # Check options: 5, 10, 25, 50, Unlimited
         option_values = [opt[0] for opt in limit.options]
         assert option_values == ["5", "10", "25", "50", "unlimited"]
+
+    def test_custom_title_field(self, module):
+        """Test custom_title field properties."""
+        fields = {f.key: f for f in module.get_filter_fields()}
+        custom_title = fields["custom_title"]
+
+        assert custom_title.filter_type == FilterType.TEXT
+        assert custom_title.required is False
 
     def test_tag_filter_field(self, module):
         """Test tag_filter field properties."""
@@ -447,6 +455,18 @@ class TestConfigSummary:
         assert "Any Match" in summary
         assert "+Deleted" in summary
 
+    def test_summary_with_custom_title(self, module):
+        """Test summary includes custom title when set."""
+        config = {
+            "custom_title": "Sample Files",
+            "tag_filter": "all",
+            "match_filter": "all",
+            "include_deleted": False,
+        }
+
+        summary = module.format_config_summary(config)
+        assert "Title: Sample Files" in summary
+
 
 class TestModuleDiscovery:
     """Tests for module auto-discovery."""
@@ -522,6 +542,52 @@ class TestTitleFeature:
         html = module.render(test_db, 1, config)
 
         assert "Dateiliste" in html
+
+    def test_title_custom_title_overrides_default(self, module, test_db):
+        """Test custom title is rendered when provided."""
+        config = {
+            "show_title": True,
+            "custom_title": "Sample Files",
+            "tag_filter": "all",
+            "match_filter": "all",
+            "include_deleted": False,
+            "sort_by": "modified_desc",
+        }
+
+        html = module.render(test_db, 1, config)
+
+        assert "Sample Files" in html
+        assert "File List" not in html
+
+    def test_title_custom_title_whitespace_uses_default(self, module, test_db):
+        """Test whitespace-only custom title falls back to default title."""
+        config = {
+            "show_title": True,
+            "custom_title": "   ",
+            "tag_filter": "all",
+            "match_filter": "all",
+            "include_deleted": False,
+            "sort_by": "modified_desc",
+        }
+
+        html = module.render(test_db, 1, config)
+
+        assert "File List" in html
+
+    def test_title_custom_title_none_uses_default(self, module, test_db):
+        """Test None custom title falls back to default title."""
+        config = {
+            "show_title": True,
+            "custom_title": None,
+            "tag_filter": "all",
+            "match_filter": "all",
+            "include_deleted": False,
+            "sort_by": "modified_desc",
+        }
+
+        html = module.render(test_db, 1, config)
+
+        assert "File List" in html
 
 
 class TestLimitFeature:

@@ -41,6 +41,9 @@ class SystemSummaryModule(BaseReportModule):
     SECTION_INSTALLED_SOFTWARE = "installed_software"
     SECTION_AUTOSTART = "autostart"
     SECTION_NETWORK = "network"
+    SECTION_BROWSER_DETECTION = "browser_detection"
+    SECTION_USER_ACTIVITY = "user_activity"
+    SECTION_EXECUTION_HISTORY = "execution_history"
 
     # Mapping of indicator type prefixes to sections
     INDICATOR_TYPE_TO_SECTION = {
@@ -63,6 +66,10 @@ class SystemSummaryModule(BaseReportModule):
         "system:rdp_status": "RDP Status",
         "system:default_browser": "Default Browser",
         "system:downloads_path": "Downloads Path",
+        "system:pictures_path": "Pictures Path",
+        "system:videos_path": "Videos Path",
+        "system:documents_path": "Documents Path",
+        "system:desktop_path": "Desktop Path",
     }
 
     # User-related indicator types
@@ -82,6 +89,8 @@ class SystemSummaryModule(BaseReportModule):
         "network:connected_profile": "Connected Network",
         "network:profile_last_connected": "Last Connected",
         "network:mapped_drive": "Mapped Drive",
+        "network:proxy_settings": "Proxy Settings",
+        "network:internet_policy": "Internet Policy",
     }
 
     @property
@@ -112,6 +121,9 @@ class SystemSummaryModule(BaseReportModule):
                     (self.SECTION_INSTALLED_SOFTWARE, "Installed Software"),
                     (self.SECTION_AUTOSTART, "Autostart Entries"),
                     (self.SECTION_NETWORK, "Network Configuration"),
+                    (self.SECTION_BROWSER_DETECTION, "Browser Detection"),
+                    (self.SECTION_USER_ACTIVITY, "User Activity"),
+                    (self.SECTION_EXECUTION_HISTORY, "Execution History"),
                 ],
                 help_text="Select which sections to include in the report",
                 required=True,
@@ -190,6 +202,9 @@ class SystemSummaryModule(BaseReportModule):
             self.SECTION_INSTALLED_SOFTWARE: self._build_software(indicators, software_limit, date_format),
             self.SECTION_AUTOSTART: self._build_autostart(indicators),
             self.SECTION_NETWORK: self._build_network(indicators, locale, date_format, t),
+            self.SECTION_BROWSER_DETECTION: self._build_browser_detection(indicators, locale),
+            self.SECTION_USER_ACTIVITY: self._build_user_activity(indicators, locale, date_format),
+            self.SECTION_EXECUTION_HISTORY: self._build_execution_history(indicators, locale, date_format),
         }
 
         # Render template
@@ -208,6 +223,9 @@ class SystemSummaryModule(BaseReportModule):
             SECTION_INSTALLED_SOFTWARE=self.SECTION_INSTALLED_SOFTWARE,
             SECTION_AUTOSTART=self.SECTION_AUTOSTART,
             SECTION_NETWORK=self.SECTION_NETWORK,
+            SECTION_BROWSER_DETECTION=self.SECTION_BROWSER_DETECTION,
+            SECTION_USER_ACTIVITY=self.SECTION_USER_ACTIVITY,
+            SECTION_EXECUTION_HISTORY=self.SECTION_EXECUTION_HISTORY,
         )
 
     def _query_indicators(
@@ -268,7 +286,18 @@ class SystemSummaryModule(BaseReportModule):
             "system:rdp_status",
             "system:default_browser",
             "system:downloads_path",
+            "system:pictures_path",
+            "system:videos_path",
+            "system:documents_path",
+            "system:desktop_path",
         ]
+
+        # Pre-scan for timezone_key value as fallback for DLL resource refs
+        timezone_key_value = None
+        for ind in indicators:
+            if ind["type"] == "system:timezone_key":
+                timezone_key_value = ind["value"]
+                break
 
         # Add items in preferred order
         for ind_type in ordered_types:
@@ -278,6 +307,23 @@ class SystemSummaryModule(BaseReportModule):
                     value = self._format_value(
                         ind["type"], ind["value"], locale, date_format
                     )
+
+                    # Handle DLL resource reference for timezone
+                    # e.g. "@tzres.dll,-322" → use timezone_key value instead
+                    if ind_type == "system:timezone_standard" and value.startswith("@"):
+                        if timezone_key_value:
+                            value = timezone_key_value
+                        else:
+                            # Skip — no readable fallback available
+                            seen_types.add(ind_type)
+                            break
+
+                    # Skip timezone_key as separate row when we already
+                    # displayed a timezone value via timezone_standard
+                    if ind_type == "system:timezone_key" and "system:timezone_standard" in seen_types:
+                        seen_types.add(ind_type)
+                        break
+
                     items.append({
                         "label": label,
                         "value": value,
@@ -462,11 +508,53 @@ class SystemSummaryModule(BaseReportModule):
             "total_count": total_count,
         }
 
+    def _extract_entry_name(self, ind: Dict[str, Any]) -> str:
+        """Extract the actual meaningful name from an indicator.
+
+        In real extracted data, ind['name'] == ind['type'] (both store the
+        indicator type string like 'startup:run_key').  The actual meaningful
+        name lives in extra_json.value_name or as the last path segment.
+
+        For indicators created with ``extract=True`` (BHO, registered browsers),
+        the key name is in ind['value'] instead.
+        """
+        import json
+
+        name = ind.get("name", "") or ""
+        ind_type = ind.get("type", "") or ""
+
+        # If name is different from type, it's already meaningful
+        if name and name != ind_type:
+            return name
+
+        # Try extra_json.value_name
+        if ind.get("extra_json"):
+            try:
+                extra = json.loads(ind["extra_json"])
+                vname = extra.get("value_name")
+                if vname:
+                    return str(vname)
+            except (json.JSONDecodeError, TypeError):
+                pass
+
+        # Try last segment of path
+        path = ind.get("path", "") or ""
+        if path:
+            last_seg = path.replace("/", "\\").rsplit("\\", 1)[-1]
+            if last_seg:
+                return last_seg
+
+        return name
+
     def _build_autostart(self, indicators: List[Dict[str, Any]]) -> Dict[str, Any]:
         """Build autostart entries section data.
 
         Groups entries by type (run keys, BHOs, services) and deduplicates
         entries that appear in both HKLM and HKCU.
+
+        Handles both legacy data (where ``name`` contains the actual entry name)
+        and real extraction data (where ``name`` == indicator type and the actual
+        entry name must be recovered from ``extra_json.value_name`` or ``path``).
 
         Returns dict with grouped 'run_keys', 'bhos', 'services' lists.
         """
@@ -480,7 +568,6 @@ class SystemSummaryModule(BaseReportModule):
 
         for ind in indicators:
             ind_type = ind["type"]
-            entry_name = ind["name"] or ""
             entry_value = ind["value"] or ""
             path = ind.get("path", "")
 
@@ -489,8 +576,11 @@ class SystemSummaryModule(BaseReportModule):
             if "NTUSER" in path.upper() or "HKU" in path.upper() or "HKCU" in path.upper():
                 scope = "HKCU"
 
-            if ind_type == "startup:run_key":
-                # Skip entries where name equals value (key name not entry name)
+            if ind_type in ("startup:run_key", "startup:run_once_key"):
+                # Extract actual entry name (handles both legacy and real data)
+                entry_name = self._extract_entry_name(ind)
+
+                # Skip entries where name is a key name (not a value name)
                 if entry_name in ("Run", "RunOnce"):
                     continue
                 # Skip empty/invalid entries
@@ -498,7 +588,7 @@ class SystemSummaryModule(BaseReportModule):
                     continue
 
                 # Determine if this is a RunOnce key
-                is_run_once = "RunOnce" in path
+                is_run_once = ind_type == "startup:run_once_key" or "RunOnce" in path
 
                 # Deduplicate by (name, command) - combine scopes if same entry in HKLM + HKCU
                 key = (entry_name.lower(), entry_value.lower())
@@ -517,8 +607,8 @@ class SystemSummaryModule(BaseReportModule):
                     }
 
             elif ind_type == "startup:bho":
-                # BHOs are identified by CLSID
-                clsid = entry_name or entry_value
+                # BHOs use extract=True: value has the key name (CLSID)
+                clsid = entry_value or ""
                 if clsid and clsid not in seen_bho_clsids:
                     seen_bho_clsids.add(clsid)
                     bhos.append({
@@ -527,6 +617,7 @@ class SystemSummaryModule(BaseReportModule):
                     })
 
             elif ind_type == "startup:service":
+                entry_name = self._extract_entry_name(ind)
                 if entry_name:
                     services.append({
                         "name": entry_name,
@@ -569,7 +660,7 @@ class SystemSummaryModule(BaseReportModule):
         unknown_label = t.get("unknown", "Unknown")
 
         # Group by interface/profile
-        items = []
+        items_dedup: Dict[tuple, Dict[str, Any]] = {}  # Deduplicated network items
         profiles_map: Dict[str, Dict[str, Any]] = {}  # Key by registry path prefix
         mapped_drives = []
 
@@ -648,12 +739,23 @@ class SystemSummaryModule(BaseReportModule):
                     "registry_path": ind.get("path", ""),
                 })
             elif ind_type in self.NETWORK_INFO_LABELS:
+                raw_value = ind["value"] or ""
+                cleaned = self._clean_network_value(raw_value, ind_type, locale)
+
+                # Skip meaningless values
+                if not cleaned:
+                    continue
+
                 label = get_field_label(ind_type, locale)
-                items.append({
-                    "label": label,
-                    "value": ind["value"] or "",
-                    "path": ind.get("path", ""),
-                })
+                dedup_key = (ind_type, cleaned)
+                if dedup_key not in items_dedup:
+                    items_dedup[dedup_key] = {
+                        "label": label,
+                        "value": cleaned,
+                        "path": ind.get("path", ""),
+                    }
+
+        items = list(items_dedup.values())
 
         # Convert profiles_map to list, filtering out incomplete entries
         profiles = []
@@ -745,6 +847,283 @@ class SystemSummaryModule(BaseReportModule):
             return parts[-1]
         return unknown_label
 
+    def _clean_network_value(
+        self, value: str, ind_type: str = "", locale: str = "en"
+    ) -> str:
+        """Clean a network indicator value for display.
+
+        - Strips Python-list formatting: ``['x']`` → ``x``
+        - Filters meaningless values: ``0``, empty strings, DLL refs
+        - Translates proxy enable/disable
+        """
+        if not value:
+            return ""
+
+        v = value.strip()
+
+        # Clean Python list formatting: ['192.168.178.1'] → 192.168.178.1
+        if v.startswith("[") and v.endswith("]"):
+            inner = v[1:-1].strip()
+            parts = [p.strip().strip("'\"") for p in inner.split(",")]
+            parts = [p for p in parts if p]
+            v = ", ".join(parts)
+
+        # Skip DLL resource references
+        if v.startswith("@"):
+            return ""
+
+        # Domain "0" is meaningless (no domain configured)
+        if ind_type == "network:domain" and v == "0":
+            return ""
+
+        # Proxy enable: translate numeric to readable
+        if ind_type == "network:proxy_settings":
+            if v == "0":
+                return "Deaktiviert" if locale == "de" else "Disabled"
+            if v == "1":
+                return "Aktiviert" if locale == "de" else "Enabled"
+
+        # Generic: filter pure-zero values for address fields
+        if v == "0" and ind_type in (
+            "network:dhcp_ip", "network:dns_server",
+            "network:default_gateway", "network:dhcp_server",
+        ):
+            return ""
+
+        return v
+
+    def _extract_app_path_exe(self, path: str) -> str:
+        """Extract the executable name from an App Paths registry path.
+
+        E.g., ``...\\App Paths\\chrome.exe\\(Default)`` → ``chrome.exe``
+
+        Returns:
+            The executable filename, or empty string if not found.
+        """
+        if not path:
+            return ""
+        parts = path.replace("/", "\\").split("\\")
+        for i, part in enumerate(parts):
+            if part == "App Paths" and i + 1 < len(parts):
+                return parts[i + 1]
+        return ""
+
+    def _build_browser_detection(
+        self, indicators: List[Dict[str, Any]], locale: str = "en"
+    ) -> Dict[str, Any]:
+        """Build browser detection section data.
+
+        Collects registered browsers, app paths, home/search pages, and
+        IE/Edge search scopes from os_indicators.
+
+        Returns dict with 'registered_browsers', 'app_paths', 'ie_settings' lists.
+        """
+        from ...locales import get_field_label
+
+        registered_browsers = []
+        app_paths = []
+        ie_settings = []
+
+        for ind in indicators:
+            ind_type = ind["type"]
+
+            if ind_type == "browser:registered_browser":
+                # value contains the key name (browser ID) from extract=True path
+                browser_name = ind["value"] or ""
+                if browser_name:
+                    registered_browsers.append({
+                        "name": browser_name,
+                        "path": ind.get("path", ""),
+                    })
+
+            elif ind_type == "browser:app_path":
+                # Extract exe name from registry path
+                # Path example: "...\App Paths\chrome.exe\(Default)"
+                exe_name = self._extract_app_path_exe(ind.get("path", ""))
+                entry_name = self._extract_entry_name(ind)
+                app_paths.append({
+                    "name": exe_name or entry_name or "",
+                    "value": ind["value"] or "",
+                    "path": ind.get("path", ""),
+                })
+
+            elif ind_type in ("browser:home_page", "browser:search_page"):
+                label = "Home Page" if ind_type == "browser:home_page" else "Search Page"
+                ie_settings.append({
+                    "label": label,
+                    "value": ind["value"] or "",
+                    "path": ind.get("path", ""),
+                })
+
+            elif ind_type == "browser:search_scope":
+                scope_name = self._extract_entry_name(ind)
+                ie_settings.append({
+                    "label": f"Search Scope: {scope_name or ''}",
+                    "value": ind["value"] or "",
+                    "path": ind.get("path", ""),
+                })
+
+        return {
+            "registered_browsers": registered_browsers,
+            "app_paths": app_paths,
+            "ie_settings": ie_settings,
+            "count": len(registered_browsers) + len(app_paths) + len(ie_settings),
+        }
+
+    def _build_user_activity(
+        self,
+        indicators: List[Dict[str, Any]],
+        locale: str = "en",
+        date_format: str = "eu",
+    ) -> Dict[str, Any]:
+        """Build user activity section data.
+
+        Collects recent documents, typed URLs, typed paths, open/save dialog MRU,
+        and explorer search terms from os_indicators.
+
+        Returns dict with grouped activity lists.
+        """
+        import json
+
+        recent_docs = []
+        recent_images = []
+        typed_urls = []
+        typed_paths = []
+        open_save_mru = []
+        open_save_last_visited = []
+        explorer_searches = []
+
+        for ind in indicators:
+            ind_type = ind["type"]
+            entry_name = self._extract_entry_name(ind)
+
+            if ind_type == "recent_documents":
+                recent_docs.append({
+                    "name": entry_name or "",
+                    "value": ind["value"] or "",
+                    "path": ind.get("path", ""),
+                })
+
+            elif ind_type == "recent_documents:image":
+                recent_images.append({
+                    "name": entry_name or "",
+                    "value": ind["value"] or "",
+                    "path": ind.get("path", ""),
+                })
+
+            elif ind_type == "browser:typed_url":
+                typed_urls.append({
+                    "name": entry_name or "",
+                    "value": ind["value"] or "",
+                    "path": ind.get("path", ""),
+                })
+
+            elif ind_type == "typed_paths":
+                typed_paths.append({
+                    "name": entry_name or "",
+                    "value": ind["value"] or "",
+                    "path": ind.get("path", ""),
+                })
+
+            elif ind_type == "open_save_dialog_mru":
+                open_save_mru.append({
+                    "name": entry_name or "",
+                    "value": ind["value"] or "",
+                    "path": ind.get("path", ""),
+                })
+
+            elif ind_type == "open_save_dialog_last_visited":
+                open_save_last_visited.append({
+                    "name": entry_name or "",
+                    "value": ind["value"] or "",
+                    "path": ind.get("path", ""),
+                })
+
+            elif ind_type == "user_activity:explorer_search":
+                explorer_searches.append({
+                    "name": entry_name or "",
+                    "value": ind["value"] or "",
+                    "path": ind.get("path", ""),
+                })
+
+        total = (
+            len(recent_docs) + len(recent_images) + len(typed_urls) +
+            len(typed_paths) + len(open_save_mru) + len(open_save_last_visited) +
+            len(explorer_searches)
+        )
+
+        return {
+            "recent_docs": recent_docs,
+            "recent_images": recent_images,
+            "typed_urls": typed_urls,
+            "typed_paths": typed_paths,
+            "open_save_mru": open_save_mru,
+            "open_save_last_visited": open_save_last_visited,
+            "explorer_searches": explorer_searches,
+            "count": total,
+        }
+
+    def _build_execution_history(
+        self,
+        indicators: List[Dict[str, Any]],
+        locale: str = "en",
+        date_format: str = "eu",
+    ) -> Dict[str, Any]:
+        """Build execution history section data.
+
+        Collects UserAssist entries showing program execution evidence.
+        Parses extra_json for run_count, focus_count, focus_time, last_run,
+        and decoded_path.
+
+        Returns dict with 'entries' list sorted by run_count descending.
+        """
+        import json
+
+        entries = []
+
+        for ind in indicators:
+            if ind["type"] != "execution:user_assist":
+                continue
+
+            decoded_path = ind["value"] or ""
+            run_count = None
+            focus_count = None
+            focus_time = None
+            last_run = None
+
+            if ind.get("extra_json"):
+                try:
+                    extra = json.loads(ind["extra_json"])
+                    decoded_path = extra.get("decoded_path", decoded_path)
+                    run_count = extra.get("run_count")
+                    focus_count = extra.get("focus_count")
+                    focus_time = extra.get("focus_time")
+                    last_run = extra.get("last_run")
+                    if last_run:
+                        last_run = format_datetime(
+                            last_run, date_format,
+                            include_time=True, include_seconds=True,
+                        )
+                except (json.JSONDecodeError, TypeError):
+                    pass
+
+            entries.append({
+                "decoded_path": decoded_path,
+                "run_count": run_count,
+                "focus_count": focus_count,
+                "focus_time": focus_time,
+                "last_run": last_run or "",
+                "path": ind.get("path", ""),
+            })
+
+        # Sort by run_count descending (None values last)
+        entries.sort(key=lambda x: (x["run_count"] or 0), reverse=True)
+
+        return {
+            "entries": entries,
+            "count": len(entries),
+        }
+
     def format_config_summary(self, config: Dict[str, Any]) -> str:
         """Format a human-readable summary of the configuration."""
         sections = config.get("sections", [])
@@ -757,6 +1136,9 @@ class SystemSummaryModule(BaseReportModule):
             self.SECTION_INSTALLED_SOFTWARE: "Software",
             self.SECTION_AUTOSTART: "Autostart",
             self.SECTION_NETWORK: "Network",
+            self.SECTION_BROWSER_DETECTION: "Browsers",
+            self.SECTION_USER_ACTIVITY: "Activity",
+            self.SECTION_EXECUTION_HISTORY: "Execution",
         }
 
         selected = [section_labels.get(s, s) for s in sections]

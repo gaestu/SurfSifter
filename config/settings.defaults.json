@@ -17,10 +17,11 @@
   },
   "reports": {
     "default_author_function": "Forensic Analyst",
-    "default_author_name": "Your Name",
+    "default_author_name": "",
     "default_date_format": "eu",
-    "default_footer_text": "",
-    "default_locale": "en_US",
+    "default_department": "",
+    "default_footer_text": "SurfSifter Report",
+    "default_locale": "de",
     "default_logo_path": "branding/logo.jpg",
     "default_org_name": ""
   },

@@ -29,6 +29,7 @@ TRANSLATIONS: Dict[str, TranslationDict] = {
         "of": "of",
         "generated": "Generated",
         "appendix": "Appendix",
+        "appendix_page": "Appendix",
         "no_content": "No Content",
         "no_sections_message": "No sections have been added to this report. Use the Reports tab to add custom sections and modules.",
 
@@ -36,6 +37,7 @@ TRANSLATIONS: Dict[str, TranslationDict] = {
         "case_number": "Case Number",
         "evidence": "Evidence",
         "investigator": "Investigator",
+        "department": "Department",
         "notes": "Notes",
 
         # Author section
@@ -91,6 +93,7 @@ TRANSLATIONS: Dict[str, TranslationDict] = {
         "software_name": "Software Name",
         "version": "Version",
         "publisher": "Publisher",
+        "install_location": "Install Location",
 
         # Autostart table
         "entry_name": "Name",
@@ -125,6 +128,43 @@ TRANSLATIONS: Dict[str, TranslationDict] = {
         "private": "Private",
         "public": "Public",
         "drive_path": "Network Path",
+        "proxy_settings": "Proxy Settings",
+        "internet_policy": "Internet Policy",
+
+        # Shell folder paths
+        "pictures_path": "Pictures Path",
+        "videos_path": "Videos Path",
+        "documents_path": "Documents Path",
+        "desktop_path": "Desktop Path",
+
+        # Browser detection section
+        "browser_detection": "Browser Detection",
+        "registered_browsers": "Registered Browsers",
+        "browser_name": "Browser",
+        "browser_app_paths": "Browser Application Paths",
+        "ie_edge_settings": "IE / Edge Settings",
+        "no_browser_detection": "No browser detection data found in registry data.",
+
+        # User activity section
+        "user_activity_title": "User Activity",
+        "recent_images": "Recently Accessed Images",
+        "typed_urls": "Typed URLs (IE/Edge)",
+        "typed_paths_title": "Typed Paths (Explorer)",
+        "recent_documents": "Recent Documents",
+        "open_save_mru": "Open/Save Dialog History",
+        "open_save_last_visited": "Last Visited Folders (Open/Save)",
+        "explorer_searches": "Explorer Search Terms",
+        "search_term": "Search Term",
+        "no_user_activity": "No user activity data found in registry data.",
+
+        # Execution history section
+        "execution_history": "Execution History",
+        "program_path": "Program Path",
+        "run_count": "Run Count",
+        "focus_count": "Focus Count",
+        "focus_time": "Focus Time",
+        "last_run": "Last Run",
+        "no_execution_history": "No execution history found in registry data.",
 
         # ===================
         # Activity summary module
@@ -293,6 +333,38 @@ TRANSLATIONS: Dict[str, TranslationDict] = {
         "no_web_storage_sites": "No web storage sites found matching the filter criteria.",
 
         # ===================
+        # Jump Lists module
+        # ===================
+        "jl_description": "Jump Lists are a Windows feature that tracks recently and frequently used items per application. They are stored as .lnk shortcut files and can contain file paths, URLs, and access timestamps. This data provides insight into which applications were used and what documents or websites were accessed.",
+        "jl_application": "Application",
+        "jl_appid": "App ID",
+        "jl_title": "Title",
+        "jl_url": "URL",
+        "jl_target_path": "Target Path",
+        "jl_access_time": "Access Time",
+        "jl_creation_time": "Creation Time",
+        "jl_access_count": "Access Count",
+        "jl_pin_status": "Pin Status",
+        "jl_jumplist_path": "Jump List Path",
+        "jl_entries": "entries",
+        "no_jump_lists_found": "No jump list entries found matching the filter criteria.",
+
+        # ===================
+        # Installed Applications module
+        # ===================
+        "installed_applications_title": "Installed Applications",
+        "no_installed_applications_found": "No installed applications found matching the filter criteria.",
+        "applications": "applications",
+
+        # ===================
+        # Application Execution module
+        # ===================
+        "application_execution_title": "Application Execution",
+        "application_execution_description": "Application execution artifacts are derived from Windows UserAssist entries and indicate which programs were launched by a user. They can include execution counts, focus data, and the last observed run time for each application path.",
+        "application_path": "Application Path",
+        "no_application_execution_found": "No application execution entries found matching the filter criteria.",
+
+        # ===================
         # Bookmarks module
         # ===================
         "bookmarks_title": "Bookmarks",
@@ -404,6 +476,7 @@ TRANSLATIONS: Dict[str, TranslationDict] = {
         "of": "von",
         "generated": "Erstellt",
         "appendix": "Anhang",
+        "appendix_page": "Anhang",
         "no_content": "Kein Inhalt",
         "no_sections_message": "Diesem Bericht wurden keine Abschnitte hinzugefügt. Verwenden Sie die Registerkarte Berichte, um benutzerdefinierte Abschnitte und Module hinzuzufügen.",
 
@@ -411,6 +484,7 @@ TRANSLATIONS: Dict[str, TranslationDict] = {
         "case_number": "Fallnummer",
         "evidence": "Asservat",
         "investigator": "Ermittler",
+        "department": "Abteilung",
         "notes": "Notizen",
 
         # Author section
@@ -466,6 +540,7 @@ TRANSLATIONS: Dict[str, TranslationDict] = {
         "software_name": "Softwarename",
         "version": "Version",
         "publisher": "Herausgeber",
+        "install_location": "Installationspfad",
 
         # Autostart table
         "entry_name": "Name",
@@ -500,6 +575,43 @@ TRANSLATIONS: Dict[str, TranslationDict] = {
         "private": "Privat",
         "public": "Öffentlich",
         "drive_path": "Netzwerkpfad",
+        "proxy_settings": "Proxy-Einstellungen",
+        "internet_policy": "Internetrichtlinie",
+
+        # Shell folder paths
+        "pictures_path": "Bilderpfad",
+        "videos_path": "Videopfad",
+        "documents_path": "Dokumentenpfad",
+        "desktop_path": "Desktoppfad",
+
+        # Browser detection section
+        "browser_detection": "Browsererkennung",
+        "registered_browsers": "Registrierte Browser",
+        "browser_name": "Browser",
+        "browser_app_paths": "Browser-Anwendungspfade",
+        "ie_edge_settings": "IE / Edge Einstellungen",
+        "no_browser_detection": "Keine Browsererkennungsdaten in den Registry-Daten gefunden.",
+
+        # User activity section
+        "user_activity_title": "Benutzeraktivität",
+        "recent_images": "Kürzlich aufgerufene Bilder",
+        "typed_urls": "Eingegebene URLs (IE/Edge)",
+        "typed_paths_title": "Eingegebene Pfade (Explorer)",
+        "recent_documents": "Zuletzt verwendete Dokumente",
+        "open_save_mru": "Öffnen/Speichern-Dialogverlauf",
+        "open_save_last_visited": "Zuletzt besuchte Ordner (Öffnen/Speichern)",
+        "explorer_searches": "Explorer-Suchbegriffe",
+        "search_term": "Suchbegriff",
+        "no_user_activity": "Keine Benutzeraktivitätsdaten in den Registry-Daten gefunden.",
+
+        # Execution history section
+        "execution_history": "Ausführungsverlauf",
+        "program_path": "Programmpfad",
+        "run_count": "Ausführungen",
+        "focus_count": "Fokus-Anzahl",
+        "focus_time": "Fokus-Zeit",
+        "last_run": "Letzte Ausführung",
+        "no_execution_history": "Kein Ausführungsverlauf in den Registry-Daten gefunden.",
 
         # ===================
         # Activity summary module
@@ -666,6 +778,38 @@ TRANSLATIONS: Dict[str, TranslationDict] = {
         "web_storage_entries": "Einträge",
         "no_web_storage_entries": "Keine Speichereinträge gefunden.",
         "no_web_storage_sites": "Keine Web-Storage-Seiten gefunden, die den Filterkriterien entsprechen.",
+
+        # ===================
+        # Jump Lists module
+        # ===================
+        "jl_description": "Sprunglisten (Jump Lists) sind eine Windows-Funktion, die kürzlich und häufig verwendete Elemente pro Anwendung erfasst. Sie werden als .lnk-Verknüpfungsdateien gespeichert und können Dateipfade, URLs und Zugriffszeitstempel enthalten. Diese Daten geben Aufschluss darüber, welche Anwendungen verwendet und welche Dokumente oder Websites aufgerufen wurden.",
+        "jl_application": "Anwendung",
+        "jl_appid": "App-ID",
+        "jl_title": "Titel",
+        "jl_url": "URL",
+        "jl_target_path": "Zielpfad",
+        "jl_access_time": "Zugriffszeit",
+        "jl_creation_time": "Erstellungszeit",
+        "jl_access_count": "Zugriffe",
+        "jl_pin_status": "Anheftstatus",
+        "jl_jumplist_path": "Sprunglisten-Pfad",
+        "jl_entries": "Einträge",
+        "no_jump_lists_found": "Keine Sprunglisten-Einträge gefunden, die den Filterkriterien entsprechen.",
+
+        # ===================
+        # Installed Applications module
+        # ===================
+        "installed_applications_title": "Installierte Anwendungen",
+        "no_installed_applications_found": "Keine installierten Anwendungen gefunden, die den Filterkriterien entsprechen.",
+        "applications": "Anwendungen",
+
+        # ===================
+        # Application Execution module
+        # ===================
+        "application_execution_title": "Anwendungsausführung",
+        "application_execution_description": "Artefakte zur Anwendungsausführung stammen aus Windows-UserAssist-Einträgen und zeigen, welche Programme von einem Benutzer gestartet wurden. Sie können Ausführungsanzahl, Fokusdaten und die zuletzt beobachtete Ausführungszeit pro Anwendungspfad enthalten.",
+        "application_path": "Anwendungspfad",
+        "no_application_execution_found": "Keine Anwendungsausführungs-Einträge gefunden, die den Filterkriterien entsprechen.",
 
         # ===================
         # Bookmarks module
@@ -836,6 +980,10 @@ SYSTEM_INFO_LABEL_KEYS = {
     "system:rdp_status": "rdp_status",
     "system:default_browser": "default_browser",
     "system:downloads_path": "downloads_path",
+    "system:pictures_path": "pictures_path",
+    "system:videos_path": "videos_path",
+    "system:documents_path": "documents_path",
+    "system:desktop_path": "desktop_path",
 }
 
 NETWORK_LABEL_KEYS = {
@@ -847,6 +995,8 @@ NETWORK_LABEL_KEYS = {
     "network:connected_profile": "connected_network",
     "network:profile_last_connected": "last_connected",
     "network:mapped_drive": "mapped_drive",
+    "network:proxy_settings": "proxy_settings",
+    "network:internet_policy": "internet_policy",
 }
 
 

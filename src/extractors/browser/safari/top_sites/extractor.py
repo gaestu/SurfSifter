@@ -22,9 +22,14 @@ from core.database import (
 )
 from core.logging import get_logger
 from extractors._shared.extracted_files_audit import record_browser_files
+from extractors._shared.file_list_discovery import (
+    open_partition_for_extraction,
+    get_ewf_paths_from_evidence_fs,
+)
 from ....base import BaseExtractor, ExtractorMetadata
 from ....callbacks import ExtractorCallbacks
 from ....widgets import MultiPartitionWidget
+from .._discovery import discover_safari_files, discover_safari_files_fallback
 from .._parsers import SafariTopSite, get_top_site_stats, parse_top_sites
 from .._patterns import extract_user_from_path, get_patterns
 
@@ -140,23 +145,57 @@ class SafariTopSitesExtractor(BaseExtractor):
         }
 
         callbacks.on_step("Discovering Safari top sites artifacts")
-        discovered = self._discover_top_sites_paths(evidence_fs)
-        if collector:
-            collector.report_discovered(evidence_id, self.metadata.name, files=len(discovered))
+        # Multi-partition discovery with fallback to filesystem iteration
+        evidence_conn = config.get("evidence_conn")
+        files_by_partition = discover_safari_files(
+            evidence_conn, evidence_id,
+            artifact_names=["top_sites"],
+            callbacks=callbacks,
+        )
+        if not files_by_partition:
+            files_by_partition = discover_safari_files_fallback(
+                evidence_fs, artifact_names=["top_sites"], callbacks=callbacks,
+            )
 
-        if not discovered:
+        manifest_data["multi_partition"] = len(files_by_partition) > 1
+        manifest_data["partitions_scanned"] = sorted(files_by_partition.keys())
+        total_discovered = sum(len(v) for v in files_by_partition.values())
+
+        if collector:
+            collector.report_discovered(evidence_id, self.metadata.name, files=total_discovered)
+
+        if not files_by_partition:
             manifest_data["status"] = "skipped"
             manifest_data["notes"].append("No Safari TopSites.plist files found")
         else:
-            for source_path in discovered:
-                if callbacks.is_cancelled():
-                    manifest_data["status"] = "cancelled"
-                    manifest_data["notes"].append("Extraction cancelled by user")
-                    break
-                file_info = self._extract_file(evidence_fs, source_path, run_dir, output_dir)
-                if file_info:
-                    manifest_data["files"].append(file_info)
-                    callbacks.on_log(f"Copied: {source_path}", "info")
+            ewf_paths = get_ewf_paths_from_evidence_fs(evidence_fs)
+            current_partition = getattr(evidence_fs, "partition_index", 0)
+            multi = len(files_by_partition) > 1
+
+            for partition_idx in sorted(files_by_partition.keys()):
+                partition_files = files_by_partition[partition_idx]
+
+                if ewf_paths is not None and partition_idx != current_partition:
+                    ctx = open_partition_for_extraction(ewf_paths, partition_idx)
+                else:
+                    ctx = open_partition_for_extraction(evidence_fs, None)
+
+                with ctx as fs_to_use:
+                    for file_data in partition_files:
+                        if callbacks.is_cancelled():
+                            manifest_data["status"] = "cancelled"
+                            manifest_data["notes"].append("Extraction cancelled by user")
+                            break
+                        file_info = self._extract_file(
+                            fs_to_use, file_data["logical_path"], run_dir, output_dir,
+                            partition_index=partition_idx if multi else None,
+                        )
+                        if file_info:
+                            file_info["partition_index"] = partition_idx
+                            if file_data.get("inode"):
+                                file_info["inode"] = file_data["inode"]
+                            manifest_data["files"].append(file_info)
+                            callbacks.on_log(f"Copied: {file_data['logical_path']}", "info")
 
         manifest_path = run_dir / "manifest.json"
         manifest_path.write_text(json.dumps(manifest_data, indent=2))
@@ -333,19 +372,6 @@ class SafariTopSitesExtractor(BaseExtractor):
 
         return counts
 
-    def _discover_top_sites_paths(self, evidence_fs) -> List[str]:
-        discovered: List[str] = []
-        seen: set[str] = set()
-        for pattern in get_patterns("top_sites"):
-            try:
-                for path_str in evidence_fs.iter_paths(pattern):
-                    if path_str in seen:
-                        continue
-                    seen.add(path_str)
-                    discovered.append(path_str)
-            except Exception as exc:
-                LOGGER.debug("Safari top sites pattern failed (%s): %s", pattern, exc)
-        return discovered
 
     def _extract_file(
         self,
@@ -353,6 +379,7 @@ class SafariTopSitesExtractor(BaseExtractor):
         source_path: str,
         run_dir: Path,
         output_dir: Path,
+        partition_index: Optional[int] = None,
     ) -> Optional[Dict[str, Any]]:
         try:
             content = evidence_fs.read_file(source_path)
@@ -361,7 +388,10 @@ class SafariTopSitesExtractor(BaseExtractor):
 
         user = extract_user_from_path(source_path) or "unknown"
         profile = self._extract_profile(source_path, user=user)
-        base_name = f"safari_{_safe_slug(profile)}_TopSites.plist"
+        if partition_index is not None:
+            base_name = f"safari_{_safe_slug(profile)}_p{partition_index}_TopSites.plist"
+        else:
+            base_name = f"safari_{_safe_slug(profile)}_TopSites.plist"
         dest_path = run_dir / base_name
         if dest_path.exists():
             suffix = hashlib.sha1(source_path.encode("utf-8", errors="ignore")).hexdigest()[:8]

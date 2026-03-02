@@ -59,6 +59,7 @@ from .generator import (
     ReportBuilder,
     ReportGenerator,
     ReportData,
+    ReportMode,
     SectionData,
     build_report,
 )
@@ -105,6 +106,7 @@ __all__ = [
     "ReportBuilder",
     "ReportGenerator",
     "ReportData",
+    "ReportMode",
     "SectionData",
     "build_report",
 ]

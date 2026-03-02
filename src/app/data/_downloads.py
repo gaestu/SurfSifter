@@ -15,6 +15,8 @@ import logging
 import time
 from typing import Any, Dict, List, Optional, Tuple
 
+import sqlite3
+
 from core.database.helpers import downloads as downloads_helpers
 from core.file_classifier import (
     get_extension,
@@ -121,12 +123,26 @@ class DownloadQueryMixin(BaseDataAccess):
                         file_type = DOWNLOADABLE_EXTENSIONS.get(ext)  # None if not downloadable
                         updates.append((ext, file_type, url_id))
 
-                    # Execute batch update
-                    conn.executemany(
-                        "UPDATE urls SET file_extension = ?, file_type = ? WHERE id = ?",
-                        updates
-                    )
-                    conn.commit()
+                    # Execute batch update (retry on lock contention)
+                    try:
+                        conn.executemany(
+                            "UPDATE urls SET file_extension = ?, file_type = ? WHERE id = ?",
+                            updates
+                        )
+                        conn.commit()
+                    except sqlite3.OperationalError as e:
+                        if "database is locked" in str(e):
+                            logger.warning(
+                                "Backfill skipped due to database lock (evidence_id=%d, "
+                                "updated so far: %d) - another worker may be backfilling",
+                                evidence_id, total_updated,
+                            )
+                            try:
+                                conn.rollback()
+                            except Exception:
+                                pass
+                            break
+                        raise
                     total_updated += len(rows)
 
                     logger.debug("Backfilled %d URLs (total: %d)", len(rows), total_updated)

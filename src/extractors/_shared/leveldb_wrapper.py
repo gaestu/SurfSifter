@@ -191,13 +191,40 @@ class LevelDBWrapper:
         Iterate over all raw LevelDB records.
 
         Yields raw key-value pairs for scanning (useful for Sync Data, Extensions).
+        Handles invalid KeyState values (e.g., 114 in old CefSharp WAL files)
+        by stopping iteration gracefully rather than crashing.
 
         Yields:
             LevelDBRecord with raw key, value, sequence number
         """
         db = self._open_db()
+        iterator = db.iterate_records_raw()
 
-        for record in db.iterate_records_raw():
+        while True:
+            # Fetch the next record from the generator.
+            # ValueError can occur when ccl_leveldb encounters an invalid
+            # KeyState enum value (e.g., 114 in old/corrupt WAL files).
+            # After such an error the generator is exhausted, so we break.
+            try:
+                record = next(iterator)
+            except StopIteration:
+                break
+            except ValueError as e:
+                self._error_count += 1
+                LOGGER.debug(
+                    "Stopping raw LevelDB iteration — invalid record state "
+                    "(remaining WAL records may be lost): %s",
+                    e,
+                )
+                break
+            except Exception as e:
+                self._error_count += 1
+                if self._error_count <= 10:
+                    LOGGER.warning(
+                        "Error iterating LevelDB records: %s", e,
+                    )
+                break  # Generator is likely exhausted after exception
+
             try:
                 # Check if record is deleted
                 is_deleted = getattr(record, 'state', None) == ccl_leveldb.KeyState.Deleted

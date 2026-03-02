@@ -217,11 +217,13 @@ def extract_url_from_lnk(lnk_data: Dict[str, Any]) -> Optional[str]:
 
     URLs in browser Jump Lists typically appear in:
     1. Pre-extracted from property store during parsing
-    2. Arguments field: "-url http://example.com" or just "http://example.com"
-    3. Target path (rare): when target IS the URL
+    2. DestList path field (e.g., "microsoft-edge:?...&url=https%3A//..." )
+    3. Arguments field: "-url http://example.com" or just "http://example.com"
+    4. Target path (rare): when target IS the URL
 
     Args:
-        lnk_data: Parsed LNK dict with target_path, arguments, url, etc.
+        lnk_data: Parsed LNK dict with target_path, arguments, url,
+                  destlist_path, etc.
 
     Returns:
         Extracted URL or None
@@ -230,6 +232,15 @@ def extract_url_from_lnk(lnk_data: Dict[str, Any]) -> Optional[str]:
     url = lnk_data.get("url")
     if url:
         return url
+
+    # Check DestList path — browser jump lists store URLs here
+    # e.g., "microsoft-edge:?source=windowsfeeds&...&url=https%3A%2F%2Fwww.msn.com%2F..."
+    # or direct "http://example.com" paths
+    destlist_path = lnk_data.get("destlist_path") or ""
+    if destlist_path:
+        extracted = _extract_url_from_destlist_path(destlist_path)
+        if extracted:
+            return extracted
 
     # Check arguments (most common location for browser shortcuts)
     arguments = lnk_data.get("arguments", "") or ""
@@ -244,6 +255,61 @@ def extract_url_from_lnk(lnk_data: Dict[str, Any]) -> Optional[str]:
 
     # Check for URL patterns in target
     urls = URL_PATTERN.findall(target)
+    if urls:
+        return urls[0]
+
+    return None
+
+
+def _extract_url_from_destlist_path(path: str) -> Optional[str]:
+    """
+    Extract URL from a DestList path string.
+
+    Browser jump lists store URLs in the DestList path in various formats:
+    - Direct URL: "http://example.com/page"
+    - Edge protocol: "microsoft-edge:?source=...&url=https%3A%2F%2Fexample.com"
+    - Chrome protocol: similar patterns with chrome: prefix
+    - URL-encoded query params
+
+    Args:
+        path: The DestList path string
+
+    Returns:
+        Extracted and decoded URL, or None
+    """
+    from urllib.parse import unquote, parse_qs, urlparse
+
+    if not path:
+        return None
+
+    # Direct URL
+    if path.startswith(("http://", "https://")):
+        return path
+
+    # Check for URL in query parameters (common for Edge/Chrome protocol URIs)
+    # e.g., "microsoft-edge:?source=...&url=https%3A%2F%2Fwww.msn.com%2F..."
+    if "url=" in path.lower():
+        try:
+            # Find the url= parameter — may be in a protocol URI like microsoft-edge:?...
+            # Strip the protocol prefix to parse as a proper URL
+            query_part = path
+            if "?" in query_part:
+                query_part = query_part.split("?", 1)[1]
+            params = parse_qs(query_part)
+            # Try 'url' key (case-insensitive)
+            for key in params:
+                if key.lower() == "url":
+                    url_val = params[key][0]
+                    # Decode if needed
+                    decoded = unquote(url_val)
+                    if decoded.startswith(("http://", "https://")):
+                        return decoded
+        except Exception:
+            pass
+
+    # Try regex on the decoded string
+    decoded_path = unquote(path)
+    urls = URL_PATTERN.findall(decoded_path)
     if urls:
         return urls[0]
 

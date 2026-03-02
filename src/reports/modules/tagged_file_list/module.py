@@ -54,6 +54,14 @@ class TaggedFileListModule(BaseReportModule):
                 required=False,
             ),
             FilterField(
+                key="custom_title",
+                label="Custom Title",
+                filter_type=FilterType.TEXT,
+                help_text="Optional custom title (e.g., Sample Files)",
+                placeholder="e.g., Sample Files",
+                required=False,
+            ),
+            FilterField(
                 key="limit",
                 label="Limit",
                 filter_type=FilterType.DROPDOWN,
@@ -202,17 +210,22 @@ class TaggedFileListModule(BaseReportModule):
 
         # Extract locale and translations from config
         locale = config.get("_locale", "en")
-        translations = config.get("_translations", {})
+        translations = config.get("_translations") or {}
         date_format = config.get("_date_format", "eu")
 
         # Extract config values
         show_title = config.get("show_title", True)
+        custom_title_raw = config.get("custom_title")
+        custom_title = custom_title_raw.strip() if isinstance(custom_title_raw, str) else ""
         limit = config.get("limit", self.UNLIMITED)
         tag_filter = config.get("tag_filter", self.ALL)
         match_filter = config.get("match_filter", self.ALL)
         include_deleted = config.get("include_deleted", False)
         sort_by = config.get("sort_by", "modified_desc")
         show_filter_info = config.get("show_filter_info", False)
+        module_title = custom_title or translations.get(
+            "tagged_file_list_title", "File List"
+        )
 
         # Build query
         query, params = self._build_query(
@@ -268,6 +281,7 @@ class TaggedFileListModule(BaseReportModule):
             is_truncated=is_truncated,
             show_filter_info=show_filter_info,
             show_title=show_title,
+            module_title=module_title,
             t=translations,
             locale=locale,
         )
@@ -443,6 +457,11 @@ class TaggedFileListModule(BaseReportModule):
         limit = config.get("limit", self.UNLIMITED)
         if limit != self.UNLIMITED:
             parts.append(f"Limit: {limit}")
+
+        custom_title_raw = config.get("custom_title")
+        custom_title = custom_title_raw.strip() if isinstance(custom_title_raw, str) else ""
+        if custom_title:
+            parts.append(f"Title: {custom_title}")
 
         tag = config.get("tag_filter", self.ALL)
         if tag == self.ANY_TAG:

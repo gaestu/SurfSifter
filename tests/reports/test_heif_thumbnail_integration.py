@@ -73,13 +73,15 @@ def test_appendix_image_list_thumbnail_bootstraps_heif(monkeypatch, tmp_path: Pa
     monkeypatch.setattr(appendix_image_list_module, "ensure_pillow_heif_registered", fake_bootstrap)
 
     module = appendix_image_list_module.AppendixImageListModule()
-    thumb_b64 = module._generate_thumbnail(
-        rel_path=str(image_path),
-        discovered_by=None,
-        case_folder=None,
-        evidence_id=1,
-        evidence_label=None,
+
+    # HEIF registration is now called once before the batch, not per-image.
+    # Simulate that by calling it manually and then testing the thumbnail method.
+    fake_bootstrap()
+
+    thumb = module._generate_single_thumbnail(
+        image_path=image_path,
+        cache_path=None,
     )
 
-    assert thumb_b64.startswith("data:image/jpeg;base64,")
+    assert thumb.startswith("data:image/jpeg;base64,")
     assert calls["count"] == 1

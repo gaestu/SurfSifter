@@ -448,17 +448,19 @@ class TestImagesModule:
         assert module is not None
         fields = module.get_filter_fields()
 
-        # Should have 8 filters: title, tag_filter, match_filter, include_filepath, include_url, sort_by, show_filter_info, limit
-        assert len(fields) == 8
+        # Should have 10 filters: title, tag_filter, match_filter, include_filename, include_filepath, include_url, sort_by, show_filter_info, show_image_count, limit
+        assert len(fields) == 10
 
         field_keys = [f.key for f in fields]
         assert "title" in field_keys
         assert "tag_filter" in field_keys
         assert "match_filter" in field_keys
+        assert "include_filename" in field_keys
         assert "include_filepath" in field_keys
         assert "include_url" in field_keys
         assert "sort_by" in field_keys
         assert "show_filter_info" in field_keys
+        assert "show_image_count" in field_keys
         assert "limit" in field_keys
 
     def test_images_module_default_config(self) -> None:

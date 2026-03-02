@@ -1,0 +1,186 @@
+{# Installed Applications Module Template #}
+<div class="module-installed-applications">
+    {% if section_title %}
+    <h3 class="module-title">{{ section_title }}</h3>
+    {% endif %}
+
+    <table class="installed-applications-table">
+        <thead>
+            <tr>
+                <th class="col-name">{{ t.software_name | default('Software Name') }}</th>
+                {% if show_publisher %}
+                <th class="col-publisher">{{ t.publisher | default('Publisher') }}</th>
+                {% endif %}
+                {% if show_version %}
+                <th class="col-version">{{ t.version | default('Version') }}</th>
+                {% endif %}
+                {% if show_install_date %}
+                <th class="col-install-date">{{ t.install_date | default('Install Date') }}</th>
+                {% endif %}
+                {% if show_size %}
+                <th class="col-size">{{ t.size | default('Size') }}</th>
+                {% endif %}
+            </tr>
+        </thead>
+        <tbody>
+            {% for app in applications %}
+            <tr>
+                <td class="col-name">
+                    <span class="software-name">{{ app.name }}</span>
+                    {% if app.install_location %}
+                    <span class="install-location">
+                        {{ t.install_location | default('Install Location') }}: {{ app.install_location }}
+                    </span>
+                    {% endif %}
+                </td>
+                {% if show_publisher %}
+                <td class="col-publisher">{{ app.publisher }}</td>
+                {% endif %}
+                {% if show_version %}
+                <td class="col-version">{{ app.version }}</td>
+                {% endif %}
+                {% if show_install_date %}
+                <td class="col-install-date">{{ app.install_date }}</td>
+                {% endif %}
+                {% if show_size %}
+                <td class="col-size">{{ app.size }}</td>
+                {% endif %}
+            </tr>
+            {% else %}
+            <tr>
+                <td colspan="{{ 1 + (1 if show_publisher else 0) + (1 if show_version else 0) + (1 if show_install_date else 0) + (1 if show_size else 0) }}" class="empty-message">
+                    {{ t.no_installed_applications_found | default('No installed applications found matching the filter criteria.') }}
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+
+    {% if is_truncated %}
+    <p class="truncation-info">
+        {{ t.showing_x_of_y | default('showing {shown} of {total}') | replace('{shown}', shown_count|string) | replace('{total}', total_count|string) }} {{ t.applications | default('applications') }}
+    </p>
+    {% endif %}
+
+    {% if show_filter_info %}
+    <p class="filter-info">
+        <strong>{{ t.filter | default('Filter') }}:</strong> {{ filter_description }}
+        <span class="entry-count">({{ total_count }} {{ t.applications | default('applications') }})</span>
+    </p>
+    {% endif %}
+</div>
+
+<style>
+.module-installed-applications {
+    margin: 1em 0;
+}
+
+.module-installed-applications .module-title {
+    margin: 0 0 0.75em 0;
+    font-size: 1.1em;
+    font-weight: 600;
+    color: #333;
+}
+
+.module-installed-applications .filter-info {
+    margin-bottom: 0.5em;
+    color: #555;
+    font-size: 0.9em;
+}
+
+.module-installed-applications .entry-count {
+    color: #888;
+}
+
+.module-installed-applications .truncation-info {
+    margin-top: 0.75em;
+    margin-bottom: 0.5em;
+    color: #666;
+    font-size: 0.85em;
+    font-style: italic;
+}
+
+.installed-applications-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.85em;
+    table-layout: fixed;
+}
+
+.installed-applications-table th,
+.installed-applications-table td {
+    border: 1px solid #ddd;
+    padding: 6px 8px;
+    text-align: left;
+    vertical-align: top;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.installed-applications-table th {
+    background-color: #f5f5f5;
+    font-weight: 600;
+}
+
+.installed-applications-table tbody tr:nth-child(even) {
+    background-color: #fafafa;
+}
+
+.installed-applications-table tbody tr:hover {
+    background-color: #f0f7ff;
+}
+
+.installed-applications-table .col-name {
+    width: 35%;
+}
+
+.installed-applications-table .col-publisher {
+    width: 20%;
+}
+
+.installed-applications-table .col-version {
+    width: 14%;
+    white-space: nowrap;
+}
+
+.installed-applications-table .col-install-date {
+    width: 14%;
+    white-space: nowrap;
+}
+
+.installed-applications-table .col-size {
+    width: 10%;
+    text-align: right;
+    white-space: nowrap;
+}
+
+.installed-applications-table .software-name {
+    display: block;
+    font-weight: 500;
+    color: #333;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.installed-applications-table .install-location {
+    display: block;
+    margin-top: 2px;
+    font-size: 0.82em;
+    color: #666;
+    word-break: break-all;
+}
+
+.installed-applications-table .empty-message {
+    text-align: center;
+    color: #888;
+    font-style: italic;
+    padding: 2em;
+}
+
+@media print {
+    .installed-applications-table {
+        font-size: 0.8em;
+    }
+}
+</style>

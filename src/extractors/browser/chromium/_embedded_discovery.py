@@ -26,9 +26,11 @@ _SIGNAL_PATH_PATTERNS = [
     "%/History",
     "%/Web Data",
     "%/Preferences",
+    "%/Visited Links",
     "%/Cache/Cache_Data/index",
     "%/Cache/index",
     "%/Local Storage/leveldb/%",
+    "%/Local Storage/%.localstorage",
     "%/Session Storage/%",
 ]
 
@@ -38,6 +40,7 @@ _ARTIFACT_SUFFIXES = {
     "history": ["/history"],
     "web_data": ["/web data"],
     "preferences": ["/preferences"],
+    "visited_links": ["/visited links"],
     "cache": ["/cache/cache_data/index", "/cache/index"],
 }
 
@@ -100,9 +103,14 @@ def _detect_signal(file_path: str, file_name: str) -> Optional[str]:
         return "web_data"
     if any(lower_path.endswith(suffix) for suffix in _ARTIFACT_SUFFIXES["preferences"]):
         return "preferences"
+    if any(lower_path.endswith(suffix) for suffix in _ARTIFACT_SUFFIXES["visited_links"]):
+        return "visited_links"
     if any(lower_path.endswith(suffix) for suffix in _ARTIFACT_SUFFIXES["cache"]):
         return "cache"
     if "/local storage/leveldb/" in lower_path:
+        return "local_storage"
+    # Old CefSharp/CEF format: Local Storage/*.localstorage (SQLite, pre-LevelDB)
+    if "/local storage/" in lower_path and lower_path.endswith(".localstorage"):
         return "local_storage"
     if "/session storage/" in lower_path:
         return "session_storage"
@@ -115,6 +123,8 @@ def _detect_signal(file_path: str, file_name: str) -> Optional[str]:
         return "web_data"
     if lower_name == "preferences":
         return "preferences"
+    if lower_name == "visited links":
+        return "visited_links"
     if lower_name == "index" and ("/cache/" in lower_path or "/leveldb/" in lower_path):
         return "cache"
 
@@ -125,6 +135,17 @@ def _extract_profile_root(file_path: str, signal: str) -> Optional[str]:
     normalized = _normalize_path(file_path)
     lower_path = normalized.lower()
 
+    # Cache signals: extract the directory containing the index file rather
+    # than stripping the full "/cache/index" suffix.  In CefSharp/CEF flat
+    # layouts the blockfile data (data_0 … data_3, index, f_*) lives
+    # directly inside the profile root which may itself be called "cache".
+    # Stripping only "/index" ensures the derived root matches the same
+    # directory where Cookies / Visited Links reside.
+    if signal == "cache":
+        if lower_path.endswith("/index"):
+            return normalized[: -len("/index")].rstrip("/")
+        return None
+
     if signal in _ARTIFACT_SUFFIXES:
         for suffix in _ARTIFACT_SUFFIXES[signal]:
             if lower_path.endswith(suffix):
@@ -133,6 +154,11 @@ def _extract_profile_root(file_path: str, signal: str) -> Optional[str]:
     if signal == "local_storage":
         marker = "/local storage/leveldb/"
         idx = lower_path.find(marker)
+        if idx >= 0:
+            return normalized[:idx].rstrip("/")
+        # Old CefSharp/CEF format: Local Storage/*.localstorage
+        marker_old = "/local storage/"
+        idx = lower_path.find(marker_old)
         if idx >= 0:
             return normalized[:idx].rstrip("/")
 

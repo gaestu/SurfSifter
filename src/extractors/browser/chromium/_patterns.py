@@ -355,6 +355,9 @@ CHROMIUM_ARTIFACTS: Dict[str, List[str]] = {
     ],
     "local_storage": [
         "Local Storage/leveldb",
+        # Old-format .localstorage SQLite files (pre-LevelDB CefSharp/CEF)
+        # live directly under Local Storage/, not in a leveldb/ subdirectory
+        "Local Storage",
     ],
     "session_storage": [
         "Session Storage",
@@ -385,6 +388,10 @@ CHROMIUM_ARTIFACTS: Dict[str, List[str]] = {
         "Cache/Cache_Data",
         # Legacy Blockfile format (Cache/)
         "Cache",
+        # Application Cache (HTML5 AppCache, removed in Chrome 93/2021)
+        # Contains a SQLite Index with URLs and a blockfile sub-cache
+        "Application Cache/Cache",
+        "Application Cache/Index",
     ],
 }
 

@@ -116,7 +116,7 @@ def carve_and_hash_image(
 def carve_blockfile_image(
     body: bytes,
     fmt: str,
-    entry: "BlockfileCacheEntry",
+    entry: Optional["BlockfileCacheEntry"],
     extraction_dir: Path,
     run_id: str,
 ) -> Optional[Dict[str, Any]]:
@@ -126,7 +126,7 @@ def carve_blockfile_image(
     Args:
         body: Decompressed body bytes
         fmt: Detected image format
-        entry: Blockfile cache entry
+        entry: Blockfile cache entry (may be None for orphan carving)
         extraction_dir: Base extraction directory
         run_id: Run ID for output path
 

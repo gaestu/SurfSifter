@@ -40,13 +40,15 @@
                 color: #666;
             }
 
+            {% if show_footer_date %}
             @bottom-right {
                 content: "{{ t.generated | default('Generated') }}: {{ author_date_formatted | default('') }}";
                 font-family: Arial, 'Helvetica Neue', Helvetica, sans-serif;
                 font-size: 8pt;
                 color: #999;
             }
-            
+            {% endif %}
+
             {% if branding_footer_text %}
             @bottom-left {
                 content: "{{ branding_footer_text }}";
@@ -55,11 +57,23 @@
                 color: #666;
             }
             {% endif %}
+
+            {% if footer_evidence_label %}
+            @top-right {
+                content: "{{ footer_evidence_label }}";
+                font-family: Arial, 'Helvetica Neue', Helvetica, sans-serif;
+                font-size: 9pt;
+                color: #666;
+            }
+            {% endif %}
         }
 
-        /* First page (title page) - no header */
+        /* First page (title page) - no header/footer decorations */
         @page :first {
             @top-left {
+                content: none;
+            }
+            @top-right {
                 content: none;
             }
         }
@@ -69,25 +83,55 @@
             page-break-after: always;
             display: flex;
             flex-direction: column;
-            justify-content: center;
             min-height: 80vh;
-            text-align: center;
-            padding: 2cm;
+            /* Keep title page aligned to normal page margins (from @page) */
+            padding: 0 0 0.5cm 0;
         }
 
-        .title-page .branding-logo {
+        /* Title page header: logo left, org/dept right */
+        .title-page-header {
+            position: relative;
+            top: -0.9cm;
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-start;
+            width: 100%;
+            margin-bottom: 5cm;
+        }
+
+        .title-page-header .branding-logo {
             max-width: 200px;
             max-height: 100px;
-            margin-bottom: 1cm;
         }
 
-        .title-page .branding-org-name {
+        .title-page-header .branding-info {
+            text-align: right;
+        }
+
+        .title-page-header .branding-org-name {
             font-size: 14pt;
-            color: #555;
-            margin-bottom: 1cm;
+            font-weight: 700;
+            color: #333;
         }
 
-        .title-page h1 {
+        .title-page-header .branding-department {
+            font-size: 12pt;
+            font-weight: 400;
+            color: #555;
+            margin-top: 0.15cm;
+        }
+
+        /* Title and metadata centered */
+        .title-page-body {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            justify-content: flex-start;
+            padding-top: 0.8cm;
+            text-align: center;
+        }
+
+        .title-page-body h1 {
             font-size: 30pt;
             font-weight: 800;
             color: #1a1a1a;
@@ -97,18 +141,29 @@
             letter-spacing: 0.2pt;
         }
 
-        .title-page .metadata {
+        .title-page-body .metadata {
             margin-top: 2cm;
             font-size: 12pt;
             color: #555;
         }
 
-        .title-page .metadata p {
+        .title-page-body .metadata p {
             margin: 0.3cm 0;
         }
 
-        .title-page .metadata strong {
+        .title-page-body .metadata strong {
             color: #333;
+        }
+
+        /* Legacy classes kept for backward compat */
+        .title-page .branding-logo {
+            max-width: 200px;
+            max-height: 100px;
+        }
+
+        .title-page .branding-org-name {
+            font-size: 14pt;
+            color: #555;
         }
 
         /* ===== Table of Contents ===== */
@@ -391,36 +446,48 @@
 <body>
     <!-- ===== Title Page ===== -->
     <div class="title-page">
-        {% if branding_logo_path %}
-        <img src="{{ branding_logo_path }}" class="branding-logo" alt="Logo">
-        {% endif %}
+        <!-- Header: Logo (left) + Org/Department (right) -->
+        <div class="title-page-header">
+            <div>
+                {% if branding_logo_path %}
+                <img src="{{ branding_logo_path }}" class="branding-logo" alt="Logo">
+                {% endif %}
+            </div>
+            <div class="branding-info">
+                {% if branding_org_name %}
+                <div class="branding-org-name">{{ branding_org_name }}</div>
+                {% endif %}
+                {% if branding_department %}
+                <div class="branding-department">{{ branding_department }}</div>
+                {% endif %}
+            </div>
+        </div>
         
-        {% if branding_org_name %}
-        <p class="branding-org-name">{{ branding_org_name }}</p>
-        {% endif %}
-        
-        <h1>{{ report_title }}</h1>
-        
-        <div class="metadata">
-            {% if case_number %}
-            <p><strong>{{ t.case_number | default('Case Number') }}:</strong> {{ case_number }}</p>
-            {% endif %}
+        <!-- Centered title and metadata -->
+        <div class="title-page-body">
+            <h1>{{ report_title }}</h1>
             
-            {% if evidence_label %}
-            <p><strong>{{ t.evidence | default('Evidence') }}:</strong> {{ evidence_label }}</p>
-            {% endif %}
-            
-            {% if investigator %}
-            <p><strong>{{ t.investigator | default('Investigator') }}:</strong> {{ investigator }}</p>
-            {% endif %}
-            
-            {% if author_date_formatted %}
-            <p><strong>{{ t.date | default('Date') }}:</strong> {{ author_date_formatted }}</p>
-            {% endif %}
-            
-            {% if notes %}
-            <p><strong>{{ t.notes | default('Notes') }}:</strong> {{ notes }}</p>
-            {% endif %}
+            <div class="metadata">
+                {% if show_title_case_number and case_number %}
+                <p><strong>{{ t.case_number | default('Case Number') }}:</strong> {{ case_number }}</p>
+                {% endif %}
+                
+                {% if show_title_evidence and evidence_label %}
+                <p><strong>{{ t.evidence | default('Evidence') }}:</strong> {{ evidence_label }}</p>
+                {% endif %}
+                
+                {% if show_title_investigator and investigator %}
+                <p><strong>{{ t.investigator | default('Investigator') }}:</strong> {{ investigator }}</p>
+                {% endif %}
+                
+                {% if show_title_date and author_date_formatted %}
+                <p><strong>{{ t.date | default('Date') }}:</strong> {{ author_date_formatted }}</p>
+                {% endif %}
+                
+                {% if notes %}
+                <p><strong>{{ t.notes | default('Notes') }}:</strong> {{ notes }}</p>
+                {% endif %}
+            </div>
         </div>
     </div>
 
@@ -436,7 +503,7 @@
                 <td class="toc-page-num" href="#section-{{ loop.index }}"></td>
             </tr>
             {% endfor %}
-            {% if appendix_modules %}
+            {% if render_appendix and appendix_modules %}
             <tr>
                 <td class="toc-title"><a href="#appendix">{{ (sections | length) + 1 }}. {{ t.appendix | default('Appendix') }}</a></td>
                 <td class="toc-dots"></td>
@@ -506,7 +573,7 @@
     </div>
     {% endif %}
 
-    {% if appendix_modules %}
+    {% if render_appendix and appendix_modules %}
     <!-- ===== Appendix Section ===== -->
     <div class="report-section appendix-section" id="appendix">
         <div class="section-header">

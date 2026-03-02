@@ -68,6 +68,7 @@ class ImagesTableModel(QAbstractTableModel):
             "sources": None,
             "extension": None,
             "hash_match": None,
+            "url_text": None,
             "min_size_bytes": None,
             "max_size_bytes": None,
         }
@@ -264,6 +265,7 @@ class ImagesTableModel(QAbstractTableModel):
         sources: Optional[Tuple[str, ...]] = None,
         extension: Optional[str] = None,
         hash_match: Optional[str] = None,
+        url_text: Optional[str] = None,
         min_size_bytes: Optional[int] = None,
         max_size_bytes: Optional[int] = None,
     ) -> None:
@@ -275,6 +277,8 @@ class ImagesTableModel(QAbstractTableModel):
             self._filters["extension"] = extension if extension else None
         if hash_match is not None:
             self._filters["hash_match"] = hash_match if hash_match else None
+        if url_text is not None:
+            self._filters["url_text"] = url_text if url_text else None
         if min_size_bytes is not None or max_size_bytes is not None:
             self._filters["min_size_bytes"] = min_size_bytes
             self._filters["max_size_bytes"] = max_size_bytes
@@ -300,6 +304,7 @@ class ImagesTableModel(QAbstractTableModel):
             discovered_by=self._filters["sources"],
             extension=self._filters.get("extension"),
             hash_match=self._filters.get("hash_match"),
+            url_text=self._filters.get("url_text"),
             min_size_bytes=self._filters.get("min_size_bytes"),
             max_size_bytes=self._filters.get("max_size_bytes"),
             limit=self.page_size,

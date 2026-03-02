@@ -25,6 +25,7 @@ Usage:
 
 from __future__ import annotations
 
+import enum
 import logging
 import sqlite3
 import tempfile
@@ -32,7 +33,7 @@ import webbrowser
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from jinja2 import Environment, FileSystemLoader
 
@@ -47,6 +48,17 @@ logger = logging.getLogger(__name__)
 
 # Template directory
 TEMPLATES_DIR = get_templates_dir()
+
+
+class ReportMode(enum.Enum):
+    """Report generation mode.
+
+    Controls which parts of the report are rendered and output as PDF.
+    """
+
+    COMPLETE = "complete"       # Both report and appendix (two separate PDFs)
+    REPORT_ONLY = "report_only" # Report sections + author signature only
+    APPENDIX_ONLY = "appendix_only"  # Appendix content only
 
 
 @dataclass
@@ -79,8 +91,19 @@ class ReportData:
     date_format: str = "eu"  # "eu" for dd.mm.yyyy, "us" for mm/dd/yyyy
     # Branding fields
     branding_org_name: Optional[str] = None
+    branding_department: Optional[str] = None
     branding_footer_text: Optional[str] = None
     branding_logo_path: Optional[str] = None
+    # Title page field visibility
+    show_title_case_number: bool = True
+    show_title_evidence: bool = True
+    show_title_investigator: bool = True
+    show_title_date: bool = True
+    # Footer options
+    show_footer_date: bool = True
+    footer_evidence_label: Optional[str] = None  # Override evidence label in footer
+    # Appendix options
+    hide_appendix_page_numbers: bool = False
 
     def __post_init__(self):
         if not self.generation_date:
@@ -146,13 +169,15 @@ class ReportBuilder:
     def set_branding(
         self,
         org_name: Optional[str] = None,
+        department: Optional[str] = None,
         footer_text: Optional[str] = None,
         logo_path: Optional[str] = None,
     ) -> "ReportBuilder":
         """Set branding fields for the report.
 
         Args:
-            org_name: Organization name (displayed on title page)
+            org_name: Organization name (displayed on title page, bold)
+            department: Department name (displayed on title page below org, not bold)
             footer_text: Footer text (displayed on all pages)
             logo_path: Path to logo image file
 
@@ -161,10 +186,70 @@ class ReportBuilder:
         """
         if org_name is not None:
             self._data.branding_org_name = org_name
+        if department is not None:
+            self._data.branding_department = department
         if footer_text is not None:
             self._data.branding_footer_text = footer_text
         if logo_path is not None:
             self._data.branding_logo_path = logo_path
+        return self
+
+    def set_title_page_options(
+        self,
+        show_case_number: bool = True,
+        show_evidence: bool = True,
+        show_investigator: bool = True,
+        show_date: bool = True,
+    ) -> "ReportBuilder":
+        """Set which metadata fields appear on the title page.
+
+        Args:
+            show_case_number: Show case number on title page
+            show_evidence: Show evidence label on title page
+            show_investigator: Show investigator on title page
+            show_date: Show date on title page
+
+        Returns:
+            self for method chaining
+        """
+        self._data.show_title_case_number = show_case_number
+        self._data.show_title_evidence = show_evidence
+        self._data.show_title_investigator = show_investigator
+        self._data.show_title_date = show_date
+        return self
+
+    def set_footer_options(
+        self,
+        show_footer_date: bool = True,
+        footer_evidence_label: Optional[str] = None,
+    ) -> "ReportBuilder":
+        """Set footer display options.
+
+        Args:
+            show_footer_date: Whether to show the generation date in the footer
+            footer_evidence_label: Custom evidence label for footer (overrides default)
+
+        Returns:
+            self for method chaining
+        """
+        self._data.show_footer_date = show_footer_date
+        if footer_evidence_label is not None:
+            self._data.footer_evidence_label = footer_evidence_label
+        return self
+
+    def set_appendix_options(
+        self,
+        hide_page_numbers: bool = False,
+    ) -> "ReportBuilder":
+        """Set appendix display options.
+
+        Args:
+            hide_page_numbers: Hide page numbers on appendix pages
+
+        Returns:
+            self for method chaining
+        """
+        self._data.hide_appendix_page_numbers = hide_page_numbers
         return self
 
     def set_date_format(self, date_format: str) -> "ReportBuilder":
@@ -360,8 +445,18 @@ class ReportBuilder:
 
         return self
 
-    def load_appendix_from_db(self) -> "ReportBuilder":
+    def load_appendix_from_db(
+        self,
+        progress_callback: Optional[callable] = None,
+        cancelled_fn: Optional[callable] = None,
+    ) -> "ReportBuilder":
         """Load appendix modules from the database.
+
+        Args:
+            progress_callback: Optional ``(percent, message)`` callable for
+                reporting progress to the caller.
+            cancelled_fn: Optional callable returning ``True`` when the
+                operation should be aborted.
 
         Returns:
             self for method chaining
@@ -369,7 +464,8 @@ class ReportBuilder:
         self._data.appendix_modules.clear()
 
         modules = get_appendix_modules(self._db_conn, self._evidence_id)
-        for mod in modules:
+        total = len(modules) or 1
+        for idx, mod in enumerate(modules):
             module_id = mod.get("module_id", "")
             config = mod.get("config", {})
             title = (mod.get("title") or "").strip()
@@ -383,6 +479,16 @@ class ReportBuilder:
             render_config["_locale"] = self._locale
             render_config["_translations"] = self._translations
             render_config["_date_format"] = self._data.date_format
+            # Forward progress / cancellation hooks to modules
+            if progress_callback is not None:
+                render_config["_progress_callback"] = progress_callback
+            if cancelled_fn is not None:
+                render_config["_cancelled_fn"] = cancelled_fn
+
+            # Check for cancellation between modules
+            if cancelled_fn and cancelled_fn():
+                logger.info("Appendix build cancelled by user")
+                break
 
             module_instance = self._appendix_registry.get_module(module_id)
             if module_instance is not None:
@@ -422,6 +528,11 @@ class ReportBuilder:
                     }
                 )
 
+            # Report per-module progress
+            if progress_callback:
+                pct = int(80 * (idx + 1) / total)
+                progress_callback(pct, f"Rendered appendix module: {title or module_id}")
+
         return self
 
     def add_section(
@@ -447,11 +558,48 @@ class ReportBuilder:
         ))
         return self
 
-    def render_html(self) -> str:
-        """Render the report to HTML.
+    def _get_common_template_context(self) -> Dict[str, Any]:
+        """Build the template context dict shared by report and appendix templates.
 
         Returns:
-            Complete HTML string
+            Dict of Jinja2 template variables
+        """
+        return {
+            # Translations
+            "t": self._translations,
+            "locale": self._locale,
+            # Report metadata
+            "report_title": self._data.title,
+            "case_number": self._data.case_number,
+            "evidence_label": self._data.evidence_label,
+            "investigator": self._data.investigator,
+            "notes": self._data.notes,
+            "generation_date": self._data.generation_date,
+            "author_date_formatted": self._format_author_date(),
+            # Branding
+            "branding_org_name": self._data.branding_org_name,
+            "branding_department": self._data.branding_department,
+            "branding_footer_text": self._data.branding_footer_text,
+            "branding_logo_path": self._data.branding_logo_path,
+            # Title page field visibility
+            "show_title_case_number": self._data.show_title_case_number,
+            "show_title_evidence": self._data.show_title_evidence,
+            "show_title_investigator": self._data.show_title_investigator,
+            "show_title_date": self._data.show_title_date,
+            # Footer options
+            "show_footer_date": self._data.show_footer_date,
+            "footer_evidence_label": self._data.footer_evidence_label,
+        }
+
+    def render_report_html(self, include_appendix: bool = False) -> str:
+        """Render the main report (sections + author signature) to HTML.
+
+        Args:
+            include_appendix: If True, include the appendix section in the
+                report document (legacy/complete-in-one-doc behaviour).
+
+        Returns:
+            Complete HTML string for the report document
         """
         template = self._env.get_template(self._template_name)
 
@@ -464,28 +612,56 @@ class ReportBuilder:
                 "modules": section.modules,
             })
 
-        return template.render(
-            # Translations
-            t=self._translations,
-            locale=self._locale,
-            # Report metadata
-            report_title=self._data.title,
-            case_number=self._data.case_number,
-            evidence_label=self._data.evidence_label,
-            investigator=self._data.investigator,
-            notes=self._data.notes,
-            generation_date=self._data.generation_date,
-            sections=sections_data,
-            appendix_modules=self._data.appendix_modules,
-            author_function=self._data.author_function,
-            author_name=self._data.author_name,
-            author_date=self._data.author_date,
-            author_date_formatted=self._format_author_date(),
-            # Branding
-            branding_org_name=self._data.branding_org_name,
-            branding_footer_text=self._data.branding_footer_text,
-            branding_logo_path=self._data.branding_logo_path,
-        )
+        ctx = self._get_common_template_context()
+        ctx.update({
+            "sections": sections_data,
+            "appendix_modules": self._data.appendix_modules,
+            "author_function": self._data.author_function,
+            "author_name": self._data.author_name,
+            "author_date": self._data.author_date,
+            # Control whether the appendix block is rendered inside this document
+            "render_appendix": include_appendix,
+        })
+        return template.render(**ctx)
+
+    def render_appendix_html(self) -> str:
+        """Render the appendix as a standalone HTML document.
+
+        The appendix document has its own title page, TOC, and page numbering
+        starting at 1 with the format "Appendix — Page X of Y".
+
+        Returns:
+            Complete HTML string for the appendix document
+        """
+        template = self._env.get_template("appendix_report.html")
+
+        ctx = self._get_common_template_context()
+        ctx.update({
+            "appendix_modules": self._data.appendix_modules,
+        })
+        return template.render(**ctx)
+
+    def render_html(self, mode: ReportMode = ReportMode.REPORT_ONLY) -> str | Tuple[str, str]:
+        """Render the report to HTML in the specified mode.
+
+        Args:
+            mode: Which parts to render.
+                - REPORT_ONLY: report sections + author signature (no appendix)
+                - APPENDIX_ONLY: standalone appendix document
+                - COMPLETE: returns a tuple of (report_html, appendix_html)
+
+        Returns:
+            For REPORT_ONLY / APPENDIX_ONLY: a single HTML string.
+            For COMPLETE: a tuple ``(report_html, appendix_html)``.
+        """
+        if mode == ReportMode.REPORT_ONLY:
+            return self.render_report_html(include_appendix=False)
+        elif mode == ReportMode.APPENDIX_ONLY:
+            return self.render_appendix_html()
+        else:  # COMPLETE
+            report_html = self.render_report_html(include_appendix=False)
+            appendix_html = self.render_appendix_html()
+            return (report_html, appendix_html)
 
     def get_data(self) -> ReportData:
         """Get the current report data.
@@ -556,6 +732,31 @@ class ReportGenerator:
             logger.error(f"Failed to generate PDF: {e}")
             raise
 
+    def generate_pdf_pair(
+        self,
+        report_html: str,
+        appendix_html: str,
+        report_path: Path | str,
+        appendix_path: Path | str,
+    ) -> Tuple[bool, bool]:
+        """Generate both report and appendix PDFs.
+
+        Args:
+            report_html: HTML for the report document
+            appendix_html: HTML for the appendix document
+            report_path: Output path for report PDF
+            appendix_path: Output path for appendix PDF
+
+        Returns:
+            Tuple of (report_success, appendix_success)
+
+        Raises:
+            ImportError: If WeasyPrint is not available
+        """
+        report_ok = self.generate_pdf(report_html, report_path)
+        appendix_ok = self.generate_pdf(appendix_html, appendix_path)
+        return (report_ok, appendix_ok)
+
     def preview_in_browser(self, html_content: str) -> Path:
         """Open HTML preview in the default web browser.
 
@@ -593,8 +794,9 @@ def build_report(
     case_number: Optional[str] = None,
     evidence_label: Optional[str] = None,
     investigator: Optional[str] = None,
-) -> str:
-    """Convenience function to build a complete report HTML.
+    mode: ReportMode = ReportMode.REPORT_ONLY,
+) -> str | Tuple[str, str]:
+    """Convenience function to build report HTML.
 
     Args:
         db_conn: SQLite connection to evidence database
@@ -603,9 +805,11 @@ def build_report(
         case_number: Case identifier
         evidence_label: Evidence label
         investigator: Investigator name
+        mode: Report generation mode
 
     Returns:
-        Complete HTML string
+        For REPORT_ONLY / APPENDIX_ONLY: a single HTML string.
+        For COMPLETE: a tuple ``(report_html, appendix_html)``.
     """
     builder = ReportBuilder(db_conn, evidence_id)
     builder.set_title(title)
@@ -615,5 +819,6 @@ def build_report(
         investigator=investigator,
     )
     builder.load_sections_from_db()
-    builder.load_appendix_from_db()
-    return builder.render_html()
+    if mode != ReportMode.REPORT_ONLY:
+        builder.load_appendix_from_db()
+    return builder.render_html(mode)

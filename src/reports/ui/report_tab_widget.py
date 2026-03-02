@@ -23,9 +23,12 @@ from PySide6.QtWidgets import (
     QListWidget,
     QListWidgetItem,
     QComboBox,
+    QCheckBox,
     QSizePolicy,
+    QProgressDialog,
 )
-from PySide6.QtCore import Qt, QDate, Signal
+from PySide6.QtCore import Qt, QDate, QUrl, Signal, QThreadPool
+from PySide6.QtGui import QDesktopServices
 
 from .collapsible_group import CollapsibleGroupBox
 from .section_editor import SectionEditorDialog
@@ -55,7 +58,7 @@ from ..database import (
     get_report_settings,
     save_report_settings,
 )
-from ..generator import ReportBuilder, ReportGenerator
+from ..generator import ReportBuilder, ReportGenerator, ReportMode
 from ..appendix import AppendixRegistry
 
 
@@ -98,33 +101,27 @@ class ReportTabWidget(QWidget):
         self._connect_auto_save_signals()
 
     def _setup_ui(self) -> None:
-        """Setup the report tab UI."""
+        """Setup the report tab UI.
+
+        Three sections:
+        1. Report Settings (collapsible) — title, language, branding, author
+        2. Custom Sections (not collapsible) — main work area
+        3. Appendix (collapsible) — appendix modules
+        """
         layout = QVBoxLayout(self)
         layout.setContentsMargins(16, 16, 16, 16)
         layout.setSpacing(8)
 
-        # Title section (collapsible)
-        self._title_group = CollapsibleGroupBox("Report Title", collapsed=False)
-        self._build_title_section(self._title_group.content_layout())
-        self._title_group.collapsed_changed.connect(self._on_collapse_changed)
-        layout.addWidget(self._title_group)
+        # Report Settings section (collapsible, expanded by default)
+        self._settings_group = CollapsibleGroupBox("Report Settings", collapsed=False)
+        self._build_settings_section(self._settings_group.content_layout())
+        self._settings_group.collapsed_changed.connect(self._on_collapse_changed)
+        layout.addWidget(self._settings_group)
 
         # Custom sections area (NOT collapsible - main work area)
         sections_group = self._build_sections_area()
         sections_group.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         layout.addWidget(sections_group, 1)  # Give it stretch
-
-        # Author/signature section (collapsible, collapsed by default)
-        self._author_group = CollapsibleGroupBox("Report Created By", collapsed=True)
-        self._build_author_section(self._author_group.content_layout())
-        self._author_group.collapsed_changed.connect(self._on_collapse_changed)
-        layout.addWidget(self._author_group)
-
-        # Branding section (collapsible, collapsed by default)
-        self._branding_group = CollapsibleGroupBox("Branding (Optional)", collapsed=True)
-        self._build_branding_section(self._branding_group.content_layout())
-        self._branding_group.collapsed_changed.connect(self._on_collapse_changed)
-        layout.addWidget(self._branding_group)
 
         # Appendix section (collapsible, collapsed by default)
         self._appendix_group = CollapsibleGroupBox("Appendix", collapsed=True)
@@ -136,18 +133,40 @@ class ReportTabWidget(QWidget):
         buttons_layout = self._build_generation_buttons()
         layout.addLayout(buttons_layout)
 
-    def _build_title_section(self, group_layout: QVBoxLayout) -> None:
-        """Build the report title input section with language selector.
+    def _make_sub_heading(self, text: str) -> QLabel:
+        """Create a styled sub-heading label for section groups."""
+        label = QLabel(text)
+        label.setStyleSheet("font-weight: 600; font-size: 10pt; margin-top: 4px;")
+        return label
+
+    def _make_separator(self) -> QFrame:
+        """Create a horizontal separator line."""
+        sep = QFrame()
+        sep.setFrameShape(QFrame.HLine)
+        sep.setFrameShadow(QFrame.Sunken)
+        return sep
+
+    def _build_settings_section(self, group_layout: QVBoxLayout) -> None:
+        """Build the unified report settings section.
+
+        Contains sub-groups separated by horizontal lines:
+        - Title & Language
+        - Branding (org, department, logo, footer)
+        - Report Created By (author info)
+        - Options (title page field visibility, footer/appendix toggles)
 
         Args:
             group_layout: Layout to add widgets to
         """
         group_layout.setSpacing(8)
 
+        # ── Title & Language ──
+        group_layout.addWidget(self._make_sub_heading("Title & Language"))
+
         # Title row
         title_row = QHBoxLayout()
         label = QLabel("Title:")
-        label.setFixedWidth(70)
+        label.setFixedWidth(90)
         title_row.addWidget(label)
 
         self._title_input = QLineEdit()
@@ -158,14 +177,13 @@ class ReportTabWidget(QWidget):
         # Language row
         lang_row = QHBoxLayout()
         lang_label = QLabel("Language:")
-        lang_label.setFixedWidth(70)
+        lang_label.setFixedWidth(90)
         lang_row.addWidget(lang_label)
 
         self._locale_combo = QComboBox()
         for locale_code in SUPPORTED_LOCALES:
             display_name = LOCALE_NAMES.get(locale_code, locale_code)
             self._locale_combo.addItem(display_name, locale_code)
-        # Set default locale
         default_index = self._locale_combo.findData(DEFAULT_LOCALE)
         if default_index >= 0:
             self._locale_combo.setCurrentIndex(default_index)
@@ -178,13 +196,12 @@ class ReportTabWidget(QWidget):
         # Date format row
         date_fmt_row = QHBoxLayout()
         date_fmt_label = QLabel("Date Format:")
-        date_fmt_label.setFixedWidth(70)
+        date_fmt_label.setFixedWidth(90)
         date_fmt_row.addWidget(date_fmt_label)
 
         self._date_format_combo = QComboBox()
         self._date_format_combo.addItem("European (dd.mm.yyyy)", "eu")
         self._date_format_combo.addItem("US (mm/dd/yyyy)", "us")
-        # Default to European
         self._date_format_combo.setCurrentIndex(0)
         self._date_format_combo.setToolTip("Select date format for report")
         self._date_format_combo.setFixedWidth(150)
@@ -192,58 +209,9 @@ class ReportTabWidget(QWidget):
         date_fmt_row.addStretch()
         group_layout.addLayout(date_fmt_row)
 
-    def _build_author_section(self, group_layout: QVBoxLayout) -> None:
-        """Build the Report Created By section with function, name, and date fields.
-
-        Args:
-            group_layout: Layout to add widgets to
-        """
-        group_layout.setSpacing(8)
-
-        # Function row
-        func_layout = QHBoxLayout()
-        func_label = QLabel("Function:")
-        func_label.setFixedWidth(70)
-        func_layout.addWidget(func_label)
-
-        self._author_function_input = QLineEdit()
-        self._author_function_input.setText("Forensic Analyst")
-        self._author_function_input.setPlaceholderText("e.g., Forensic Analyst")
-        func_layout.addWidget(self._author_function_input)
-        group_layout.addLayout(func_layout)
-
-        # Name row
-        name_layout = QHBoxLayout()
-        name_label = QLabel("Name:")
-        name_label.setFixedWidth(70)
-        name_layout.addWidget(name_label)
-
-        self._author_name_input = QLineEdit()
-        self._author_name_input.setPlaceholderText("Enter name...")
-        name_layout.addWidget(self._author_name_input)
-        group_layout.addLayout(name_layout)
-
-        # Date row
-        date_layout = QHBoxLayout()
-        date_label = QLabel("Date:")
-        date_label.setFixedWidth(70)
-        date_layout.addWidget(date_label)
-
-        self._author_date_input = QDateEdit()
-        self._author_date_input.setDate(QDate.currentDate())
-        self._author_date_input.setCalendarPopup(True)
-        self._author_date_input.setDisplayFormat("dd.MM.yyyy")
-        date_layout.addWidget(self._author_date_input)
-        date_layout.addStretch()  # Don't stretch the date field
-        group_layout.addLayout(date_layout)
-
-    def _build_branding_section(self, group_layout: QVBoxLayout) -> None:
-        """Build the branding options section (org name, footer, logo).
-
-        Args:
-            group_layout: Layout to add widgets to
-        """
-        group_layout.setSpacing(8)
+        # ── Branding ──
+        group_layout.addWidget(self._make_separator())
+        group_layout.addWidget(self._make_sub_heading("Branding"))
 
         # Org name row
         org_layout = QHBoxLayout()
@@ -252,20 +220,20 @@ class ReportTabWidget(QWidget):
         org_layout.addWidget(org_label)
 
         self._branding_org_input = QLineEdit()
-        self._branding_org_input.setPlaceholderText("Organization name (appears on title page)...")
+        self._branding_org_input.setPlaceholderText("Organization name (appears on title page, bold)...")
         org_layout.addWidget(self._branding_org_input)
         group_layout.addLayout(org_layout)
 
-        # Footer text row
-        footer_layout = QHBoxLayout()
-        footer_label = QLabel("Footer Text:")
-        footer_label.setFixedWidth(90)
-        footer_layout.addWidget(footer_label)
+        # Department row
+        dept_layout = QHBoxLayout()
+        dept_label = QLabel("Department:")
+        dept_label.setFixedWidth(90)
+        dept_layout.addWidget(dept_label)
 
-        self._branding_footer_input = QLineEdit()
-        self._branding_footer_input.setPlaceholderText("Custom footer text (appears on all pages)...")
-        footer_layout.addWidget(self._branding_footer_input)
-        group_layout.addLayout(footer_layout)
+        self._branding_dept_input = QLineEdit()
+        self._branding_dept_input.setPlaceholderText("Department name (appears below org, not bold)...")
+        dept_layout.addWidget(self._branding_dept_input)
+        group_layout.addLayout(dept_layout)
 
         # Logo path row
         logo_layout = QHBoxLayout()
@@ -289,6 +257,105 @@ class ReportTabWidget(QWidget):
         logo_layout.addWidget(self._branding_logo_clear_btn)
 
         group_layout.addLayout(logo_layout)
+
+        # Footer text row
+        footer_layout = QHBoxLayout()
+        footer_label = QLabel("Footer Text:")
+        footer_label.setFixedWidth(90)
+        footer_layout.addWidget(footer_label)
+
+        self._branding_footer_input = QLineEdit()
+        self._branding_footer_input.setPlaceholderText("Custom footer text (appears on all pages)...")
+        footer_layout.addWidget(self._branding_footer_input)
+        group_layout.addLayout(footer_layout)
+
+        # ── Report Created By ──
+        group_layout.addWidget(self._make_separator())
+        group_layout.addWidget(self._make_sub_heading("Report Created By"))
+
+        # Function row
+        func_layout = QHBoxLayout()
+        func_label = QLabel("Function:")
+        func_label.setFixedWidth(90)
+        func_layout.addWidget(func_label)
+
+        self._author_function_input = QLineEdit()
+        self._author_function_input.setText("Forensic Analyst")
+        self._author_function_input.setPlaceholderText("e.g., Forensic Analyst")
+        func_layout.addWidget(self._author_function_input)
+        group_layout.addLayout(func_layout)
+
+        # Name row
+        name_layout = QHBoxLayout()
+        name_label = QLabel("Name:")
+        name_label.setFixedWidth(90)
+        name_layout.addWidget(name_label)
+
+        self._author_name_input = QLineEdit()
+        self._author_name_input.setPlaceholderText("Enter name...")
+        name_layout.addWidget(self._author_name_input)
+        group_layout.addLayout(name_layout)
+
+        # Date row
+        date_layout = QHBoxLayout()
+        date_label = QLabel("Date:")
+        date_label.setFixedWidth(90)
+        date_layout.addWidget(date_label)
+
+        self._author_date_input = QDateEdit()
+        self._author_date_input.setDate(QDate.currentDate())
+        self._author_date_input.setCalendarPopup(True)
+        self._author_date_input.setDisplayFormat("dd.MM.yyyy")
+        date_layout.addWidget(self._author_date_input)
+        date_layout.addStretch()
+        group_layout.addLayout(date_layout)
+
+        # ── Options ──
+        group_layout.addWidget(self._make_separator())
+        group_layout.addWidget(self._make_sub_heading("Options"))
+
+        # Title page field visibility
+        tp_label = QLabel("Title Page Fields:")
+        tp_label.setStyleSheet("color: palette(mid); margin-left: 2px;")
+        group_layout.addWidget(tp_label)
+
+        tp_row = QHBoxLayout()
+        self._show_case_number_cb = QCheckBox("Case Number")
+        self._show_case_number_cb.setChecked(True)
+        tp_row.addWidget(self._show_case_number_cb)
+
+        self._show_evidence_cb = QCheckBox("Evidence")
+        self._show_evidence_cb.setChecked(True)
+        tp_row.addWidget(self._show_evidence_cb)
+
+        self._show_investigator_cb = QCheckBox("Investigator")
+        self._show_investigator_cb.setChecked(True)
+        tp_row.addWidget(self._show_investigator_cb)
+
+        self._show_date_cb = QCheckBox("Date")
+        self._show_date_cb.setChecked(True)
+        tp_row.addWidget(self._show_date_cb)
+        tp_row.addStretch()
+        group_layout.addLayout(tp_row)
+
+        # Footer options
+        opts_row = QHBoxLayout()
+        self._show_footer_date_cb = QCheckBox("Show creation date in footer")
+        self._show_footer_date_cb.setChecked(True)
+        opts_row.addWidget(self._show_footer_date_cb)
+        opts_row.addStretch()
+        group_layout.addLayout(opts_row)
+
+        # Footer evidence label override
+        ev_layout = QHBoxLayout()
+        ev_label = QLabel("Evidence label\n(header):")
+        ev_label.setFixedWidth(90)
+        ev_layout.addWidget(ev_label)
+
+        self._footer_evidence_input = QLineEdit()
+        self._footer_evidence_input.setPlaceholderText("Override evidence label in page header (optional)...")
+        ev_layout.addWidget(self._footer_evidence_input)
+        group_layout.addLayout(ev_layout)
 
     def _on_browse_logo(self) -> None:
         """Handle logo browse button click - copy logo to workspace."""
@@ -426,7 +493,7 @@ class ReportTabWidget(QWidget):
         self.manage_text_blocks_requested.emit()
 
     def _build_generation_buttons(self) -> QHBoxLayout:
-        """Build the report generation buttons (Preview and Create PDF)."""
+        """Build the report generation buttons (Preview and PDF variants)."""
         layout = QHBoxLayout()
         layout.setSpacing(12)
 
@@ -440,20 +507,61 @@ class ReportTabWidget(QWidget):
         self._preview_btn.clicked.connect(self._on_preview)
         layout.addWidget(self._preview_btn)
 
-        # Create PDF button
-        self._create_pdf_btn = QPushButton("📄 Create PDF")
-        self._create_pdf_btn.setToolTip("Generate PDF report")
-        self._create_pdf_btn.setMinimumWidth(120)
-        self._create_pdf_btn.clicked.connect(self._on_create_pdf)
-        layout.addWidget(self._create_pdf_btn)
+        # Report-only PDF button
+        self._create_report_pdf_btn = QPushButton("📄 Report PDF")
+        self._create_report_pdf_btn.setToolTip("Generate report PDF (without appendix)")
+        self._create_report_pdf_btn.setMinimumWidth(120)
+        self._create_report_pdf_btn.clicked.connect(self._on_create_report_pdf)
+        layout.addWidget(self._create_report_pdf_btn)
+
+        # Appendix-only PDF button
+        self._create_appendix_pdf_btn = QPushButton("📎 Appendix PDF")
+        self._create_appendix_pdf_btn.setToolTip("Generate appendix PDF only")
+        self._create_appendix_pdf_btn.setMinimumWidth(120)
+        self._create_appendix_pdf_btn.clicked.connect(self._on_create_appendix_pdf)
+        layout.addWidget(self._create_appendix_pdf_btn)
+
+        # Complete PDF button (both files)
+        self._create_complete_pdf_btn = QPushButton("📄📎 Complete PDF")
+        self._create_complete_pdf_btn.setToolTip(
+            "Generate both report and appendix PDFs"
+        )
+        self._create_complete_pdf_btn.setMinimumWidth(140)
+        self._create_complete_pdf_btn.clicked.connect(self._on_create_complete_pdf)
+        layout.addWidget(self._create_complete_pdf_btn)
 
         return layout
 
-    def _build_report_html(self) -> Optional[str]:
-        """Build the report HTML from current state.
+    def _build_report_html(self, mode: ReportMode = ReportMode.REPORT_ONLY):
+        """Build the report HTML from current state (synchronous, for preview).
+
+        Args:
+            mode: Which parts to render.
 
         Returns:
-            HTML string, or None if report cannot be built
+            For REPORT_ONLY / APPENDIX_ONLY: HTML string, or None on error.
+            For COMPLETE: tuple of (report_html, appendix_html), or None on error.
+        """
+        factory = self._create_builder_factory(mode)
+        if factory is None:
+            return None
+
+        builder = factory()
+
+        # Load data based on mode
+        if mode != ReportMode.APPENDIX_ONLY:
+            builder.load_sections_from_db()
+        if mode != ReportMode.REPORT_ONLY:
+            builder.load_appendix_from_db()
+
+        return builder.render_html(mode)
+
+    def _create_builder_factory(self, mode: ReportMode = ReportMode.REPORT_ONLY):
+        """Return a zero-arg callable that creates a configured ReportBuilder.
+
+        The factory captures all current UI state so it can be called safely
+        from a worker thread.  Returns ``None`` if preconditions fail
+        (missing evidence / title) — error dialogs are shown in that case.
         """
         if self._db_conn is None or self._evidence_id is None:
             QMessageBox.warning(
@@ -472,57 +580,87 @@ class ReportTabWidget(QWidget):
             )
             return None
 
-        # Get selected locale
+        # Snapshot all UI values now (main-thread only)
         locale = self._locale_combo.currentData() or DEFAULT_LOCALE
-
-        # Get selected date format
         date_format = self._date_format_combo.currentData() or "eu"
+        case_number = self._case_number
+        evidence_label = self._evidence_label
+        investigator = self._investigator
+        db_conn = self._db_conn
+        evidence_id = self._evidence_id
+        workspace_path = self._workspace_path
 
-        # Build the report
-        builder = ReportBuilder(
-            self._db_conn,
-            self._evidence_id,
-            case_folder=self._workspace_path,
-            locale=locale,
+        author_function = self._author_function_input.text().strip() or None
+        author_name = self._author_name_input.text().strip() or None
+        author_date = self._author_date_input.date().toString("dd.MM.yyyy") or None
+
+        branding_org = self._branding_org_input.text().strip() or None
+        branding_dept = self._branding_dept_input.text().strip() or None
+        branding_footer = self._branding_footer_input.text().strip() or None
+        branding_logo = self._branding_logo_input.text().strip() or None
+
+        show_case_number = self._show_case_number_cb.isChecked()
+        show_evidence = self._show_evidence_cb.isChecked()
+        show_investigator = self._show_investigator_cb.isChecked()
+        show_date = self._show_date_cb.isChecked()
+
+        show_footer_date = self._show_footer_date_cb.isChecked()
+        footer_ev = self._footer_evidence_input.text().strip() or None
+
+        # Appendix page number option
+        hide_appendix_page_numbers = getattr(
+            self, "_hide_appendix_page_numbers_cb", None
         )
-        builder.set_title(title)
-        builder.set_date_format(date_format)
-        builder.set_case_info(
-            case_number=self._case_number,
-            evidence_label=self._evidence_label,
-            investigator=self._investigator,
-        )
+        if hide_appendix_page_numbers is not None:
+            hide_appendix_page_numbers = hide_appendix_page_numbers.isChecked()
+        else:
+            hide_appendix_page_numbers = False
 
-        # Set author info from UI fields
-        author_function = self._author_function_input.text().strip()
-        author_name = self._author_name_input.text().strip()
-        author_date = self._author_date_input.date().toString("dd.MM.yyyy")
+        def _factory() -> ReportBuilder:
+            builder = ReportBuilder(
+                db_conn,
+                evidence_id,
+                case_folder=workspace_path,
+                locale=locale,
+            )
+            builder.set_title(title)
+            builder.set_date_format(date_format)
+            builder.set_case_info(
+                case_number=case_number,
+                evidence_label=evidence_label,
+                investigator=investigator,
+            )
+            builder.set_author_info(
+                function=author_function,
+                name=author_name,
+                date=author_date,
+            )
+            builder.set_branding(
+                org_name=branding_org,
+                department=branding_dept,
+                footer_text=branding_footer,
+                logo_path=branding_logo,
+            )
+            builder.set_title_page_options(
+                show_case_number=show_case_number,
+                show_evidence=show_evidence,
+                show_investigator=show_investigator,
+                show_date=show_date,
+            )
+            builder.set_footer_options(
+                show_footer_date=show_footer_date,
+                footer_evidence_label=footer_ev,
+            )
+            builder.set_appendix_options(
+                hide_page_numbers=hide_appendix_page_numbers,
+            )
+            return builder
 
-        builder.set_author_info(
-            function=author_function if author_function else None,
-            name=author_name if author_name else None,
-            date=author_date if author_date else None,
-        )
-
-        # Set branding info from UI fields
-        branding_org = self._branding_org_input.text().strip()
-        branding_footer = self._branding_footer_input.text().strip()
-        branding_logo = self._branding_logo_input.text().strip()
-
-        builder.set_branding(
-            org_name=branding_org if branding_org else None,
-            footer_text=branding_footer if branding_footer else None,
-            logo_path=branding_logo if branding_logo else None,
-        )
-
-        builder.load_sections_from_db()
-        builder.load_appendix_from_db()
-
-        return builder.render_html()
+        return _factory
 
     def _on_preview(self) -> None:
         """Handle Preview button click - open report in browser."""
-        html = self._build_report_html()
+        html = self._build_report_html(ReportMode.REPORT_ONLY)
         if html is None:
             return
 
@@ -535,13 +673,14 @@ class ReportTabWidget(QWidget):
                 f"Failed to open preview: {e}"
             )
 
-    def _on_create_pdf(self) -> None:
-        """Handle Create PDF button click - generate and save PDF."""
-        html = self._build_report_html()
-        if html is None:
-            return
+    # ── Helpers for PDF generation ────────────────────────────────────
 
-        # Check if WeasyPrint is available
+    def _check_weasyprint(self) -> bool:
+        """Check WeasyPrint availability and show warning if missing.
+
+        Returns:
+            True if WeasyPrint is available.
+        """
         if not self._generator.can_generate_pdf:
             QMessageBox.warning(
                 self,
@@ -550,53 +689,179 @@ class ReportTabWidget(QWidget):
                 "pip install weasyprint\n\n"
                 "Note: WeasyPrint requires additional system dependencies."
             )
-            return
+            return False
+        return True
 
-        # Build default filename
-        title = self.get_title()
+    def _default_pdf_path(self, suffix: str = "") -> str:
+        """Build a default save path for a PDF file.
+
+        Args:
+            suffix: Optional suffix appended before the timestamp
+                    (e.g. ``"_Appendix"``).
+
+        Returns:
+            Absolute path string (or bare filename when no workspace).
+        """
+        title = self.get_title() or "Report"
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        safe_title = "".join(c if c.isalnum() or c in " -_" else "_" for c in title)
-        safe_title = safe_title.replace(" ", "_")
-        default_filename = f"{safe_title}_{timestamp}.pdf"
+        safe_title = "".join(
+            c if c.isalnum() or c in " -_" else "_" for c in title
+        ).replace(" ", "_")
+        filename = f"{safe_title}{suffix}_{timestamp}.pdf"
 
-        # Determine default directory
-        default_dir = ""
         if self._workspace_path:
             reports_dir = self._workspace_path / "reports"
             reports_dir.mkdir(exist_ok=True)
-            default_dir = str(reports_dir / default_filename)
-        else:
-            default_dir = default_filename
+            return str(reports_dir / filename)
+        return filename
 
-        # Ask user where to save
+    def _ask_save_path(self, dialog_title: str, default_path: str) -> Optional[str]:
+        """Show a save-file dialog and return the chosen path.
+
+        Returns:
+            Chosen file path with ``.pdf`` extension, or ``None`` if cancelled.
+        """
         file_path, _ = QFileDialog.getSaveFileName(
             self,
-            "Save PDF Report",
-            default_dir,
+            dialog_title,
+            default_path,
             "PDF Files (*.pdf);;All Files (*)",
         )
-
         if not file_path:
-            # User cancelled
-            return
-
-        # Ensure .pdf extension
+            return None
         if not file_path.lower().endswith(".pdf"):
             file_path += ".pdf"
+        return file_path
 
-        try:
-            self._generator.generate_pdf(html, file_path)
-            QMessageBox.information(
-                self,
-                "PDF Created",
-                f"Report saved to:\n{file_path}"
-            )
-        except Exception as e:
-            QMessageBox.critical(
-                self,
-                "PDF Error",
-                f"Failed to create PDF: {e}"
-            )
+    # ── PDF creation slots (background worker) ─────────────────────────
+
+    def _set_pdf_buttons_enabled(self, enabled: bool) -> None:
+        """Enable or disable all PDF generation buttons."""
+        self._create_report_pdf_btn.setEnabled(enabled)
+        self._create_appendix_pdf_btn.setEnabled(enabled)
+        self._create_complete_pdf_btn.setEnabled(enabled)
+
+    def _start_pdf_task(
+        self,
+        mode: ReportMode,
+        report_path: Optional[str] = None,
+        appendix_path: Optional[str] = None,
+    ) -> None:
+        """Launch a :class:`ReportBuildTask` in the global thread pool.
+
+        Shows a ``QProgressDialog`` and disables the PDF buttons until the
+        task finishes.
+        """
+        from app.services.workers import ReportBuildTask, start_task
+
+        factory = self._create_builder_factory(mode)
+        if factory is None:
+            return
+
+        rpath = Path(report_path) if report_path else None
+        apath = Path(appendix_path) if appendix_path else None
+
+        task = ReportBuildTask(
+            builder_factory=factory,
+            generator=self._generator,
+            mode=mode,
+            report_path=rpath,
+            appendix_path=apath,
+        )
+
+        # Keep a reference so it isn't garbage-collected
+        self._active_pdf_task = task
+
+        # Progress dialog
+        dlg = QProgressDialog("Preparing report…", "Cancel", 0, 100, self)
+        dlg.setWindowTitle("Generating PDF")
+        dlg.setWindowModality(Qt.WindowModal)
+        dlg.setMinimumDuration(0)  # show immediately
+        dlg.setValue(0)
+        self._pdf_progress_dlg = dlg
+
+        # Wire signals
+        task.signals.progress.connect(self._on_pdf_progress)
+        task.signals.result.connect(self._on_pdf_result)
+        task.signals.error.connect(self._on_pdf_error)
+        task.signals.finished.connect(self._on_pdf_finished)
+        dlg.canceled.connect(task.cancel)
+
+        self._set_pdf_buttons_enabled(False)
+        start_task(task)
+
+    def _on_pdf_progress(self, pct: int, msg: str) -> None:
+        dlg = getattr(self, "_pdf_progress_dlg", None)
+        if dlg and not dlg.wasCanceled():
+            dlg.setValue(min(pct, 99))
+            dlg.setLabelText(msg)
+
+    def _on_pdf_result(self, result: object) -> None:
+        data = result if isinstance(result, dict) else {}
+        paths = []
+        if data.get("report_path"):
+            paths.append(data["report_path"])
+        if data.get("appendix_path"):
+            paths.append(data["appendix_path"])
+
+        if not paths:
+            return
+
+        msg = "PDF(s) saved to:\n" + "\n".join(paths)
+        QMessageBox.information(self, "PDF Created", msg)
+        for p in paths:
+            QDesktopServices.openUrl(QUrl.fromLocalFile(p))
+
+    def _on_pdf_error(self, error: str, tb: str) -> None:
+        QMessageBox.critical(self, "PDF Error", f"Failed to create PDF:\n{error}")
+
+    def _on_pdf_finished(self) -> None:
+        dlg = getattr(self, "_pdf_progress_dlg", None)
+        if dlg:
+            dlg.close()
+            self._pdf_progress_dlg = None
+        self._active_pdf_task = None
+        self._set_pdf_buttons_enabled(True)
+
+    def _on_create_report_pdf(self) -> None:
+        """Generate report-only PDF (no appendix)."""
+        if not self._check_weasyprint():
+            return
+        file_path = self._ask_save_path(
+            "Save Report PDF", self._default_pdf_path()
+        )
+        if not file_path:
+            return
+        self._start_pdf_task(ReportMode.REPORT_ONLY, report_path=file_path)
+
+    def _on_create_appendix_pdf(self) -> None:
+        """Generate appendix-only PDF."""
+        if not self._check_weasyprint():
+            return
+        file_path = self._ask_save_path(
+            "Save Appendix PDF", self._default_pdf_path("_Appendix")
+        )
+        if not file_path:
+            return
+        self._start_pdf_task(ReportMode.APPENDIX_ONLY, appendix_path=file_path)
+
+    def _on_create_complete_pdf(self) -> None:
+        """Generate both report and appendix PDFs at once."""
+        if not self._check_weasyprint():
+            return
+        report_path = self._ask_save_path(
+            "Save Report PDF (appendix will be saved alongside)",
+            self._default_pdf_path(),
+        )
+        if not report_path:
+            return
+        rp = Path(report_path)
+        appendix_path = str(rp.with_name(f"{rp.stem}_Appendix{rp.suffix}"))
+        self._start_pdf_task(
+            ReportMode.COMPLETE,
+            report_path=report_path,
+            appendix_path=appendix_path,
+        )
 
     def _update_default_title(self) -> None:
         """Update the title input with default value based on case/evidence."""
@@ -1078,18 +1343,29 @@ class ReportTabWidget(QWidget):
 
     def _connect_auto_save_signals(self) -> None:
         """Connect signals for auto-saving report settings."""
-        # Title section
+        # Title
         self._title_input.textChanged.connect(self._on_settings_changed)
 
-        # Author section
+        # Author
         self._author_function_input.textChanged.connect(self._on_settings_changed)
         self._author_name_input.textChanged.connect(self._on_settings_changed)
         self._author_date_input.dateChanged.connect(self._on_settings_changed)
 
-        # Branding section
+        # Branding
         self._branding_org_input.textChanged.connect(self._on_settings_changed)
+        self._branding_dept_input.textChanged.connect(self._on_settings_changed)
         self._branding_footer_input.textChanged.connect(self._on_settings_changed)
         # Logo path changes are handled in _on_browse_logo and _on_clear_logo
+
+        # Title page field visibility checkboxes
+        self._show_case_number_cb.stateChanged.connect(self._on_settings_changed)
+        self._show_evidence_cb.stateChanged.connect(self._on_settings_changed)
+        self._show_investigator_cb.stateChanged.connect(self._on_settings_changed)
+        self._show_date_cb.stateChanged.connect(self._on_settings_changed)
+
+        # Footer options
+        self._show_footer_date_cb.stateChanged.connect(self._on_settings_changed)
+        self._footer_evidence_input.textChanged.connect(self._on_settings_changed)
 
         # Preferences
         self._locale_combo.currentIndexChanged.connect(self._on_settings_changed)
@@ -1158,6 +1434,11 @@ class ReportTabWidget(QWidget):
         elif defaults.get("default_org_name"):
             self._branding_org_input.setText(defaults["default_org_name"])
 
+        if settings.get("branding_department"):
+            self._branding_dept_input.setText(settings["branding_department"])
+        elif defaults.get("default_department"):
+            self._branding_dept_input.setText(defaults["default_department"])
+
         if settings.get("branding_footer_text"):
             self._branding_footer_input.setText(settings["branding_footer_text"])
         elif defaults.get("default_footer_text"):
@@ -1179,6 +1460,17 @@ class ReportTabWidget(QWidget):
             elif Path(logo_path).is_absolute() and Path(logo_path).exists():
                 self._branding_logo_input.setText(logo_path)
 
+        # Title page field visibility
+        self._show_case_number_cb.setChecked(settings.get("show_title_case_number", True))
+        self._show_evidence_cb.setChecked(settings.get("show_title_evidence", True))
+        self._show_investigator_cb.setChecked(settings.get("show_title_investigator", True))
+        self._show_date_cb.setChecked(settings.get("show_title_date", True))
+
+        # Footer options
+        self._show_footer_date_cb.setChecked(settings.get("show_footer_date", True))
+        if settings.get("footer_evidence_label"):
+            self._footer_evidence_input.setText(settings["footer_evidence_label"])
+
         # Preferences
         locale = settings.get("locale", DEFAULT_LOCALE)
         locale_index = self._locale_combo.findData(locale)
@@ -1190,10 +1482,8 @@ class ReportTabWidget(QWidget):
         if date_fmt_index >= 0:
             self._date_format_combo.setCurrentIndex(date_fmt_index)
 
-        # Collapsed states (defaults: title expanded, others collapsed)
-        self._title_group.set_collapsed(settings.get("collapsed_title", False))
-        self._author_group.set_collapsed(settings.get("collapsed_author", True))
-        self._branding_group.set_collapsed(settings.get("collapsed_branding", True))
+        # Collapsed states
+        self._settings_group.set_collapsed(settings.get("collapsed_settings", False))
         self._appendix_group.set_collapsed(settings.get("collapsed_appendix", True))
 
     def _apply_global_defaults(self) -> None:
@@ -1215,6 +1505,8 @@ class ReportTabWidget(QWidget):
         # Branding section
         if defaults.get("default_org_name"):
             self._branding_org_input.setText(defaults["default_org_name"])
+        if defaults.get("default_department"):
+            self._branding_dept_input.setText(defaults["default_department"])
         if defaults.get("default_footer_text"):
             self._branding_footer_input.setText(defaults["default_footer_text"])
         if defaults.get("default_logo_path"):
@@ -1235,6 +1527,20 @@ class ReportTabWidget(QWidget):
         date_fmt_index = self._date_format_combo.findData(date_format)
         if date_fmt_index >= 0:
             self._date_format_combo.setCurrentIndex(date_fmt_index)
+
+        # Title page visibility defaults
+        if "default_show_title_case_number" in defaults:
+            self._show_case_number_cb.setChecked(bool(defaults["default_show_title_case_number"]))
+        if "default_show_title_evidence" in defaults:
+            self._show_evidence_cb.setChecked(bool(defaults["default_show_title_evidence"]))
+        if "default_show_title_investigator" in defaults:
+            self._show_investigator_cb.setChecked(bool(defaults["default_show_title_investigator"]))
+        if "default_show_title_date" in defaults:
+            self._show_date_cb.setChecked(bool(defaults["default_show_title_date"]))
+
+        # Footer defaults
+        if "default_show_footer_date" in defaults:
+            self._show_footer_date_cb.setChecked(bool(defaults["default_show_footer_date"]))
 
     def _save_report_settings(self) -> None:
         """Save report settings to database."""
@@ -1263,14 +1569,19 @@ class ReportTabWidget(QWidget):
             author_name=self._author_name_input.text().strip() or None,
             author_date=author_date if author_date else None,
             branding_org_name=self._branding_org_input.text().strip() or None,
+            branding_department=self._branding_dept_input.text().strip() or None,
             branding_footer_text=self._branding_footer_input.text().strip() or None,
             branding_logo_path=logo_path or None,
             locale=self._locale_combo.currentData() or DEFAULT_LOCALE,
             date_format=self._date_format_combo.currentData() or "eu",
-            collapsed_title=self._title_group.is_collapsed(),
-            collapsed_author=self._author_group.is_collapsed(),
-            collapsed_branding=self._branding_group.is_collapsed(),
+            collapsed_settings=self._settings_group.is_collapsed(),
             collapsed_appendix=self._appendix_group.is_collapsed(),
+            show_title_case_number=self._show_case_number_cb.isChecked(),
+            show_title_evidence=self._show_evidence_cb.isChecked(),
+            show_title_investigator=self._show_investigator_cb.isChecked(),
+            show_title_date=self._show_date_cb.isChecked(),
+            show_footer_date=self._show_footer_date_cb.isChecked(),
+            footer_evidence_label=self._footer_evidence_input.text().strip() or None,
         )
 
     def _copy_logo_to_workspace(self, source_path: str) -> Optional[str]:

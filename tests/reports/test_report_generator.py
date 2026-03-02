@@ -12,6 +12,7 @@ from reports.generator import (
     ReportBuilder,
     ReportGenerator,
     ReportData,
+    ReportMode,
     SectionData,
     build_report,
     TEMPLATES_DIR,
@@ -552,3 +553,220 @@ class TestTemplateRendering:
 
         # Author section should not appear
         assert "Report Created By" not in html
+
+
+class TestReportMode:
+    """Test ReportMode enum and mode-aware rendering."""
+
+    def test_enum_values(self):
+        """Test ReportMode enum has expected members."""
+        assert ReportMode.COMPLETE.value == "complete"
+        assert ReportMode.REPORT_ONLY.value == "report_only"
+        assert ReportMode.APPENDIX_ONLY.value == "appendix_only"
+
+    @pytest.fixture
+    def db_conn(self):
+        """Create in-memory database with required tables."""
+        conn = sqlite3.connect(":memory:")
+        conn.row_factory = sqlite3.Row
+        conn.execute("""
+            CREATE TABLE custom_report_sections (
+                id INTEGER PRIMARY KEY, evidence_id INTEGER,
+                title TEXT, content TEXT, sort_order INTEGER,
+                created_at_utc TEXT, updated_at_utc TEXT
+            )
+        """)
+        conn.execute("""
+            CREATE TABLE section_modules (
+                id INTEGER PRIMARY KEY, section_id INTEGER,
+                module_id TEXT, config TEXT, sort_order INTEGER,
+                created_at_utc TEXT, updated_at_utc TEXT
+            )
+        """)
+        conn.commit()
+        yield conn
+        conn.close()
+
+    def test_render_report_only_excludes_appendix(self, db_conn):
+        """Test REPORT_ONLY mode does not include appendix block."""
+        builder = ReportBuilder(db_conn, evidence_id=1)
+        builder.set_title("Report Only Test")
+        builder.add_section("Findings", "<p>Some findings</p>")
+        # Manually add appendix data to verify it is excluded
+        builder._data.appendix_modules.append({
+            "module_id": "test_appendix",
+            "config": {},
+            "title": "Appendix Module A",
+            "rendered_html": "<p>Appendix content</p>",
+        })
+
+        html = builder.render_html(ReportMode.REPORT_ONLY)
+
+        assert isinstance(html, str)
+        assert "Findings" in html
+        # The appendix content block should NOT be rendered
+        assert "Appendix content" not in html
+        assert "Appendix Module A" not in html
+
+    def test_render_appendix_only(self, db_conn):
+        """Test APPENDIX_ONLY mode renders a standalone appendix document."""
+        builder = ReportBuilder(db_conn, evidence_id=1)
+        builder.set_title("My Report")
+        builder._data.appendix_modules.append({
+            "module_id": "test_appendix",
+            "config": {},
+            "title": "URL List",
+            "rendered_html": "<p>URLs here</p>",
+        })
+
+        html = builder.render_html(ReportMode.APPENDIX_ONLY)
+
+        assert isinstance(html, str)
+        # Should have appendix in the title
+        assert "Appendix" in html
+        assert "URL List" in html
+        assert "URLs here" in html
+        # Should NOT have report sections or author signature
+        assert "Report Created By" not in html
+
+    def test_render_complete_returns_tuple(self, db_conn):
+        """Test COMPLETE mode returns a tuple of two HTML strings."""
+        builder = ReportBuilder(db_conn, evidence_id=1)
+        builder.set_title("Complete Report")
+        builder.add_section("Section 1", "<p>Content</p>")
+        builder._data.appendix_modules.append({
+            "module_id": "test",
+            "config": {},
+            "title": "Appendix A",
+            "rendered_html": "<p>Appendix data</p>",
+        })
+
+        result = builder.render_html(ReportMode.COMPLETE)
+
+        assert isinstance(result, tuple)
+        assert len(result) == 2
+        report_html, appendix_html = result
+        assert isinstance(report_html, str)
+        assert isinstance(appendix_html, str)
+        # Report should have sections but no appendix content
+        assert "Section 1" in report_html
+        assert "Appendix data" not in report_html
+        assert "Appendix A" not in report_html
+        # Appendix should have appendix content
+        assert "Appendix A" in appendix_html
+        assert "Appendix data" in appendix_html
+
+    def test_render_report_html_with_appendix_flag(self, db_conn):
+        """Test render_report_html with include_appendix=True (legacy)."""
+        builder = ReportBuilder(db_conn, evidence_id=1)
+        builder.set_title("Legacy Complete")
+        builder.add_section("Findings", "<p>Findings</p>")
+        builder._data.appendix_modules.append({
+            "module_id": "test",
+            "config": {},
+            "title": "Appendix B",
+            "rendered_html": "<p>Data B</p>",
+        })
+
+        html = builder.render_report_html(include_appendix=True)
+
+        assert "Findings" in html
+        assert "appendix-section" in html
+        assert "Appendix B" in html
+
+    def test_report_only_has_no_appendix_in_toc(self, db_conn):
+        """Test REPORT_ONLY mode TOC does not reference appendix."""
+        builder = ReportBuilder(db_conn, evidence_id=1)
+        builder.set_title("TOC Test")
+        builder.add_section("Section A", "")
+        builder._data.appendix_modules.append({
+            "module_id": "test",
+            "config": {},
+            "title": "Appendix Z",
+            "rendered_html": "<p>Z</p>",
+        })
+
+        html = builder.render_html(ReportMode.REPORT_ONLY)
+
+        assert 'href="#section-1"' in html
+        assert 'href="#appendix"' not in html
+
+    def test_appendix_template_exists(self):
+        """Test that the appendix template file exists."""
+        appendix_template = TEMPLATES_DIR / "appendix_report.html"
+        assert appendix_template.exists()
+
+    def test_appendix_template_has_appendix_page_footer(self, db_conn):
+        """Test appendix template renders with appendix-prefixed page counter."""
+        builder = ReportBuilder(db_conn, evidence_id=1)
+        builder.set_title("Footer Test")
+
+        html = builder.render_appendix_html()
+
+        # The CSS should contain the appendix-prefixed counter string
+        # e.g. "Appendix — Page " counter(page) ...
+        assert "Appendix" in html
+
+
+class TestReportModeWithBuildReport:
+    """Test build_report convenience function with modes."""
+
+    @pytest.fixture
+    def db_conn(self):
+        """Create in-memory database with required tables."""
+        conn = sqlite3.connect(":memory:")
+        conn.row_factory = sqlite3.Row
+        conn.execute("""
+            CREATE TABLE custom_report_sections (
+                id INTEGER PRIMARY KEY, evidence_id INTEGER,
+                title TEXT, content TEXT, sort_order INTEGER,
+                created_at_utc TEXT, updated_at_utc TEXT
+            )
+        """)
+        conn.execute("""
+            CREATE TABLE section_modules (
+                id INTEGER PRIMARY KEY, section_id INTEGER,
+                module_id TEXT, config TEXT, sort_order INTEGER,
+                created_at_utc TEXT, updated_at_utc TEXT
+            )
+        """)
+        conn.commit()
+        yield conn
+        conn.close()
+
+    def test_build_report_default_mode(self, db_conn):
+        """Test build_report defaults to REPORT_ONLY."""
+        html = build_report(db_conn, evidence_id=1, title="Default Mode")
+        assert isinstance(html, str)
+        assert "Default Mode" in html
+
+
+class TestGeneratePdfPair:
+    """Test ReportGenerator.generate_pdf_pair method."""
+
+    @pytest.mark.skipif(
+        not ReportGenerator()._weasyprint_available,
+        reason="WeasyPrint not available",
+    )
+    def test_generate_pdf_pair(self):
+        """Test generating two PDFs at once."""
+        generator = ReportGenerator()
+        report_html = "<html><body><h1>Report</h1></body></html>"
+        appendix_html = "<html><body><h1>Appendix</h1></body></html>"
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            report_path = Path(tmpdir) / "report.pdf"
+            appendix_path = Path(tmpdir) / "report_Appendix.pdf"
+
+            try:
+                r_ok, a_ok = generator.generate_pdf_pair(
+                    report_html, appendix_html, report_path, appendix_path,
+                )
+                assert r_ok is True
+                assert a_ok is True
+                assert report_path.exists()
+                assert appendix_path.exists()
+            except TypeError as e:
+                if "PDF.__init__" in str(e):
+                    pytest.skip("WeasyPrint/pydyf version incompatibility")
+                raise

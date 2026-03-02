@@ -134,6 +134,7 @@ class ImageQueryMixin(BaseDataAccess):
         discovered_by: Optional[Iterable[str]] = None,
         extension: Optional[str] = None,
         hash_match: Optional[str] = None,
+        url_text: Optional[str] = None,
         min_size_bytes: Optional[int] = None,
         max_size_bytes: Optional[int] = None,
         limit: int = 100,
@@ -152,6 +153,7 @@ class ImageQueryMixin(BaseDataAccess):
             discovered_by: List of source filters
             extension: File extension filter (e.g., 'jpg', 'gif', 'bmp')
             hash_match: Hash list name filter (only show images matching this list)
+            url_text: Case-insensitive URL substring filter (matches cache_url)
             min_size_bytes: Minimum file size filter (Phase 3)
             max_size_bytes: Maximum file size filter (Phase 3)
             limit: Page size
@@ -224,6 +226,18 @@ class ImageQueryMixin(BaseDataAccess):
         if max_size_bytes is not None:
             where.append("(i.size_bytes IS NULL OR i.size_bytes <= ?)")
             params.append(max_size_bytes)
+
+        # URL text filter — case-insensitive LIKE on image_discoveries.cache_url
+        if url_text:
+            where.append("""
+                EXISTS (
+                    SELECT 1 FROM image_discoveries d
+                    WHERE d.evidence_id = i.evidence_id
+                    AND d.image_id = i.id
+                    AND d.cache_url LIKE ?
+                )
+            """)
+            params.append(f"%{url_text}%")
 
         # Removed GROUP_CONCAT - tags loaded on-demand via get_artifact_tags_str()
         # Alias first_discovered_by AS discovered_by, join v_image_sources for browser badge

@@ -340,6 +340,7 @@ class DatabaseManager:
             conn = sqlite3.connect(real_path, check_same_thread=False)
             conn.execute("PRAGMA foreign_keys = ON;")
             conn.execute("PRAGMA journal_mode = WAL;")
+            conn.execute("PRAGMA busy_timeout = 10000;")  # Wait up to 10s for locks
 
             # Phase 1 performance optimizations for large datasets
             conn.execute("PRAGMA synchronous = NORMAL;")  # Faster writes, safe for forensic use

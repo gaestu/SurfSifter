@@ -22,8 +22,10 @@ from core.database import (
 
 from .blockfile import (
     detect_blockfile_cache,
+    is_cache_url,
     parse_blockfile_cache,
     read_stream_data,
+    scan_data1_orphan_entries,
 )
 from ._parser import parse_http_headers
 from ._decompression import decompress_body
@@ -157,8 +159,11 @@ def ingest_blockfile_directory(
         "inventory_entries": 0,
     }
 
-    # Register inventory entries for blockfile files
+    # Register inventory entries for blockfile files.
+    # Track which inventory ID corresponds to the index file — only that
+    # entry carries the directory-level URL/record totals.
     inventory_ids = []
+    index_inventory_id: Optional[int] = None
     if manifest_data and file_entries:
         extraction_timestamp = manifest_data.get(
             "extraction_timestamp_utc",
@@ -187,6 +192,10 @@ def ingest_blockfile_directory(
                 )
                 inventory_ids.append(inventory_id)
                 stats["inventory_entries"] += 1
+                # Remember the index file's inventory row
+                ep = file_entry.get("extracted_path", "")
+                if Path(ep).name == "index" and index_inventory_id is None:
+                    index_inventory_id = inventory_id
             except Exception as e:
                 LOGGER.warning(
                     "Failed to register inventory for %s: %s",
@@ -200,18 +209,62 @@ def ingest_blockfile_directory(
         stats["entries"] = len(entries)
 
         if not entries:
-            LOGGER.warning("No entries found in blockfile cache: %s", cache_dir)
-            for inv_id in inventory_ids:
-                update_inventory_ingestion_status(
-                    evidence_conn, inv_id,
-                    status="no_entries",
-                    notes="Blockfile cache parsed but no entries found",
+            # Index parsed but yielded no valid entries.  Try scanning
+            # data_1 blocks directly — orphaned EntryStore structures may
+            # still be intact even when the index hash table is
+            # cleared/corrupted.
+            entries = scan_data1_orphan_entries(
+                cache_dir, warning_collector=warning_collector,
+            )
+            stats["entries"] = len(entries)
+
+            if entries:
+                callbacks.on_log(
+                    f"Recovered {len(entries)} orphaned entries from data_1 block scan"
                 )
-            return stats
+            else:
+                # No structured entries at all — fall back to blind image
+                # carving on external f_* files as a last resort.
+                orphan_images = _carve_orphan_data_files(
+                    evidence_conn=evidence_conn,
+                    evidence_id=evidence_id,
+                    cache_dir=cache_dir,
+                    extraction_dir=extraction_dir,
+                    run_id=run_id,
+                    extractor_version=extractor_version,
+                    warning_collector=warning_collector,
+                )
+                stats["images"] += orphan_images
+
+                status = "no_entries" if orphan_images == 0 else "orphan_carved"
+                notes = (
+                    "Blockfile cache parsed but no entries found"
+                    + (f"; carved {orphan_images} images from orphan files"
+                       if orphan_images else "")
+                )
+                for inv_id in inventory_ids:
+                    update_inventory_ingestion_status(
+                        evidence_conn, inv_id,
+                        status=status,
+                        notes=notes,
+                    )
+                return stats
 
         callbacks.on_log(f"Parsed {len(entries)} entries from blockfile cache")
 
         discovered_by = f"cache_blockfile:{extractor_version}:{run_id}"
+
+        # Derive forensic provenance from file entries (directory-level)
+        base_forensic_path: Optional[str] = None
+        base_logical_path: Optional[str] = None
+        if file_entries:
+            for fe in file_entries:
+                if fe.get("forensic_path") and not base_forensic_path:
+                    base_forensic_path = str(Path(fe["forensic_path"]).parent)
+                if fe.get("logical_path") and not base_logical_path:
+                    base_logical_path = str(Path(fe["logical_path"]).parent)
+                if base_forensic_path and base_logical_path:
+                    break
 
         # Process each entry
         for entry in entries:
@@ -227,19 +280,37 @@ def ingest_blockfile_directory(
                     discovered_by=discovered_by,
                     warning_collector=warning_collector,
                     stats=stats,
+                    base_forensic_path=base_forensic_path,
+                    base_logical_path=base_logical_path,
                 )
             except Exception as e:
                 LOGGER.warning("Failed to process blockfile entry %s: %s", entry.url[:50], e)
 
-        # Update inventory status
+        # Update inventory status.
+        # The index file entry carries the directory-level totals;
+        # subsidiary files (data_*, f_*) get zero counts so that SUM()
+        # across all inventory rows reflects the true total.
+        summary_note = (
+            f"Blockfile cache: {stats['entries']} entries, "
+            f"{stats['urls']} URLs, {stats['images']} images"
+        )
         for inv_id in inventory_ids:
-            update_inventory_ingestion_status(
-                evidence_conn, inv_id,
-                status="ok",
-                urls_parsed=stats["urls"],
-                records_parsed=stats["records"],
-                notes=f"Blockfile cache: {stats['entries']} entries, {stats['urls']} URLs, {stats['images']} images",
-            )
+            if inv_id == index_inventory_id:
+                update_inventory_ingestion_status(
+                    evidence_conn, inv_id,
+                    status="ok",
+                    urls_parsed=stats["urls"],
+                    records_parsed=stats["records"],
+                    notes=summary_note,
+                )
+            else:
+                update_inventory_ingestion_status(
+                    evidence_conn, inv_id,
+                    status="ok",
+                    urls_parsed=0,
+                    records_parsed=0,
+                    notes=summary_note,
+                )
 
     except Exception as e:
         LOGGER.error("Failed to parse blockfile cache %s: %s", cache_dir, e, exc_info=True)
@@ -264,6 +335,8 @@ def _process_blockfile_entry(
     discovered_by: str,
     warning_collector: Optional["ExtractionWarningCollector"],
     stats: Dict[str, int],
+    base_forensic_path: Optional[str] = None,
+    base_logical_path: Optional[str] = None,
 ) -> None:
     """Process a single blockfile cache entry."""
     timestamp = entry.last_used_time or entry.creation_time
@@ -281,38 +354,53 @@ def _process_blockfile_entry(
         if stream0_data:
             http_info = parse_http_headers(stream0_data)
 
-    # Insert URL record
-    url_record = {
-        "url": entry.url,
-        "domain": parsed_url.netloc,
-        "scheme": parsed_url.scheme,
-        "discovered_by": discovered_by,
-        "first_seen_utc": timestamp_str,
-        "last_seen_utc": timestamp_str,
-        "source_path": str(cache_dir / entry.source_file),
-        "notes": f"Blockfile cache entry (offset {entry.block_offset})",
-        "context": None,
-        "run_id": run_id,
-        "cache_key": entry.raw_cache_key or entry.url,
-        "cache_filename": entry.source_file,
-        "response_code": http_info.get("response_code"),
-        "content_type": http_info.get("content_type"),
-        "tags": json.dumps({
-            "cache_backend": "blockfile",
-            "entry_hash": entry.entry_hash,
-            "entry_state": entry.state,
-            "stream0_size": entry.data_sizes[0],
-            "stream1_size": entry.data_sizes[1],
-            "content_encoding": http_info.get("content_encoding"),
-            "creation_time": entry.creation_time.isoformat() if entry.creation_time else None,
-            "last_used_time": entry.last_used_time.isoformat() if entry.last_used_time else None,
-            "raw_cache_key": entry.raw_cache_key,
-        }),
-    }
+    # Build source_path from forensic provenance (prefer forensic > logical > workstation)
+    if base_forensic_path:
+        source_path = f"{base_forensic_path}/{entry.source_file}"
+    elif base_logical_path:
+        source_path = f"{base_logical_path}/{entry.source_file}"
+    else:
+        source_path = str(cache_dir / entry.source_file)
 
-    insert_urls(evidence_conn, evidence_id, [url_record])
-    stats["urls"] += 1
-    stats["records"] += 1
+    # Insert URL record only for entries that carry actual URLs.
+    # Opaque cache keys (SHA-256 hashes, GPU shader hashes) should not
+    # pollute the urls table.
+    if is_cache_url(entry.url):
+        url_record = {
+            "url": entry.url,
+            "domain": parsed_url.netloc,
+            "scheme": parsed_url.scheme,
+            "discovered_by": discovered_by,
+            "first_seen_utc": timestamp_str,
+            "last_seen_utc": timestamp_str,
+            "source_path": source_path,
+            "notes": f"Blockfile cache entry (offset {entry.block_offset})",
+            "context": None,
+            "run_id": run_id,
+            "cache_key": entry.raw_cache_key or entry.url,
+            "cache_filename": entry.source_file,
+            "response_code": http_info.get("response_code"),
+            "content_type": http_info.get("content_type"),
+            "tags": json.dumps({
+                "cache_backend": "blockfile",
+                "entry_hash": entry.entry_hash,
+                "entry_state": entry.state,
+                "stream0_size": entry.data_sizes[0],
+                "stream1_size": entry.data_sizes[1],
+                "content_encoding": http_info.get("content_encoding"),
+                "creation_time": entry.creation_time.isoformat() if entry.creation_time else None,
+                "last_used_time": entry.last_used_time.isoformat() if entry.last_used_time else None,
+                "raw_cache_key": entry.raw_cache_key,
+                "forensic_path": f"{base_forensic_path}/{entry.source_file}" if base_forensic_path else None,
+                "logical_path": f"{base_logical_path}/{entry.source_file}" if base_logical_path else None,
+            }),
+        }
+
+        insert_urls(evidence_conn, evidence_id, [url_record])
+        stats["urls"] += 1
+        stats["records"] += 1
+    else:
+        LOGGER.debug("Skipping non-URL blockfile cache key: %s", entry.url[:80])
 
     # Process body stream for images
     if entry.data_sizes[1] > 0:
@@ -413,3 +501,138 @@ def _insert_blockfile_image(
     except Exception as e:
         if "UNIQUE constraint" not in str(e):
             LOGGER.warning("Failed to insert image: %s", e)
+
+
+# ---------------------------------------------------------------------------
+# Orphan data-file carving
+# ---------------------------------------------------------------------------
+
+def _carve_orphan_data_files(
+    evidence_conn,
+    evidence_id: int,
+    cache_dir: Path,
+    extraction_dir: Path,
+    run_id: str,
+    extractor_version: str,
+    *,
+    warning_collector: Optional["ExtractionWarningCollector"] = None,
+) -> int:
+    """
+    Scan orphan blockfile data files for images when the index has no entries.
+
+    When a blockfile cache index has been cleared but external data files
+    (``f_XXXXXX``) still exist on disk, this function reads each file and
+    attempts to detect and carve images.  This is a best-effort recovery
+    mechanism for damaged or partially-cleared caches.
+
+    Only external files (``f_*``) are scanned because their content is raw
+    cached data.  Block files (``data_2``, ``data_3``) are skipped since
+    locating individual entries within them requires the index metadata
+    that is no longer available.
+
+    Args:
+        evidence_conn: Database connection.
+        evidence_id: Evidence ID.
+        cache_dir: Path to blockfile cache directory.
+        extraction_dir: Base extraction directory.
+        run_id: Current extraction run ID.
+        extractor_version: Extractor version string.
+        warning_collector: Optional extraction-warning collector.
+
+    Returns:
+        Number of images successfully carved and inserted.
+    """
+    f_files = sorted(cache_dir.glob("f_*"))
+    if not f_files:
+        return 0
+
+    LOGGER.info(
+        "Attempting orphan image carving on %d external files in %s",
+        len(f_files), cache_dir,
+    )
+
+    images_carved = 0
+    discovered_by = f"cache_blockfile_orphan:{extractor_version}:{run_id}"
+
+    for f_path in f_files:
+        if not f_path.is_file():
+            continue
+        try:
+            body = f_path.read_bytes()
+            if len(body) < 8:
+                continue
+
+            # Try decompression for gzip-wrapped content (common for HTML/JS
+            # but occasionally wraps images).
+            actual_body = body
+            if body[:2] == b'\x1f\x8b':  # gzip magic
+                try:
+                    actual_body = decompress_body(
+                        body, "gzip",
+                        warning_collector=warning_collector,
+                        source_file=str(f_path),
+                    )
+                    if actual_body is None or len(actual_body) < 8:
+                        continue
+                except Exception:
+                    actual_body = body  # keep raw bytes if decompression fails
+
+            fmt = detect_image_format(actual_body)
+            if not fmt:
+                continue
+
+            image_info = carve_blockfile_image(
+                body=actual_body,
+                fmt=fmt,
+                entry=None,  # No entry metadata available
+                extraction_dir=extraction_dir,
+                run_id=run_id,
+            )
+            if not image_info:
+                continue
+
+            image_data = {
+                "rel_path": image_info["rel_path"],
+                "filename": image_info["filename"],
+                "sha256": image_info["sha256"],
+                "md5": image_info["md5"],
+                "phash": image_info["phash"],
+                "size_bytes": image_info["size_bytes"],
+                "ts_utc": None,
+            }
+
+            source_metadata = {
+                "cache_backend": "blockfile_orphan",
+                "orphan_file": f_path.name,
+                "orphan_file_size": f_path.stat().st_size,
+                "image_format": fmt,
+                "body_storage_path": image_info["rel_path"],
+            }
+
+            discovery_data = {
+                "discovered_by": discovered_by,
+                "run_id": run_id,
+                "extractor_version": extractor_version,
+                "cache_url": None,
+                "cache_key": f"orphan:{f_path.name}",
+                "cache_filename": image_info["filename"],
+                "cache_response_time": None,
+                "source_metadata_json": json.dumps(source_metadata),
+            }
+
+            insert_image_with_discovery(
+                evidence_conn, evidence_id, image_data, discovery_data
+            )
+            images_carved += 1
+
+        except Exception as e:
+            if "UNIQUE constraint" not in str(e):
+                LOGGER.debug("Orphan carving failed for %s: %s", f_path.name, e)
+
+    if images_carved:
+        LOGGER.info(
+            "Carved %d images from %d orphan files in %s",
+            images_carved, len(f_files), cache_dir,
+        )
+
+    return images_carved

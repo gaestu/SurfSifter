@@ -21,6 +21,7 @@ from .registry import ModuleRegistry
 
 # Built-in module exports
 from .activity_summary import ActivitySummaryModule
+from .application_execution import ApplicationExecutionModule
 from .autofill import AutofillModule
 from .autofill_form_data import AutofillFormDataModule
 from .bookmarks import BookmarksModule
@@ -29,6 +30,8 @@ from .browser_history import BrowserHistoryModule
 from .credentials import CredentialsModule
 from .downloaded_images import DownloadedImagesModule
 from .images import ImagesModule
+from .installed_applications import InstalledApplicationsModule
+from .jump_lists import JumpListsModule
 from .screenshots import ScreenshotsModule
 from .site_engagement import SiteEngagementModule
 from .system_summary import SystemSummaryModule
@@ -45,6 +48,7 @@ __all__ = [
     "ModuleRegistry",
     # Built-in modules
     "ActivitySummaryModule",
+    "ApplicationExecutionModule",
     "AutofillModule",
     "AutofillFormDataModule",
     "BookmarksModule",
@@ -53,6 +57,8 @@ __all__ = [
     "CredentialsModule",
     "DownloadedImagesModule",
     "ImagesModule",
+    "InstalledApplicationsModule",
+    "JumpListsModule",
     "ScreenshotsModule",
     "SiteEngagementModule",
     "SystemSummaryModule",

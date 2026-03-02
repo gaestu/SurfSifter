@@ -823,8 +823,18 @@ class ChromiumTransportSecurityExtractor(BaseExtractor):
             }
             records.append(record)
 
+        # Deduplicate within file (keep last occurrence per hashed_host)
         if records:
-            count = insert_hsts_entries(evidence_conn, evidence_id, records)
+            seen: dict = {}
+            for rec in records:
+                seen[rec["hashed_host"]] = rec
+            deduped = list(seen.values())
+            if len(deduped) < len(records):
+                LOGGER.info(
+                    "Deduplicated %d → %d HSTS records for %s",
+                    len(records), len(deduped), file_entry["logical_path"],
+                )
+            count = insert_hsts_entries(evidence_conn, evidence_id, deduped)
             callbacks.on_log(f"Inserted {count} Chromium HSTS entries (hashed domains)", "info")
             return count
 

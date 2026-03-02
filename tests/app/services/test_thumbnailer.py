@@ -27,6 +27,16 @@ def _write_jpeg(path: Path) -> None:
     image.save(path, format="JPEG")
 
 
+def _write_svg(path: Path, extra_payload: str = "") -> None:
+    svg = (
+        "<svg xmlns='http://www.w3.org/2000/svg' width='120' height='80' viewBox='0 0 120 80'>"
+        "<rect x='0' y='0' width='120' height='80' fill='#336699'/>"
+        "<circle cx='60' cy='40' r='24' fill='#ffffff'/>"
+        "</svg>"
+    )
+    path.write_text(svg + extra_payload, encoding="utf-8")
+
+
 def _write_heif(path: Path, pillow_heif: Any) -> None:
     image = Image.new("RGB", (64, 64), color=(160, 40, 80))
 
@@ -109,6 +119,67 @@ def test_ensure_thumbnail_decode_failure_cleans_invalid_cache(tmp_path: Path) ->
     assert thumbnail_path is None
     assert not stale_thumb.exists()
     assert not any(cache_dir.glob("*.jpg"))
+
+
+def test_ensure_thumbnail_svg_success(tmp_path: Path) -> None:
+    image_path = tmp_path / "sample.svg"
+    cache_dir = tmp_path / "thumbs"
+    _write_svg(image_path)
+
+    thumbnail_path = thumbnailer.ensure_thumbnail(image_path, cache_dir, size=(64, 64))
+
+    assert thumbnail_path is not None
+    assert thumbnail_path.exists()
+    assert thumbnail_path.suffix == ".jpg"
+    assert thumbnail_path.stat().st_size >= 100
+
+    with Image.open(thumbnail_path) as thumb:
+        assert thumb.width <= 64
+        assert thumb.height <= 64
+
+
+def test_ensure_thumbnail_svg_invalid_returns_none(tmp_path: Path) -> None:
+    image_path = tmp_path / "invalid.svg"
+    cache_dir = tmp_path / "thumbs"
+    image_path.write_text("<svg><g><invalid></svg", encoding="utf-8")
+
+    thumbnail_path = thumbnailer.ensure_thumbnail(image_path, cache_dir, size=(64, 64))
+
+    assert thumbnail_path is None
+    assert not any(cache_dir.glob("*.jpg"))
+
+
+def test_ensure_thumbnail_svg_oversized_is_skipped(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    image_path = tmp_path / "large.svg"
+    cache_dir = tmp_path / "thumbs"
+    _write_svg(image_path, extra_payload=(" " * 1024))
+    monkeypatch.setattr(thumbnailer, "MAX_SVG_FILE_SIZE_BYTES", 64)
+
+    thumbnail_path = thumbnailer.ensure_thumbnail(image_path, cache_dir, size=(64, 64))
+
+    assert thumbnail_path is None
+    assert not any(cache_dir.glob("*.jpg"))
+
+
+def test_ensure_thumbnail_svg_reuses_valid_cache(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    image_path = tmp_path / "sample.svg"
+    cache_dir = tmp_path / "thumbs"
+    _write_svg(image_path)
+
+    first = thumbnailer.ensure_thumbnail(image_path, cache_dir, size=(64, 64))
+    assert first is not None
+    assert first.exists()
+
+    def fail_render(*args, **kwargs):  # noqa: ANN002, ANN003
+        raise AssertionError("_render_svg_thumbnail should not run for valid cached thumbnail")
+
+    monkeypatch.setattr(thumbnailer, "_render_svg_thumbnail", fail_render)
+
+    second = thumbnailer.ensure_thumbnail(image_path, cache_dir, size=(64, 64))
+    assert second == first
 
 
 @pytest.mark.parametrize("extension", [".heic", ".heif"])

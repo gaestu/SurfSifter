@@ -24,7 +24,7 @@ from PySide6.QtWidgets import (
 
 from app.common.dialogs.tagging import TagArtifactsDialog
 from app.data.case_data import CaseDataAccess
-from app.features.os_artifacts.models import IndicatorsTableModel, JumpListsTableModel, InstalledSoftwareModel
+from app.features.os_artifacts.models import AppExecutionModel, IndicatorsTableModel, JumpListsTableModel, InstalledSoftwareModel
 from core.logging import get_logger
 
 LOGGER = get_logger(__name__)
@@ -178,6 +178,46 @@ class OSArtifactsTab(QWidget):
 
         self.tabs.addTab(self.software_widget, "Installed Applications")
 
+        # ===== Application Execution Tab =====
+        self.app_exec_widget = QWidget()
+        app_exec_layout = QVBoxLayout(self.app_exec_widget)
+
+        # App Execution filters
+        ae_filter_layout = QHBoxLayout()
+        ae_filter_layout.addWidget(QLabel("Search"))
+        self.ae_search_edit = QLineEdit()
+        self.ae_search_edit.setPlaceholderText("Filter by application path...")
+        self.ae_search_edit.textChanged.connect(self._on_app_execution_filters_changed)
+        ae_filter_layout.addWidget(self.ae_search_edit)
+
+        self.ae_forensic_checkbox = QCheckBox("Forensic Interest Only")
+        self.ae_forensic_checkbox.stateChanged.connect(self._on_app_execution_filters_changed)
+        ae_filter_layout.addWidget(self.ae_forensic_checkbox)
+
+        export_ae_btn = QPushButton("Export CSV")
+        export_ae_btn.clicked.connect(self._export_app_execution_csv)
+        ae_filter_layout.addWidget(export_ae_btn)
+
+        ae_filter_layout.addStretch()
+        app_exec_layout.addLayout(ae_filter_layout)
+
+        # App Execution table (model initialized later when evidence is set)
+        self.ae_model: Optional[AppExecutionModel] = None
+        self.ae_table = QTableView()
+        self.ae_table.horizontalHeader().setStretchLastSection(True)
+        self.ae_table.setSelectionBehavior(QTableView.SelectRows)
+        self.ae_table.setSelectionMode(QTableView.ExtendedSelection)
+        self.ae_table.setSortingEnabled(True)
+        self.ae_table.doubleClicked.connect(self._on_app_execution_double_clicked)
+        self.ae_table.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.ae_table.customContextMenuRequested.connect(self._show_app_execution_context_menu)
+        app_exec_layout.addWidget(self.ae_table)
+
+        self.ae_summary_label = QLabel("No application execution data loaded.")
+        app_exec_layout.addWidget(self.ae_summary_label)
+
+        self.tabs.addTab(self.app_exec_widget, "Application Execution")
+
         layout.addWidget(self.tabs)
 
         # Analyze section
@@ -218,11 +258,13 @@ class OSArtifactsTab(QWidget):
             self.model.set_evidence(evidence_id)
             self._init_jump_lists_model()  # Initialize Jump Lists model
             self._init_software_model()  # Initialize Installed Software model
+            self._init_app_execution_model()  # Initialize App Execution model
             self._populate_filters()
             self._populate_jump_lists_filters()
             self._update_summary()
             self._update_jump_lists_summary()
             self._update_software_summary()
+            self._update_app_execution_summary()
         else:
             # Deferred loading - just store the ID, load on showEvent
             self._load_pending = True
@@ -233,9 +275,12 @@ class OSArtifactsTab(QWidget):
             self.jl_model.reload()
         if self.sw_model:
             self.sw_model.reload()
+        if self.ae_model:
+            self.ae_model.reload()
         self._update_summary()
         self._update_jump_lists_summary()
         self._update_software_summary()
+        self._update_app_execution_summary()
 
     def mark_stale(self) -> None:
         """Mark data as stale - will refresh on next showEvent.
@@ -270,11 +315,13 @@ class OSArtifactsTab(QWidget):
             self.model.set_evidence(self.evidence_id)
             self._init_jump_lists_model()
             self._init_software_model()
+            self._init_app_execution_model()
         self._populate_filters()
         self._populate_jump_lists_filters()
         self._update_summary()
         self._update_jump_lists_summary()
         self._update_software_summary()
+        self._update_app_execution_summary()
 
     def _populate_filters(self) -> None:
         """Populate registry indicator type filters."""
@@ -747,3 +794,175 @@ class OSArtifactsTab(QWidget):
         if self.case_data:
             self.case_data.invalidate_filter_cache(self.evidence_id)
         # No model refresh needed since tags don't affect displayed columns
+
+    # ===== Application Execution Methods =====
+
+    def _init_app_execution_model(self) -> None:
+        """Initialize Application Execution model when evidence is set."""
+        if not self.case_data or self.evidence_id is None:
+            return
+
+        db_manager = self.case_data._db_manager
+        evidence_label = self.case_data.get_evidence_label(self.evidence_id)
+
+        if not db_manager or not evidence_label:
+            LOGGER.warning("Cannot initialize App Execution model: missing db_manager or evidence_label")
+            return
+
+        self.ae_model = AppExecutionModel(
+            db_manager=db_manager,
+            evidence_id=self.evidence_id,
+            evidence_label=evidence_label,
+            parent=self,
+        )
+        self.ae_table.setModel(self.ae_model)
+        self.ae_table.resizeColumnsToContents()
+
+    def _on_app_execution_filters_changed(self) -> None:
+        """Apply Application Execution filters."""
+        if not self.ae_model:
+            return
+
+        search_text = self.ae_search_edit.text()
+        forensic_only = self.ae_forensic_checkbox.isChecked()
+
+        self.ae_model.set_filters(search_text=search_text, forensic_only=forensic_only)
+        self._update_app_execution_summary()
+
+    def _update_app_execution_summary(self) -> None:
+        """Update Application Execution summary label."""
+        if not self.ae_model:
+            self.ae_summary_label.setText("No application execution data loaded.")
+            return
+
+        count = self.ae_model.rowCount()
+        if count == 0:
+            self.ae_summary_label.setText("No application execution entries found for current filters.")
+            return
+
+        stats = self.ae_model.get_stats()
+        forensic_count = stats.get("forensic_count", 0)
+        with_last_run = stats.get("with_last_run", 0)
+
+        summary = f"Application Execution Entries: {count}"
+        if forensic_count > 0:
+            summary += f" | Forensic Interest: {forensic_count}"
+        if with_last_run > 0:
+            summary += f" | With Timestamps: {with_last_run}"
+
+        self.ae_summary_label.setText(summary)
+
+    def _on_app_execution_double_clicked(self, index) -> None:
+        """Handle double-click on app execution entry to show details."""
+        if not self.ae_model:
+            return
+
+        row_data = self.ae_model.get_row_data(index.row())
+        if not row_data:
+            return
+
+        from app.features.os_artifacts.dialogs import AppExecutionDetailsDialog
+        dialog = AppExecutionDetailsDialog(row_data, parent=self)
+        dialog.exec()
+
+    def _show_app_execution_context_menu(self, pos) -> None:
+        """Show context menu for app execution table."""
+        index = self.ae_table.indexAt(pos)
+        if not index.isValid():
+            return
+
+        menu = QMenu(self)
+
+        view_action = menu.addAction("View Details")
+        view_action.triggered.connect(lambda: self._on_app_execution_double_clicked(index))
+
+        menu.addSeparator()
+
+        tag_action = menu.addAction("Tag Selected...")
+        tag_action.triggered.connect(self._tag_selected_app_execution)
+
+        menu.exec(self.ae_table.viewport().mapToGlobal(pos))
+
+    def _tag_selected_app_execution(self) -> None:
+        """Launch tagging dialog for selected app execution entries."""
+        if not self.case_data or self.evidence_id is None:
+            QMessageBox.warning(self, "Tagging Unavailable", "Case data is not loaded.")
+            return
+
+        if not self.ae_model:
+            return
+
+        selection_model = self.ae_table.selectionModel()
+        if not selection_model:
+            return
+
+        selected_ids = []
+        for index in selection_model.selectedRows():
+            row_data = self.ae_model.get_row_data(index.row())
+            if row_data and row_data.get("id") is not None:
+                selected_ids.append(int(row_data["id"]))
+
+        if not selected_ids:
+            QMessageBox.information(self, "No Selection", "Select at least one entry to tag.")
+            return
+
+        dialog = TagArtifactsDialog(
+            self.case_data, self.evidence_id, "app_execution", selected_ids, self
+        )
+        dialog.tags_changed.connect(self._on_app_execution_tags_changed)
+        dialog.exec()
+
+    def _on_app_execution_tags_changed(self) -> None:
+        """Refresh after app execution tag changes."""
+        if self.case_data:
+            self.case_data.invalidate_filter_cache(self.evidence_id)
+
+    def _export_app_execution_csv(self) -> None:
+        """Export application execution entries to CSV."""
+        if not self.ae_model or self.evidence_id is None:
+            QMessageBox.warning(self, "Export Error", "No application execution data available.")
+            return
+
+        file_path, _ = QFileDialog.getSaveFileName(
+            self,
+            "Export Application Execution",
+            f"app_execution_{self.evidence_id}.csv",
+            "CSV Files (*.csv)",
+        )
+        if not file_path:
+            return
+
+        try:
+            with open(file_path, 'w', newline='', encoding='utf-8') as f:
+                writer = csv.writer(f)
+                writer.writerow([
+                    "Application Path", "Run Count", "Focus Count",
+                    "Focus Time (ms)", "Last Run (UTC)",
+                    "Forensic Interest", "Forensic Category",
+                    "Registry Path", "Hive",
+                ])
+
+                for row_idx in range(self.ae_model.rowCount()):
+                    row_data = self.ae_model.get_row_data(row_idx)
+                    if row_data:
+                        writer.writerow([
+                            row_data.get("decoded_path", ""),
+                            row_data.get("run_count", ""),
+                            row_data.get("focus_count", ""),
+                            row_data.get("focus_time_ms", ""),
+                            row_data.get("last_run_utc", ""),
+                            "Yes" if row_data.get("forensic_interest") else "No",
+                            row_data.get("forensic_category", ""),
+                            row_data.get("path", ""),
+                            row_data.get("hive", ""),
+                        ])
+
+            QMessageBox.information(
+                self,
+                "Export Complete",
+                f"Exported {self.ae_model.rowCount()} application execution entries to:\n{file_path}",
+            )
+            LOGGER.info(f"Exported {self.ae_model.rowCount()} app execution entries to {file_path}")
+        except Exception as e:
+            LOGGER.error(f"Export failed: {e}")
+            QMessageBox.critical(self, "Export Error", f"Failed to export: {e}")

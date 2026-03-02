@@ -176,6 +176,7 @@ class ImageFilters:
     source: str = ""
     extension: str = ""
     hash_match: str = ""  # Filter by hash list matches
+    url_text: str = ""  # Case-insensitive URL substring filter
     min_size_bytes: Optional[int] = None
     max_size_bytes: Optional[int] = None
 
@@ -273,12 +274,26 @@ class ImagesTab(QWidget):
         self.hash_match_combo.setToolTip("Filter by hash list matches (run 'Check Known Hashes' first)")
         filter_layout.addWidget(self.hash_match_combo, 0, 9)
 
+        # URL text filter
+        self.url_filter_label = QLabel("URL")
+        filter_layout.addWidget(self.url_filter_label, 1, 0)
+        self.url_filter_input = QLineEdit()
+        self.url_filter_input.setPlaceholderText("Filter URLs (contains...)")
+        self.url_filter_input.setToolTip("Case-insensitive URL substring filter on image cache URLs")
+        self.url_filter_input.setClearButtonEnabled(True)
+        self._url_filter_timer = QTimer(self)
+        self._url_filter_timer.setSingleShot(True)
+        self._url_filter_timer.setInterval(400)  # Debounce 400ms
+        self._url_filter_timer.timeout.connect(self._on_filters_changed)
+        self.url_filter_input.textChanged.connect(self._on_url_filter_text_changed)
+        filter_layout.addWidget(self.url_filter_input, 1, 1, 1, 7)
+
         # Reset filters button
         self.reset_filters_button = QPushButton("↻ Reset")
         self.reset_filters_button.setToolTip("Reset all filters to defaults and reload images")
         self.reset_filters_button.clicked.connect(self._reset_filters)
         self.reset_filters_button.setMaximumWidth(80)
-        filter_layout.addWidget(self.reset_filters_button, 0, 10)
+        filter_layout.addWidget(self.reset_filters_button, 1, 8)
 
         layout.addLayout(filter_layout)
 
@@ -403,6 +418,16 @@ class ImagesTab(QWidget):
         self.checked_count_label.setStyleSheet("color: #0066cc; font-weight: bold;")
         checked_layout.addWidget(self.checked_count_label)
 
+        self.check_visible_button = QPushButton("Check Visible")
+        self.check_visible_button.setToolTip("Check all currently visible images")
+        self.check_visible_button.clicked.connect(self._check_visible)
+        checked_layout.addWidget(self.check_visible_button)
+
+        self.uncheck_visible_button = QPushButton("Uncheck Visible")
+        self.uncheck_visible_button.setToolTip("Uncheck all currently visible images")
+        self.uncheck_visible_button.clicked.connect(self._uncheck_visible)
+        checked_layout.addWidget(self.uncheck_visible_button)
+
         self.clear_checks_button = QPushButton("Clear Checks")
         self.clear_checks_button.clicked.connect(self._clear_checked)
         self.clear_checks_button.setEnabled(False)
@@ -424,10 +449,7 @@ class ImagesTab(QWidget):
         self.export_clusters_button.clicked.connect(self._export_clusters)
         self.export_clusters_button.hide()  # Only show in cluster mode
 
-        self.tag_button = QPushButton("Tag Selected")
-        self.tag_button.clicked.connect(self._tag_selected)
-
-        # Phase 2: Tag Checked button
+        # Tag Checked button (primary batch-tag action)
         self.tag_checked_button = QPushButton("Tag Checked")
         self.tag_checked_button.clicked.connect(self._tag_checked)
         self.tag_checked_button.setToolTip(
@@ -474,7 +496,6 @@ class ImagesTab(QWidget):
         controls.addStretch()
         controls.addWidget(self.export_button)
         controls.addWidget(self.export_clusters_button)
-        controls.addWidget(self.tag_button)
         controls.addWidget(self.tag_checked_button)
         controls.addWidget(self.check_hashes_button)
         controls.addWidget(self.similar_button)
@@ -773,6 +794,10 @@ class ImagesTab(QWidget):
         tooltip = "<br/>".join(parts) if parts else "No sources found"
         self.source_label.setToolTip(tooltip)
 
+    def _on_url_filter_text_changed(self, text: str) -> None:
+        """Debounce URL filter text changes."""
+        self._url_filter_timer.start()
+
     def _on_filters_changed(self) -> None:
         # Process pending events to prevent UI lockup when changing filters quickly
         QApplication.processEvents()
@@ -781,6 +806,7 @@ class ImagesTab(QWidget):
         self.filters.source = self.source_combo.currentData() or ""
         self.filters.extension = self.extension_combo.currentData() or ""
         self.filters.hash_match = self.hash_match_combo.currentData() or ""
+        self.filters.url_text = self.url_filter_input.text().strip()
 
         # Phase 3: Size filter
         size_data = self.size_combo.currentData()
@@ -804,6 +830,7 @@ class ImagesTab(QWidget):
             sources=sources,
             extension=self.filters.extension,
             hash_match=self.filters.hash_match,
+            url_text=self.filters.url_text,
             min_size_bytes=self.filters.min_size_bytes,
             max_size_bytes=self.filters.max_size_bytes,
         )
@@ -833,8 +860,12 @@ class ImagesTab(QWidget):
             self.filters.source = ""
             self.filters.extension = ""
             self.filters.hash_match = ""
+            self.filters.url_text = ""
             self.filters.min_size_bytes = None
             self.filters.max_size_bytes = None
+
+            # Clear URL filter text
+            self.url_filter_input.clear()
 
             # Clear thumbnail cache to force reload
             self.model._thumb_cache.clear()
@@ -846,6 +877,7 @@ class ImagesTab(QWidget):
                 sources=(),  # Empty tuple to clear sources filter
                 extension="",
                 hash_match="",
+                url_text="",
                 min_size_bytes=None,
                 max_size_bytes=None,
             )
@@ -1352,8 +1384,11 @@ class ImagesTab(QWidget):
 
         QMessageBox.information(self, "Hash Check Complete", message)
 
-        # Refresh the view to show matched images
-        self.refresh()
+        # Repopulate filter dropdowns (including hash match options) and refresh data
+        # _populate_filters starts a background worker that calls _on_filters_loaded,
+        # which preserves current filter selections and triggers model reload.
+        self._populate_filters()
+        self.hashLookupFinished.emit()
 
     def _on_hash_check_error(self, error_msg: str) -> None:
         """Handle hash check error."""
@@ -1429,26 +1464,10 @@ class ImagesTab(QWidget):
         else:
             return "different"
 
-    def _tag_selected(self) -> None:
-        """Open dialog to tag selected images."""
+    def _tag_images(self, image_ids: List[int]) -> None:
+        """Open dialog to tag specific images by ID."""
         if not self.case_data or self.evidence_id is None:
             return
-
-        indexes = self.list_view.selectedIndexes()
-        if not indexes:
-            QMessageBox.information(
-                self,
-                "No Selection",
-                "Please select at least one image to tag."
-            )
-            return
-
-        image_ids = []
-        for index in indexes:
-            row = self.model.get_row(index)
-            if row and row.get("id"):
-                image_ids.append(int(row["id"]))
-
         if not image_ids:
             return
 
@@ -1468,15 +1487,27 @@ class ImagesTab(QWidget):
             return
         menu = QMenu(self)
 
-        tag_action = menu.addAction("Tag selected...")
+        preview_action = menu.addAction("Preview Image")
+        tag_action = menu.addAction("Tag Image")
         menu.addSeparator()
+        check_action = menu.addAction("Check Image")
         reveal_action = menu.addAction("Reveal in case folder")
 
         chosen = menu.exec(self.list_view.mapToGlobal(point))
         if chosen == reveal_action:
             self._reveal_in_case_folder(row)
         elif chosen == tag_action:
-            self._tag_selected()
+            image_id = row.get("id")
+            if image_id:
+                self._tag_images([image_id])
+        elif chosen == preview_action:
+            self._show_image_preview(row)
+        elif chosen == check_action:
+            image_id = row.get("id")
+            if image_id is not None:
+                self._checked_image_ids.add(image_id)
+                self._update_checked_count_label()
+                self.model.layoutChanged.emit()
 
     def _reveal_in_case_folder(self, row: Dict[str, Any]) -> None:
         if not self.case_data:
@@ -1559,19 +1590,23 @@ class ImagesTab(QWidget):
 
         # Fetch discovery records for multi-source provenance
         discoveries = []
+        hash_matches = []
         image_id = row.get("id")
         if image_id and self.evidence_id and self.case_data and self.case_data.db_manager:
             try:
-                from core.database import get_image_discoveries
+                from core.database import get_image_discoveries, get_hash_matches
                 # Get evidence label for connection lookup
                 evidence = self.case_data.get_evidence(self.evidence_id)
                 label = evidence.get("label") if evidence else None
                 conn = self.case_data.db_manager.get_evidence_conn(self.evidence_id, label)
                 if conn:
                     discoveries = get_image_discoveries(conn, self.evidence_id, image_id)
+                    hash_matches = get_hash_matches(
+                        conn, int(self.evidence_id), image_id=int(image_id)
+                    )
             except Exception as e:
                 # Gracefully handle missing table or connection issues
-                LOGGER.debug("Could not fetch image discoveries: %s", e)
+                LOGGER.debug("Could not fetch image discoveries/hash matches: %s", e)
 
         # Fetch tags on-demand (removed from iter_images)
         if image_id and self.evidence_id and self.case_data:
@@ -1591,6 +1626,7 @@ class ImagesTab(QWidget):
             full_image_path=full_image_path,
             parent=self,
             discoveries=discoveries,
+            hash_matches=hash_matches,
         )
         dialog.exec()
 
@@ -1649,13 +1685,60 @@ class ImagesTab(QWidget):
             if hasattr(self, 'tag_checked_button'):
                 self.tag_checked_button.setEnabled(True)
 
+    def _check_visible(self) -> None:
+        """Check all currently visible images."""
+        rows = self._get_visible_rows()
+        for row in rows:
+            image_id = row.get("id")
+            if image_id is not None:
+                self._checked_image_ids.add(image_id)
+        self._update_checked_count_label()
+        self._emit_layout_changed_all()
+
+    def _uncheck_visible(self) -> None:
+        """Uncheck all currently visible images."""
+        rows = self._get_visible_rows()
+        for row in rows:
+            image_id = row.get("id")
+            if image_id is not None:
+                self._checked_image_ids.discard(image_id)
+        self._update_checked_count_label()
+        self._emit_layout_changed_all()
+
+    def _get_visible_rows(self) -> List[Dict[str, Any]]:
+        """Return list of row dicts for currently visible items in the active view."""
+        if self._view_mode == "grid":
+            return list(self.model._rows)
+        elif self._view_mode == "table":
+            return list(self.table_model._rows)
+        elif self._view_mode == "clusters":
+            # Include cluster members model rows if populated, else cluster representative rows
+            rows: List[Dict[str, Any]] = []
+            if self.cluster_members_model._rows:
+                rows.extend(self.cluster_members_model._rows)
+            else:
+                for cluster in self.cluster_model._clusters:
+                    rep = cluster.get("representative")
+                    if rep:
+                        rows.append(rep)
+                    for member in cluster.get("members", []):
+                        rows.append(member)
+            return rows
+        return []
+
+    def _emit_layout_changed_all(self) -> None:
+        """Emit layoutChanged on all models to refresh checkbox display."""
+        self.model.layoutChanged.emit()
+        self.table_model.layoutChanged.emit()
+        self.cluster_model.layoutChanged.emit()
+        self.cluster_members_model.layoutChanged.emit()
+
     def _clear_checked(self) -> None:
         """Clear all checked images."""
         self._checked_image_ids.clear()
         self._update_checked_count_label()
         # Refresh models to update checkbox display
-        self.model.layoutChanged.emit()
-        self.cluster_model.layoutChanged.emit()
+        self._emit_layout_changed_all()
 
     def _tag_checked(self) -> None:
         """Open dialog to tag all checked images."""

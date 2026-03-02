@@ -1397,7 +1397,7 @@ HSTS_ENTRIES_SCHEMA = TableSchema(
         Column("notes", "TEXT"),
         Column("created_at_utc", "TEXT"),
     ],
-    conflict_action=ConflictAction.FAIL,
+    conflict_action=ConflictAction.REPLACE,  # UNIQUE on (evidence_id, hashed_host, source_path); REPLACE for re-runs
     sortable_columns=["created_at_utc"],
     default_order=[OrderColumn("created_at_utc", "DESC")],
     filterable_columns=[

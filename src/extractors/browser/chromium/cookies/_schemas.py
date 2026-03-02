@@ -59,13 +59,19 @@ KNOWN_COOKIES_COLUMNS: Set[str] = {
     "expires_utc",
     "last_access_utc",
 
-    # Security flags
+    # Security flags (modern names)
     "is_secure",
     "is_httponly",
     "samesite",
 
+    # Security flags (legacy names, Chromium <67 / CefSharp)
+    "secure",       # → is_secure
+    "httponly",      # → is_httponly
+    "firstpartyonly",  # → samesite
+
     # Persistence
     "is_persistent",
+    "persistent",   # Legacy name for is_persistent
     "has_expires",
     "priority",
 
@@ -83,6 +89,24 @@ KNOWN_BUT_NOT_PARSED_COLUMNS: Set[str] = {
     # Edge-specific columns
     "browser_provenance", # Edge: Tracks if cookie was synced from other browser
     "is_edgelegacycookie",# Edge: Flag for cookies migrated from EdgeHTML
+}
+
+# Legacy column name aliases.
+# Old Chromium (<67) and CefSharp/CEF embedded browsers used shorter names
+# that were later prefixed with "is_" in newer Chromium versions.
+# Key = modern name expected by our parser, Values = legacy alternatives.
+LEGACY_COLUMN_ALIASES: Dict[str, List[str]] = {
+    "is_secure": ["secure"],           # Chromium <67
+    "is_httponly": ["httponly"],        # Chromium <67
+    "is_persistent": ["persistent"],   # Chromium <67
+    "samesite": ["firstpartyonly"],    # Chromium <76
+}
+
+# All legacy names (flat set for schema detection)
+LEGACY_COLUMN_NAMES: Set[str] = {
+    alias
+    for aliases in LEGACY_COLUMN_ALIASES.values()
+    for alias in aliases
 }
 
 
