@@ -343,7 +343,14 @@ class SystemJumpListsExtractor(BaseExtractor):
                 LOGGER.info("No Jump List files found")
                 status = "success"  # Not finding files is not an error
             else:
+                LOGGER.info(
+                    "Starting Jump Lists file extraction: %d files to copy",
+                    len(jumplist_files),
+                )
                 callbacks.on_progress(0, len(jumplist_files), "Copying Jump List files")
+                
+                # Pre-load browser AppIDs once (avoid reloading for every file)
+                browser_appids = load_browser_appids()
                 
                 # Group files by partition for efficient multi-partition extraction
                 files_by_partition: Dict[int, List[Dict]] = {}
@@ -369,6 +376,11 @@ class SystemJumpListsExtractor(BaseExtractor):
 
                             try:
                                 file_idx += 1
+                                LOGGER.info(
+                                    "Extracting file %d/%d: %s",
+                                    file_idx, len(jumplist_files),
+                                    file_info['logical_path'],
+                                )
                                 callbacks.on_progress(
                                     file_idx, len(jumplist_files), f"Copying {file_info['filename']}"
                                 )
@@ -378,6 +390,7 @@ class SystemJumpListsExtractor(BaseExtractor):
                                     file_info,
                                     output_dir,
                                     callbacks,
+                                    browser_appids=browser_appids,
                                 )
                                 manifest_data["files"].append(extracted_file)
 
@@ -860,7 +873,8 @@ class SystemJumpListsExtractor(BaseExtractor):
         evidence_fs,
         file_info: Dict,
         output_dir: Path,
-        callbacks: ExtractorCallbacks
+        callbacks: ExtractorCallbacks,
+        browser_appids: Optional[Dict[str, str]] = None,
     ) -> Dict:
         """Copy Jump List file to workspace."""
         try:
@@ -869,15 +883,21 @@ class SystemJumpListsExtractor(BaseExtractor):
             dest_path = output_dir / filename
 
             callbacks.on_log(f"Copying {source_path}", "info")
+            LOGGER.info("Reading %s from evidence", source_path)
 
             file_content = evidence_fs.read_file(source_path)
+            LOGGER.info(
+                "Read %d bytes from %s, writing to workspace",
+                len(file_content), source_path,
+            )
             dest_path.write_bytes(file_content)
 
             md5 = hashlib.md5(file_content).hexdigest()
             sha256 = hashlib.sha256(file_content).hexdigest()
 
-            # Check if browser Jump List
-            browser_appids = load_browser_appids()
+            # Check if browser Jump List (use pre-loaded appids if available)
+            if browser_appids is None:
+                browser_appids = load_browser_appids()
             is_browser, browser = is_browser_jumplist(file_info["appid"], browser_appids)
 
             return {
@@ -898,6 +918,7 @@ class SystemJumpListsExtractor(BaseExtractor):
             }
 
         except Exception as e:
+            LOGGER.error("Failed to extract %s: %s", file_info.get('logical_path'), e)
             callbacks.on_log(f"Failed to extract {file_info['logical_path']}: {e}", "error")
             return {
                 "copy_status": "error",
