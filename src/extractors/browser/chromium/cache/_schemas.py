@@ -58,16 +58,26 @@ SIMPLE_FILE_EOF_FORMAT = '<QIIII'      # magic(Q), flags(I), crc32(I), stream_si
 # Simple Cache Index Format
 # =============================================================================
 
-SIMPLE_INDEX_MAGIC = 0x656e74657220796f  # "enter yo" in ASCII
+SIMPLE_INDEX_MAGIC = 0x656e74657220796f  # V9+ magic: "enter yo" in ASCII
+SIMPLE_INDEX_MAGIC_V7 = 0xfcfb6d1ba7725c30  # V7-V8 legacy magic
+SIMPLE_INDEX_ACCEPTED_MAGICS: FrozenSet[int] = frozenset({
+    SIMPLE_INDEX_MAGIC,
+    SIMPLE_INDEX_MAGIC_V7,
+})
 SIMPLE_INDEX_VERSION = 9  # Current index version
 SIMPLE_INDEX_MIN_VERSION = 7  # Minimum supported version
 SIMPLE_INDEX_MAX_VERSION = 10  # Maximum we've seen
 
+# V9 changed the on-disk entry format from 16 to 24 bytes:
+# V7-V8: hash(8) + last_used_seconds_since_1601(4) + size_chunks_and_flags(4) = 16 bytes
+# V9+:   hash(8) + last_used_time_us_since_1601(8) + size_chunks(4) + in_memory(4) = 24 bytes
+SIMPLE_INDEX_V9_ENTRY_FORMAT_VERSION = 9  # First version using 24-byte entries
+
 # Known index versions
 SIMPLE_INDEX_VERSIONS: Dict[int, str] = {
-    7: "Legacy version",
-    8: "Added cache_last_modified",
-    9: "Current stable version",
+    7: "Legacy version (16-byte entries, old magic)",
+    8: "Added cache_last_modified (16-byte entries, old magic)",
+    9: "Current stable version (24-byte entries, new magic)",
     10: "Future version (not yet released)",
 }
 
