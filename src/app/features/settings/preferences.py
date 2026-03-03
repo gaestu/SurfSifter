@@ -1856,6 +1856,12 @@ class PreferencesDialog(QDialog):
         )
 
         self.result_settings = AppSettings(
-            general=general, tools=tools, network=network, hash=hash_cfg, reports=reports
+            general=general,
+            window=self._original.window,
+            tools=tools,
+            network=network,
+            hash=hash_cfg,
+            sandbox=self._original.sandbox,
+            reports=reports,
         )
         self.accept()

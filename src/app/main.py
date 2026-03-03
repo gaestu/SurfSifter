@@ -91,7 +91,10 @@ class MainWindow(QMainWindow):
         icon_path = base_dir / "config" / "branding" / "surfsifter.png"
         if icon_path.exists():
             self.setWindowIcon(QIcon(str(icon_path)))
-        self.resize(1100, 720)
+        settings_file = settings_path(base_dir)
+        self.settings = AppSettings.load(settings_file)
+        self.settings_file = settings_file
+        self._restore_window_geometry()
 
         # Apply logging config (level, rotation sizes)
         log_level = getattr(logging, self.app_config.logging.level.upper(), logging.INFO)
@@ -102,10 +105,6 @@ class MainWindow(QMainWindow):
             backup_count=self.app_config.logging.app_log_backup_count
         )
         self.logger = get_logger("app.gui")
-
-        settings_file = settings_path(base_dir)
-        self.settings = AppSettings.load(settings_file)
-        self.settings_file = settings_file
 
         # Initialize tool registry and discover tools
         from core.tool_registry import ToolRegistry
@@ -160,6 +159,7 @@ class MainWindow(QMainWindow):
     def closeEvent(self, event):
         """Handle application close - cancel all running tasks and wait for thread pool."""
         LOGGER.info("Application closing - shutting down workers...")
+        self._persist_window_geometry()
 
         # Shutdown all tab workers in evidence tabs
         if hasattr(self, 'main_tabs'):
@@ -195,6 +195,57 @@ class MainWindow(QMainWindow):
 
         LOGGER.info("Application shutdown complete")
         event.accept()
+
+    def _default_window_geometry(self) -> Tuple[int, int, int, int]:
+        screen = QApplication.primaryScreen()
+        if not screen:
+            return 80, 60, 1500, 960
+
+        available = screen.availableGeometry()
+        width = min(1800, max(1200, int(available.width() * 0.9)))
+        height = min(1100, max(820, int(available.height() * 0.9)))
+        width = min(width, available.width())
+        height = min(height, available.height())
+        x = available.left() + max(0, (available.width() - width) // 2)
+        y = available.top() + max(0, (available.height() - height) // 2)
+        return x, y, width, height
+
+    def _restore_window_geometry(self) -> None:
+        default_x, default_y, default_width, default_height = self._default_window_geometry()
+        window_settings = self.settings.window
+
+        width = window_settings.width or default_width
+        height = window_settings.height or default_height
+        x = window_settings.x if window_settings.x is not None else default_x
+        y = window_settings.y if window_settings.y is not None else default_y
+
+        screen = QApplication.primaryScreen()
+        if screen:
+            available = screen.availableGeometry()
+            width = min(width, available.width())
+            height = min(height, available.height())
+            x = min(max(x, available.left()), available.right() - width + 1)
+            y = min(max(y, available.top()), available.bottom() - height + 1)
+
+        self.setGeometry(x, y, width, height)
+        if window_settings.maximized:
+            self.setWindowState(self.windowState() | Qt.WindowMaximized)
+
+    def _persist_window_geometry(self) -> None:
+        geometry = self.normalGeometry() if self.isMaximized() else self.geometry()
+        if not geometry.isValid():
+            return
+
+        self.settings.window.x = geometry.x()
+        self.settings.window.y = geometry.y()
+        self.settings.window.width = geometry.width()
+        self.settings.window.height = geometry.height()
+        self.settings.window.maximized = self.isMaximized()
+
+        try:
+            self.settings.save(self.settings_file)
+        except Exception as exc:  # pragma: no cover - file system error path
+            LOGGER.warning("Failed to persist window geometry: %s", exc)
 
     # UI construction -----------------------------------------------------
 
