@@ -725,9 +725,11 @@ class LegacyEdgeContainerExtractor(BaseExtractor):
         container_type = file_info.get("container_type", "unknown")
         partition_index = file_info.get("partition_index", 0)
 
-        # Create output filename with partition prefix to avoid collisions
+        # Create output filename with partition prefix and path hash to avoid collisions
+        # Path hash prevents collisions when same user exists in different locations
         safe_user = user.replace(" ", "_").replace("/", "_").replace("\\", "_")
-        filename = f"p{partition_index}_{safe_user}_{container_type}_container.dat"
+        path_hash = hashlib.sha256(source_path.encode()).hexdigest()[:8]
+        filename = f"p{partition_index}_{safe_user}_{container_type}_{path_hash}_container.dat"
         dest_path = output_dir / filename
 
         # Try to read the file - may fail for sparse/deleted files (common in Windows.old)

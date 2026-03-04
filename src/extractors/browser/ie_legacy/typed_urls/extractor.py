@@ -565,9 +565,11 @@ class IETypedURLsExtractor(BaseExtractor):
         source_path = file_info["logical_path"]
         user = file_info.get("user", "unknown")
 
-        # Create output filename (include partition to avoid collisions)
+        # Create output filename with path hash for uniqueness
+        # Path hash prevents collisions when same user exists in different locations
         safe_user = user.replace(" ", "_").replace("/", "_").replace("\\", "_")
-        filename = f"p{partition_index}_{safe_user}_NTUSER.DAT"
+        path_hash = hashlib.sha256(source_path.encode()).hexdigest()[:8]
+        filename = f"p{partition_index}_{safe_user}_{path_hash}_NTUSER.DAT"
         dest_path = output_dir / filename
 
         # Read and write file

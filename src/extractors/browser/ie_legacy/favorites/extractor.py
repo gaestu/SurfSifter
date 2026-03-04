@@ -602,17 +602,14 @@ class IEFavoritesExtractor(BaseExtractor):
         name = file_info.get("name", "unknown")
         folder = file_info.get("folder_path", "")
 
-        # Create output filename with collision prevention
+        # Create output filename with path hash for collision prevention
+        # Path hash prevents collisions when same user/folder exists in different locations
         safe_user = user.replace(" ", "_").replace("/", "_").replace("\\", "_")
         safe_folder = folder.replace("/", "_").replace("\\", "_") if folder else "root"
-        base_filename = f"{safe_user}_{safe_folder}_{name}"
+        path_hash = hashlib.sha256(source_path.encode()).hexdigest()[:8]
+        partition_index = file_info.get("partition_index", 0)
+        base_filename = f"p{partition_index}_{safe_user}_{safe_folder}_{path_hash}_{name}"
         dest_path = output_dir / f"{base_filename}.url"
-
-        # Handle filename collisions
-        counter = 1
-        while dest_path.exists():
-            dest_path = output_dir / f"{base_filename}_{counter}.url"
-            counter += 1
 
         # Get original timestamps from evidence BEFORE copying
         crtime_epoch = None

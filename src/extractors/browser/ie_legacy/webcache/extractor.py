@@ -506,9 +506,12 @@ class IEWebCacheExtractor(BaseExtractor):
         source_path = file_info["logical_path"]
         user = file_info.get("user", "unknown")
 
-        # Create output filename
+        # Create output filename with path hash for uniqueness
+        # Path hash prevents collisions when same user exists in different locations
         safe_user = user.replace(" ", "_").replace("/", "_").replace("\\", "_")
-        filename = f"{safe_user}_WebCacheV01.dat"
+        partition_index = file_info.get("partition_index", 0)
+        path_hash = hashlib.sha256(source_path.encode()).hexdigest()[:8]
+        filename = f"p{partition_index}_{safe_user}_{path_hash}_WebCacheV01.dat"
         dest_path = output_dir / filename
 
         callbacks.on_log(f"Copying {source_path} to {dest_path.name}", "info")

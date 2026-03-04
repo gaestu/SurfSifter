@@ -454,10 +454,12 @@ class SafariCookiesExtractor(BaseExtractor):
 
             original_name = Path(path_str).name
             user = extract_user_from_path(path_str) or "unknown"
+            # Path hash prevents collisions when same user exists in different locations
+            path_hash = hashlib.sha256(path_str.encode()).hexdigest()[:8]
             if partition_index is not None:
-                safe_name = f"safari_{user}_p{partition_index}_{original_name}"
+                safe_name = f"safari_{user}_p{partition_index}_{path_hash}_{original_name}"
             else:
-                safe_name = f"safari_{user}_{original_name}"
+                safe_name = f"safari_{user}_{path_hash}_{original_name}"
 
             dest_path = output_dir / safe_name
             dest_path.write_bytes(content)

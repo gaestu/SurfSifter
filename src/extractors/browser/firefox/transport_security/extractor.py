@@ -39,7 +39,7 @@ import json
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Dict, Any, Optional, List, Set, TYPE_CHECKING
+from typing import Dict, Any, Optional, List, TYPE_CHECKING
 
 from PySide6.QtWidgets import QWidget, QLabel
 
@@ -97,9 +97,6 @@ class FirefoxTransportSecurityExtractor(BaseExtractor):
     """
 
     SUPPORTED_BROWSERS = list(FIREFOX_BROWSERS.keys())
-
-    # Track extracted filenames to prevent collisions within a run
-    _extracted_filenames: Set[str]
 
     @property
     def metadata(self) -> ExtractorMetadata:
@@ -174,9 +171,6 @@ class FirefoxTransportSecurityExtractor(BaseExtractor):
         Falls back to single-partition scan for mounted filesystems.
         """
         callbacks.on_step("Initializing Firefox transport security extraction")
-
-        # Reset collision tracking for this run
-        self._extracted_filenames = set()
 
         run_id = self._generate_run_id()
         evidence_id = config.get("evidence_id", 1)
@@ -684,18 +678,10 @@ class FirefoxTransportSecurityExtractor(BaseExtractor):
             safe_user = self._sanitize_filename_component(user)
             safe_profile = self._sanitize_filename_component(profile)
 
-            # Build base filename with partition prefix
-            base_name = f"p{partition_idx}_{browser}_{safe_user}_{safe_profile}_SiteSecurityServiceState.txt"
-
-            # Handle collisions with counter
-            filename = base_name
-            counter = 2
-            while filename in self._extracted_filenames:
-                name_part = base_name.rsplit('.', 1)[0]
-                filename = f"{name_part}_{counter}.txt"
-                counter += 1
-
-            self._extracted_filenames.add(filename)
+            # Build base filename with partition prefix and path hash for uniqueness
+            # Path hash prevents collisions when same user+profile exists in different locations
+            path_hash = hashlib.sha256(source_path.encode()).hexdigest()[:8]
+            filename = f"p{partition_idx}_{browser}_{safe_user}_{safe_profile}_{path_hash}_SiteSecurityServiceState.txt"
             dest_path = output_dir / filename
 
             callbacks.on_log(f"Copying {source_path} to {filename}", "info")

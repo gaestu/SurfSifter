@@ -801,9 +801,11 @@ class FirefoxDownloadsExtractor(BaseExtractor):
         profile = file_info["profile"]
         partition_index = file_info.get("partition_index", 0)
 
-        # Create output filename with partition index to prevent collisions
+        # Create output filename with partition index and path hash to prevent collisions
+        # Path hash ensures uniqueness when same browser/profile exists under different OS users
         safe_profile = profile.replace(" ", "_").replace("/", "_").replace(".", "_")
-        filename = f"{browser}_{safe_profile}_p{partition_index}_places_downloads.sqlite"
+        path_hash = hashlib.sha256(source_path.encode()).hexdigest()[:8]
+        filename = f"{browser}_{safe_profile}_p{partition_index}_{path_hash}_places_downloads.sqlite"
         dest_path = output_dir / filename
 
         callbacks.on_log(f"Copying {source_path} to {dest_path.name}", "info")

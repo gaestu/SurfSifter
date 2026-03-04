@@ -951,9 +951,11 @@ class FirefoxExtensionsExtractor(BaseExtractor):
             filename = file_info["filename"]
             partition_index = file_info.get("partition_index", 0) or 0
 
-            # Create safe output filename with partition index to prevent overwrites
+            # Create safe output filename with partition index and path hash
+            # Path hash prevents collisions when same profile exists under different OS users
             safe_profile = re.sub(r'[^a-zA-Z0-9_-]', '_', profile)[:MAX_SAFE_PROFILE_LENGTH]
-            output_filename = f"{browser}_{safe_profile}_p{partition_index}_{filename}"
+            path_hash = hashlib.sha256(source_path.encode()).hexdigest()[:8]
+            output_filename = f"{browser}_{safe_profile}_p{partition_index}_{path_hash}_{filename}"
             dest_path = output_dir / output_filename
 
             callbacks.on_log(f"Copying {source_path} to {dest_path.name}", "info")
