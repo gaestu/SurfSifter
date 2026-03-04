@@ -302,6 +302,7 @@ TRANSLATIONS: Dict[str, TranslationDict] = {
         # ===================
         # Autofill module
         # ===================
+        "autofill_description": "Autofill entries are form field values saved by browsers to assist with repeated data entry. They can reveal personal information such as names, addresses, and email addresses entered into web forms.",
         "field_name": "Field Name",
         "value": "Value",
         "use_count": "Use Count",
@@ -331,6 +332,10 @@ TRANSLATIONS: Dict[str, TranslationDict] = {
         "web_storage_entries": "entries",
         "no_web_storage_entries": "No storage entries found.",
         "no_web_storage_sites": "No web storage sites found matching the filter criteria.",
+        "web_storage_tagged_keys_only": "Tagged keys only",
+        "web_storage_key_tags": "Key tags",
+        "web_storage_show_key_tags": "Show key tags column",
+        "no_web_storage_appendix": "No web storage entries found for the selected filters.",
 
         # ===================
         # Jump Lists module
@@ -749,6 +754,7 @@ TRANSLATIONS: Dict[str, TranslationDict] = {
         # ===================
         # Autofill module
         # ===================
+        "autofill_description": "Autofill-Einträge sind Formularfeldwerte, die vom Browser zur Unterstützung bei wiederholter Dateneingabe gespeichert werden. Sie können persönliche Informationen wie Namen, Adressen und E-Mail-Adressen enthalten, die in Webformulare eingegeben wurden.",
         "field_name": "Feldname",
         "value": "Wert",
         "use_count": "Anzahl",
@@ -778,6 +784,10 @@ TRANSLATIONS: Dict[str, TranslationDict] = {
         "web_storage_entries": "Einträge",
         "no_web_storage_entries": "Keine Speichereinträge gefunden.",
         "no_web_storage_sites": "Keine Web-Storage-Seiten gefunden, die den Filterkriterien entsprechen.",
+        "web_storage_tagged_keys_only": "Nur markierte Schlüssel",
+        "web_storage_key_tags": "Schlüssel-Tags",
+        "web_storage_show_key_tags": "Schlüssel-Tags Spalte anzeigen",
+        "no_web_storage_appendix": "Keine Web-Speicher-Einträge für die ausgewählten Filter gefunden.",
 
         # ===================
         # Jump Lists module

@@ -18,6 +18,7 @@ from ..base import (
     FilterField,
     FilterType,
     ModuleMetadata,
+    sanitize_display_value,
 )
 
 
@@ -40,6 +41,30 @@ class AutofillModule(BaseReportModule):
     def get_filter_fields(self) -> List[FilterField]:
         """Return filter fields for browser, tags, and display options."""
         return [
+            FilterField(
+                key="section_title",
+                label="Section Title",
+                filter_type=FilterType.TEXT,
+                default="",
+                help_text="Optional heading displayed above the table (leave empty to hide)",
+                required=False,
+            ),
+            FilterField(
+                key="section_description",
+                label="Section Description",
+                filter_type=FilterType.TEXT,
+                default="",
+                help_text="Optional custom description text (overrides default description)",
+                required=False,
+            ),
+            FilterField(
+                key="show_default_description",
+                label="Show Default Description",
+                filter_type=FilterType.CHECKBOX,
+                default=True,
+                help_text="Show a built-in description explaining autofill artifacts",
+                required=False,
+            ),
             FilterField(
                 key="browser_filter",
                 label="Browser",
@@ -107,6 +132,14 @@ class AutofillModule(BaseReportModule):
                     ("browser_asc", "Browser (A-Z)"),
                 ],
                 help_text="Sort order for the autofill list",
+                required=False,
+            ),
+            FilterField(
+                key="hide_placeholders",
+                label="Hide Browser Placeholders",
+                filter_type=FilterType.CHECKBOX,
+                default=True,
+                help_text="Replace known browser dummy values (e.g. edge_default_dummy_password_value) with an em-dash",
                 required=False,
             ),
             FilterField(
@@ -192,6 +225,9 @@ class AutofillModule(BaseReportModule):
         date_format = config.get("_date_format", "eu")
 
         # Extract config values
+        section_title = config.get("section_title", "")
+        section_description = config.get("section_description", "")
+        show_default_description = bool(config.get("show_default_description", True))
         browser_filter = config.get("browser_filter", self.ALL_BROWSERS)
         tag_filter = config.get("tag_filter") or []
         field_filter = config.get("field_filter") or ""
@@ -199,6 +235,7 @@ class AutofillModule(BaseReportModule):
         show_dates = bool(config.get("show_dates", True))
         show_count = bool(config.get("show_count", True))
         sort_by = config.get("sort_by", "last_used_desc")
+        hide_placeholders = bool(config.get("hide_placeholders", True))
         show_filter_info = bool(config.get("show_filter_info", False))
 
         # Build and execute query
@@ -211,9 +248,10 @@ class AutofillModule(BaseReportModule):
             db_conn.row_factory = sqlite3.Row
             cursor = db_conn.execute(query, params)
             for row in cursor.fetchall():
+                raw_value = row["value"] or ""
                 entry = {
                     "name": row["name"] or "",
-                    "value": row["value"] or "",
+                    "value": sanitize_display_value(raw_value, hide_placeholders),
                     "browser": (row["browser"] or "").capitalize(),
                     "profile": row["profile"] or "",
                     "count": row["count"] or 0,
@@ -246,6 +284,9 @@ class AutofillModule(BaseReportModule):
         return template.render(
             entries=entries,
             total_count=len(entries),
+            section_title=section_title,
+            section_description=section_description,
+            show_default_description=show_default_description,
             show_profile=show_profile,
             show_dates=show_dates,
             show_count=show_count,

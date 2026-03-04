@@ -67,17 +67,19 @@
                 <td class="col-pin-status">{{ entry.pin_status }}</td>
                 {% endif %}
             </tr>
-            {% if entry.jumplist_path or entry.appid %}
+            {% set show_detail_appid = show_appid and entry.appid %}
+            {% set show_detail_path = entry.jumplist_path %}
+            {% if show_detail_appid or show_detail_path %}
             <tr class="entry-detail{% if loop.index0 % 2 == 0 %} entry-even{% endif %}">
                 <td colspan="{{ col_count }}" class="detail-cell">
-                    {% if entry.appid %}
+                    {% if show_detail_appid %}
                     <span class="detail-label">{{ t.jl_appid | default('App ID') }}:</span>
                     <span class="detail-value">{{ entry.appid }}</span>
                     {% endif %}
-                    {% if entry.appid and entry.jumplist_path %}
+                    {% if show_detail_appid and show_detail_path %}
                     <span class="detail-separator">&nbsp;&bull;&nbsp;</span>
                     {% endif %}
-                    {% if entry.jumplist_path %}
+                    {% if show_detail_path %}
                     <span class="detail-label">{{ t.jl_jumplist_path | default('Jump List Path') }}:</span>
                     <span class="detail-value">{{ entry.jumplist_path }}</span>
                     {% endif %}
@@ -149,7 +151,9 @@
     width: 100%;
     border-collapse: collapse;
     font-size: 0.85em;
-    table-layout: auto;
+    table-layout: fixed;
+    word-wrap: break-word;
+    overflow-wrap: break-word;
 }
 
 .jump-lists-table th,
@@ -183,10 +187,12 @@
 
 .jump-lists-table .col-url {
     word-break: break-all;
+    overflow-wrap: break-word;
 }
 
 .jump-lists-table .col-path {
     word-break: break-all;
+    overflow-wrap: break-word;
 }
 
 .jump-lists-table .col-access-time,
@@ -217,19 +223,20 @@
 }
 
 .jump-lists-table .detail-cell {
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
+    overflow-wrap: break-word;
+    word-break: break-all;
 }
 
 .jump-lists-table .detail-label {
     color: #999;
     font-weight: 500;
+    white-space: nowrap;
 }
 
 .jump-lists-table .detail-value {
     color: #666;
     word-break: break-all;
+    overflow-wrap: break-word;
 }
 
 .jump-lists-table .detail-separator {

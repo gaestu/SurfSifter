@@ -96,6 +96,29 @@ class WebStorageDetailsModule(BaseReportModule):
                 required=False,
             ),
             FilterField(
+                key="tagged_keys_only",
+                label="Tagged Keys Only",
+                filter_type=FilterType.CHECKBOX,
+                default=False,
+                help_text="Show only storage keys that have been tagged",
+                required=False,
+            ),
+            FilterField(
+                key="key_tag_filter",
+                label="Key Tags",
+                filter_type=FilterType.TAG_SELECT,
+                help_text="Filter by tags on individual storage keys (multi-select)",
+                required=False,
+            ),
+            FilterField(
+                key="show_key_tags",
+                label="Show Key Tags Column",
+                filter_type=FilterType.CHECKBOX,
+                default=False,
+                help_text="Display a column showing which tags are assigned to each key",
+                required=False,
+            ),
+            FilterField(
                 key="show_filter_info",
                 label="Show Filter Info",
                 filter_type=FilterType.CHECKBOX,
@@ -135,6 +158,24 @@ class WebStorageDetailsModule(BaseReportModule):
                 pass
             return options
 
+        if key == "key_tag_filter":
+            options = []
+            try:
+                cursor = db_conn.execute(
+                    """
+                    SELECT DISTINCT t.name
+                    FROM tags t
+                    JOIN tag_associations ta ON ta.tag_id = t.id
+                    WHERE ta.artifact_type IN ('local_storage', 'session_storage')
+                    ORDER BY t.name
+                    """
+                )
+                for (tag_name,) in cursor.fetchall():
+                    options.append((tag_name, tag_name))
+            except Exception:
+                pass
+            return options
+
         return None
 
     def render(
@@ -165,6 +206,9 @@ class WebStorageDetailsModule(BaseReportModule):
         max_entries = config.get("max_entries_per_site", "50")
         truncate_values = bool(config.get("truncate_values", True))
         show_filter_info = bool(config.get("show_filter_info", False))
+        tagged_keys_only = bool(config.get("tagged_keys_only", False))
+        key_tag_filter = config.get("key_tag_filter") or []
+        show_key_tags = bool(config.get("show_key_tags", False))
 
         # Convert max_entries to int (or None for "all")
         max_entries_int: Optional[int] = None
@@ -182,6 +226,8 @@ class WebStorageDetailsModule(BaseReportModule):
             storage_type,
             max_entries_int,
             truncate_values,
+            tagged_keys_only,
+            key_tag_filter,
         )
 
         # Build filter description
@@ -191,6 +237,12 @@ class WebStorageDetailsModule(BaseReportModule):
         if storage_type != "all":
             type_label = "Local Storage" if storage_type == "local" else "Session Storage"
             filter_parts.append(f"Type: {type_label}")
+        if tagged_keys_only:
+            filter_parts.append(translations.get("web_storage_tagged_keys_only", "Tagged keys only"))
+        if key_tag_filter:
+            filter_parts.append(
+                f"{translations.get('web_storage_key_tags', 'Key tags')}: {', '.join(key_tag_filter)}"
+            )
         filter_description = "; ".join(filter_parts) if filter_parts else translations.get("filter_all_urls", "All")
 
         # Count totals
@@ -212,6 +264,7 @@ class WebStorageDetailsModule(BaseReportModule):
             show_title=show_title,
             show_description=show_description,
             show_filter_info=show_filter_info,
+            show_key_tags=show_key_tags,
             filter_description=filter_description,
             stored_site_label=stored_site_label,
             t=translations,
@@ -226,6 +279,8 @@ class WebStorageDetailsModule(BaseReportModule):
         storage_type: str,
         max_entries: Optional[int],
         truncate_values: bool,
+        tagged_keys_only: bool = False,
+        key_tag_filter: Optional[List[str]] = None,
     ) -> List[Dict[str, Any]]:
         """Get stored sites with their storage entries.
 
@@ -236,6 +291,8 @@ class WebStorageDetailsModule(BaseReportModule):
             storage_type: 'all', 'local', or 'session'
             max_entries: Maximum entries per site (None for all)
             truncate_values: Whether to truncate long values
+            tagged_keys_only: If True, only show keys that have any tag
+            key_tag_filter: List of tag names to filter individual keys by
 
         Returns:
             List of site dicts with their storage entries
@@ -300,6 +357,8 @@ class WebStorageDetailsModule(BaseReportModule):
                     "Local",
                     max_entries,
                     truncate_values,
+                    tagged_keys_only,
+                    key_tag_filter,
                 )
                 entries.extend(local_entries)
 
@@ -320,6 +379,8 @@ class WebStorageDetailsModule(BaseReportModule):
                         "Session",
                         remaining,
                         truncate_values,
+                        tagged_keys_only,
+                        key_tag_filter,
                     )
                     entries.extend(session_entries)
 
@@ -345,6 +406,8 @@ class WebStorageDetailsModule(BaseReportModule):
         storage_type_label: str,
         limit: Optional[int],
         truncate_values: bool,
+        tagged_keys_only: bool = False,
+        key_tag_filter: Optional[List[str]] = None,
     ) -> List[Dict[str, Any]]:
         """Get storage entries from a specific storage table.
 
@@ -356,22 +419,71 @@ class WebStorageDetailsModule(BaseReportModule):
             storage_type_label: 'Local' or 'Session'
             limit: Maximum number of entries
             truncate_values: Whether to truncate long values
+            tagged_keys_only: If True, only return keys that have any tag
+            key_tag_filter: List of tag names to filter individual keys by
 
         Returns:
             List of entry dicts
         """
         limit_clause = f"LIMIT {limit}" if limit is not None else ""
+        params: List[Any] = [evidence_id, origin]
+        conditions = ["s.evidence_id = ?", "s.origin = ?"]
+
+        # Filter by specific key tags
+        if key_tag_filter:
+            placeholders = ", ".join(["?"] * len(key_tag_filter))
+            conditions.append(f"""
+                EXISTS (
+                    SELECT 1
+                    FROM tag_associations ta
+                    JOIN tags t ON t.id = ta.tag_id
+                    WHERE ta.artifact_id = s.id
+                      AND ta.artifact_type = ?
+                      AND ta.evidence_id = s.evidence_id
+                      AND t.name IN ({placeholders})
+                )
+            """)
+            params.append(table_name)
+            params.extend(key_tag_filter)
+        elif tagged_keys_only:
+            # Any tag on the key
+            conditions.append("""
+                EXISTS (
+                    SELECT 1
+                    FROM tag_associations ta
+                    WHERE ta.artifact_id = s.id
+                      AND ta.artifact_type = ?
+                      AND ta.evidence_id = s.evidence_id
+                )
+            """)
+            params.append(table_name)
+
+        where_clause = " AND ".join(conditions)
+
+        # Build tag names subquery for display when key-level filtering is active
+        show_key_tags = tagged_keys_only or bool(key_tag_filter)
+        if show_key_tags:
+            select_tags = """,
+                (SELECT GROUP_CONCAT(t2.name, ', ')
+                 FROM tag_associations ta2
+                 JOIN tags t2 ON t2.id = ta2.tag_id
+                 WHERE ta2.artifact_id = s.id
+                   AND ta2.artifact_type = '{table_name}'
+                   AND ta2.evidence_id = s.evidence_id
+                ) AS key_tags""".format(table_name=table_name)
+        else:
+            select_tags = ""
 
         query = f"""
-            SELECT key, value, value_type
-            FROM {table_name}
-            WHERE evidence_id = ? AND origin = ?
-            ORDER BY key
+            SELECT s.key, s.value, s.value_type{select_tags}
+            FROM {table_name} s
+            WHERE {where_clause}
+            ORDER BY s.key
             {limit_clause}
         """
 
         try:
-            cursor = db_conn.execute(query, (evidence_id, origin))
+            cursor = db_conn.execute(query, params)
             rows = cursor.fetchall()
         except Exception:
             return []
@@ -382,10 +494,14 @@ class WebStorageDetailsModule(BaseReportModule):
             if truncate_values and len(value) > 100:
                 value = value[:100] + "..."
 
-            entries.append({
+            entry: Dict[str, Any] = {
                 "key": row["key"] or "",
                 "value": value,
                 "type": storage_type_label,
-            })
+            }
+            if show_key_tags:
+                entry["tags"] = row["key_tags"] or ""
+
+            entries.append(entry)
 
         return entries
