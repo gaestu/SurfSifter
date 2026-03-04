@@ -632,3 +632,105 @@ class TestLegacySchemaParsing:
         assert stats["cookie_count"] == 3
         assert stats["domain_count"] == 3
         assert stats["encrypted_count"] >= 1
+
+
+# =============================================================================
+# Test Binary encrypted_value Column Handling
+# =============================================================================
+
+class TestBinaryEncryptedValue:
+    """Verify that binary encrypted_value data does not cause UTF-8 decode errors.
+
+    Regression test for: sqlite3.OperationalError: Could not decode to UTF-8 column
+    'encrypted_value' when DPAPI v10/v20 blobs are stored in the cookies table.
+    """
+
+    @pytest.fixture
+    def cookies_db_with_binary(self, tmp_path):
+        """Create a Cookies DB whose encrypted_value contains raw binary bytes
+        that are *not* valid UTF-8 (mimics DPAPI v10/v20 encryption blobs)."""
+        db_path = tmp_path / "Cookies"
+        conn = sqlite3.connect(db_path)
+        conn.execute("""
+            CREATE TABLE cookies (
+                host_key TEXT NOT NULL,
+                name TEXT NOT NULL,
+                value TEXT,
+                path TEXT NOT NULL,
+                creation_utc INTEGER NOT NULL,
+                expires_utc INTEGER NOT NULL,
+                last_access_utc INTEGER NOT NULL,
+                is_secure INTEGER NOT NULL,
+                is_httponly INTEGER NOT NULL,
+                samesite INTEGER NOT NULL DEFAULT -1,
+                is_persistent INTEGER NOT NULL DEFAULT 1,
+                has_expires INTEGER NOT NULL DEFAULT 1,
+                priority INTEGER NOT NULL DEFAULT 1,
+                encrypted_value BLOB
+            )
+        """)
+
+        # v20-prefixed blob with deliberately invalid UTF-8 continuation bytes
+        v20_blob = b"v20\x00\xff\xfe\x80\x81\x82\x83\xc0\xc1\xf5\xf6\xf7\xf8"
+        # v10-prefixed blob
+        v10_blob = b"v10\x6d\x90\x91\x43\x2f\x27\x8f\x4f\x72\xfe\xed\xba\xbe"
+
+        conn.execute(
+            "INSERT INTO cookies VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (".encrypted.com", "token", "", "/", 13350000000000000,
+             13400000000000000, 13350000000000000, 1, 1, 0, 1, 1, 1, v20_blob),
+        )
+        conn.execute(
+            "INSERT INTO cookies VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (".secure.org", "auth", "", "/", 13300000000000000,
+             13350000000000000, 13300000000000000, 1, 1, 0, 1, 1, 1, v10_blob),
+        )
+        # One non-encrypted cookie for comparison
+        conn.execute(
+            "INSERT INTO cookies VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (".plain.com", "pref", "dark", "/", 13300000000000000,
+             13350000000000000, 13300000000000000, 0, 0, -1, 1, 1, 1, None),
+        )
+        conn.commit()
+        conn.close()
+        return db_path
+
+    def test_parse_cookies_with_binary_encrypted_value(self, cookies_db_with_binary):
+        """parse_cookies succeeds when encrypted_value contains raw binary data."""
+        from extractors._shared.sqlite_helpers import safe_sqlite_connect
+
+        with safe_sqlite_connect(cookies_db_with_binary) as conn:
+            cookies = list(parse_cookies(conn))
+
+        assert len(cookies) == 3
+
+        encrypted = [c for c in cookies if c.is_encrypted]
+        assert len(encrypted) == 2
+
+        for cookie in encrypted:
+            assert isinstance(cookie.encrypted_value, bytes)
+            assert len(cookie.encrypted_value) > 0
+
+    def test_parse_cookies_binary_via_read_only_connection(self, cookies_db_with_binary):
+        """Read-only URI connection (the real-world path) handles binary blobs."""
+        uri = f"file:{cookies_db_with_binary}?mode=ro"
+        conn = sqlite3.connect(uri, uri=True)
+        conn.row_factory = sqlite3.Row
+        # Default text_factory = str — this previously triggered the error
+        cookies = list(parse_cookies(conn))
+        conn.close()
+
+        assert len(cookies) == 3
+        encrypted = [c for c in cookies if c.is_encrypted]
+        assert len(encrypted) == 2
+
+    def test_get_cookie_stats_with_binary(self, cookies_db_with_binary):
+        """get_cookie_stats works even with binary encrypted_value data."""
+        conn = sqlite3.connect(cookies_db_with_binary)
+        conn.row_factory = sqlite3.Row
+        stats = get_cookie_stats(conn)
+        conn.close()
+
+        assert stats["cookie_count"] == 3
+        assert stats["encrypted_count"] == 2
+        assert stats["domain_count"] == 3

@@ -31,6 +31,7 @@ def safe_sqlite_connect(
     db_path: Union[str, Path],
     copy_first: bool = False,
     timeout: float = 5.0,
+    text_factory: Optional[type] = None,
 ) -> Iterator[sqlite3.Connection]:
     """
     Safely connect to SQLite database in read-only mode.
@@ -40,6 +41,11 @@ def safe_sqlite_connect(
         copy_first: If True, copy database to temp location before opening
                    (useful for locked databases or evidence preservation)
         timeout: Connection timeout in seconds
+        text_factory: Optional callable to use as ``text_factory`` on the
+            connection.  Set to ``bytes`` when the query returns columns
+            that contain raw binary data which would otherwise fail UTF-8
+            decoding.  When *None* (the default) the stdlib default
+            (``str``) is kept.
 
     Yields:
         sqlite3.Connection in read-only mode
@@ -74,6 +80,8 @@ def safe_sqlite_connect(
         uri = f"file:{target_path}?mode=ro"
         conn = sqlite3.connect(uri, uri=True, timeout=timeout)
         conn.row_factory = sqlite3.Row  # Enable column access by name
+        if text_factory is not None:
+            conn.text_factory = text_factory
 
         yield conn
 
