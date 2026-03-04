@@ -628,11 +628,14 @@ class ChromiumSiteEngagementExtractor(BaseExtractor):
         browser = file_info["browser"]
         profile = file_info.get("profile", "Default")
 
-        # Create unique output filename
+        # Create unique output filename with mini-hash to prevent collision
+        # Mini-hash of source path ensures uniqueness for same browser/profile
+        # under different OS users (e.g., dual-boot, multiple Windows accounts)
         safe_browser = browser.replace("/", "_").replace("\\", "_")
         safe_profile = profile.replace("/", "_").replace("\\", "_")
         partition_suffix = f"_p{file_info.get('partition_index', 0)}" if file_info.get('partition_index') else ""
-        output_filename = f"{safe_browser}_{safe_profile}{partition_suffix}_Preferences"
+        path_hash = hashlib.sha256(logical_path.encode()).hexdigest()[:8]
+        output_filename = f"{safe_browser}_{safe_profile}{partition_suffix}_{path_hash}_Preferences"
         output_path = output_dir / output_filename
 
         result = {

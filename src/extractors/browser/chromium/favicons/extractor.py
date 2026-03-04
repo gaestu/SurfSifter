@@ -609,7 +609,10 @@ class ChromiumFaviconsExtractor(BaseExtractor):
             # Determine original filename
             original_name = Path(source_path).name
             partition_suffix = f"_p{partition_index}" if partition_index is not None else ""
-            filename = f"{safe_browser}_{safe_profile}{partition_suffix}_{original_name}"
+            # Mini-hash of source path prevents collision when same browser/profile
+            # exists under different OS users (e.g., dual-boot, multiple Windows accounts)
+            path_hash = hashlib.sha256(source_path.encode()).hexdigest()[:8]
+            filename = f"{safe_browser}_{safe_profile}{partition_suffix}_{path_hash}_{original_name}"
 
             dest_path = output_dir / filename
             dest_path.write_bytes(content)

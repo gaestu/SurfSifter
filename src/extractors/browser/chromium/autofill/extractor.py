@@ -625,7 +625,10 @@ class ChromiumAutofillExtractor(BaseExtractor):
 
             safe_profile = profile.replace(' ', '_').replace('/', '_')
             partition_suffix = f"_p{partition_index}" if partition_index is not None else ""
-            filename = f"{browser}_{safe_profile}{partition_suffix}_{file_type}"
+            # Mini-hash of source path prevents collision when same browser/profile
+            # exists under different OS users (e.g., dual-boot, multiple Windows accounts)
+            path_hash = hashlib.sha256(source_path.encode()).hexdigest()[:8]
+            filename = f"{browser}_{safe_profile}{partition_suffix}_{path_hash}_{file_type}"
             dest_path = output_dir / filename
 
             callbacks.on_log(f"Copying {source_path} to {dest_path.name}", "info")
