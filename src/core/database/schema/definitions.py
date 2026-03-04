@@ -1439,7 +1439,7 @@ JUMP_LIST_ENTRIES_SCHEMA = TableSchema(
         Column("notes", "TEXT"),
         Column("created_at_utc", "TEXT"),
     ],
-    conflict_action=ConflictAction.FAIL,
+    conflict_action=ConflictAction.REPLACE,
     sortable_columns=["lnk_access_time", "target_path", "url"],
     default_order=[OrderColumn("lnk_access_time", "DESC")],
     filterable_columns=[
