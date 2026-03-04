@@ -541,7 +541,7 @@ class MainWindow(QMainWindow):
         # IMPORTANT: Set case_data BEFORE evidence_id to ensure reload() has data access
         if self.case_data:
             tags_tab.set_case_data(self.case_data)
-        tags_tab.set_evidence(evidence_id)
+        tags_tab.set_evidence(evidence_id, evidence_label)
         evidence_tabs.addTab(tags_tab, "Tags")
 
         # 13. Audit (NEW) - includes Statistics, Warnings, and Logs subtabs

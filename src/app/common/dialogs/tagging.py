@@ -22,6 +22,8 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from app.common.constants import ARTIFACT_DISPLAY_NAMES
+
 
 class TagArtifactsDialog(QDialog):
     """
@@ -70,25 +72,7 @@ class TagArtifactsDialog(QDialog):
 
         # Info label
         count = len(self.artifact_ids)
-        artifact_name = {
-            'url': 'URL',
-            'image': 'Image',
-            'file_list': 'File',
-            'download': 'Download',
-            'cookie': 'Cookie',
-            'bookmark': 'Bookmark',
-            'browser_download': 'Browser Download',
-            'autofill': 'Autofill Entry',
-            'credential': 'Credential',
-            'session_tab': 'Session Tab',
-            'site_permission': 'Site Permission',
-            'media_playback': 'Media Playback',
-            'local_storage': 'Local Storage Key',
-            'session_storage': 'Session Storage Key',
-            'installed_software': 'Installed Application',
-            'jump_list': 'Jump List Entry',
-            'jump_list_entry': 'Jump List Entry',
-        }.get(self.artifact_type, 'Artifact')
+        artifact_name = ARTIFACT_DISPLAY_NAMES.get(self.artifact_type, 'Artifact')
 
         if count == 1:
             info_text = f"Tagging 1 {artifact_name.lower()}"

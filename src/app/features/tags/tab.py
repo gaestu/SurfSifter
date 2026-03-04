@@ -23,6 +23,7 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtGui import QAction
 
+from app.common.dialogs.tag_match_summary import TagMatchSummaryDialog
 from app.data.case_data import CaseDataAccess
 from app.features.tags.models import TagsTableModel
 
@@ -37,6 +38,8 @@ class TagsTab(QWidget):
         super().__init__(parent)
         self.case_data = case_data
         self.evidence_id: Optional[int] = None
+        self._evidence_label: Optional[str] = None
+        self._summary_dialog: Optional[TagMatchSummaryDialog] = None
 
         self._init_ui()
 
@@ -68,6 +71,14 @@ class TagsTab(QWidget):
         toolbar_layout.addWidget(self.delete_btn)
 
         toolbar_layout.addStretch()
+
+        self._summary_btn = QPushButton("📊 Tag && Match Summary")
+        self._summary_btn.setToolTip(
+            "Open a floating panel showing tagged artifacts and reference-list matches"
+        )
+        self._summary_btn.clicked.connect(self._open_summary)
+        toolbar_layout.addWidget(self._summary_btn)
+
         layout.addLayout(toolbar_layout)
 
         # Table
@@ -97,10 +108,16 @@ class TagsTab(QWidget):
         self.model.set_case_data(case_data)
         self._refresh()
 
-    def set_evidence(self, evidence_id: Optional[int]) -> None:
+    def set_evidence(self, evidence_id: Optional[int], evidence_label: Optional[str] = None) -> None:
         self.evidence_id = evidence_id
+        self._evidence_label = evidence_label
         self.model.set_evidence(evidence_id)
         self._refresh()
+
+        # Keep summary dialog in sync if it exists
+        if self._summary_dialog is not None:
+            conn = self._get_evidence_conn()
+            self._summary_dialog.set_db_connection(conn, evidence_id)
 
     def _refresh(self) -> None:
         self.model.reload()
@@ -242,6 +259,29 @@ class TagsTab(QWidget):
             menu.addAction(merge_action)
 
         menu.exec(self.table_view.viewport().mapToGlobal(pos))
+
+    # --- Summary dialog ---
+
+    def _get_evidence_conn(self):
+        """Get a raw sqlite3 connection for the current evidence, or None."""
+        if (
+            self.case_data is not None
+            and self.evidence_id is not None
+            and self.case_data.db_manager is not None
+        ):
+            return self.case_data.db_manager.get_evidence_conn(
+                self.evidence_id, self._evidence_label
+            )
+        return None
+
+    def _open_summary(self) -> None:
+        """Open (or raise) the floating Tag & Match Summary panel."""
+        if self._summary_dialog is None:
+            self._summary_dialog = TagMatchSummaryDialog(parent=self.window())
+
+        conn = self._get_evidence_conn()
+        self._summary_dialog.set_db_connection(conn, self.evidence_id)
+        self._summary_dialog.show()
 
 
 class CreateTagDialog(QDialog):

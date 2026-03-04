@@ -80,6 +80,9 @@ from .screenshot_dialog import ScreenshotCaptureDialog
 # URL deduplication dialog
 from .deduplicate_urls import DeduplicateUrlsDialog
 
+# Tag & Match summary inspector
+from .tag_match_summary import TagMatchSummaryDialog
+
 __all__ = [
     # Utilities
     "show_error_dialog",
@@ -126,5 +129,7 @@ __all__ = [
     "ScreenshotCaptureDialog",
     # URL deduplication
     "DeduplicateUrlsDialog",
+    # Tag & Match summary
+    "TagMatchSummaryDialog",
 ]
 

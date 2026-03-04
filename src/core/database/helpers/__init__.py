@@ -187,6 +187,8 @@ from .tags import (
     merge_tag_associations,
     query_artifacts_by_tags,
     query_all_tagged_artifacts,
+    get_tag_artifact_summary,
+    get_match_summary,
 )
 
 # Timeline
