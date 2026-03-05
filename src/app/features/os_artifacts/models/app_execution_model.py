@@ -55,6 +55,7 @@ class AppExecutionModel(QAbstractTableModel):
         "focus_time",
         "focus_count",
         "source",
+        "tags",
     ]
 
     HEADERS = [
@@ -64,6 +65,7 @@ class AppExecutionModel(QAbstractTableModel):
         "Focus Time",
         "Focus Count",
         "Source",
+        "Tags",
     ]
 
     COL_PATH = 0
@@ -72,6 +74,9 @@ class AppExecutionModel(QAbstractTableModel):
     COL_FOCUS_TIME = 3
     COL_FOCUS_COUNT = 4
     COL_SOURCE = 5
+    COL_TAGS = 6
+
+    ARTIFACT_TYPE = "app_execution"
 
     # Forensic interest colors (same palette as InstalledSoftwareModel)
     COLOR_BROWSER = QColor(200, 220, 255)        # Light blue for browsers
@@ -95,14 +100,17 @@ class AppExecutionModel(QAbstractTableModel):
         db_manager: DatabaseManager,
         evidence_id: int,
         evidence_label: str,
+        case_data=None,
         parent=None,
     ):
         super().__init__(parent)
         self.db_manager = db_manager
         self.evidence_id = evidence_id
         self.evidence_label = evidence_label
+        self.case_data = case_data
 
         self._rows: List[Dict[str, Any]] = []
+        self._tag_map: Dict[int, str] = {}
         self._search_text: str = ""
         self._forensic_only: bool = False
 
@@ -157,10 +165,12 @@ class AppExecutionModel(QAbstractTableModel):
                 parsed_rows.append(row_data)
 
             self._rows = self._apply_filters(parsed_rows)
+            self._refresh_tags()
 
         except Exception as e:
             logger.exception("Failed to load app execution data: %s", e)
             self._rows = []
+            self._tag_map = {}
 
     def _apply_filters(self, rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """Apply search and forensic filters."""
@@ -177,6 +187,18 @@ class AppExecutionModel(QAbstractTableModel):
             result = [r for r in result if r.get("forensic_interest")]
 
         return result
+
+    def _refresh_tags(self) -> None:
+        """Refresh tag strings for current rows."""
+        if not self.case_data:
+            self._tag_map = {}
+            return
+        ids = [row.get("id") for row in self._rows if row.get("id") is not None]
+        self._tag_map = self.case_data.get_tag_strings_for_artifacts(
+            self.evidence_id,
+            self.ARTIFACT_TYPE,
+            ids,
+        )
 
     def rowCount(self, parent: QModelIndex = QModelIndex()) -> int:
         if parent.isValid():
@@ -213,6 +235,8 @@ class AppExecutionModel(QAbstractTableModel):
                     parts = hive.replace("\\", "/").split("/")
                     return parts[-1] if parts else hive
                 return ""
+            elif col == self.COL_TAGS:
+                return self._tag_map.get(row.get("id"), "") or ""
 
         elif role == Qt.BackgroundRole:
             if row.get("forensic_interest"):
@@ -233,6 +257,9 @@ class AppExecutionModel(QAbstractTableModel):
                 tips.append(f"Last Run: {row['last_run_utc']}")
             if row.get("forensic_category"):
                 tips.append(f"Forensic Category: {row['forensic_category']}")
+            tag_str = self._tag_map.get(row.get("id"), "")
+            if tag_str:
+                tips.append(f"Tags: {tag_str}")
             return "\n".join(tips)
 
         elif role == Qt.UserRole:

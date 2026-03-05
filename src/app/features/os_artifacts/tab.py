@@ -629,6 +629,7 @@ class OSArtifactsTab(QWidget):
             db_manager=db_manager,
             evidence_id=self.evidence_id,
             evidence_label=evidence_label,
+            case_data=self.case_data,
             parent=self
         )
         self.sw_table.setModel(self.sw_model)
@@ -793,7 +794,9 @@ class OSArtifactsTab(QWidget):
         """Refresh after software tag changes."""
         if self.case_data:
             self.case_data.invalidate_filter_cache(self.evidence_id)
-        # No model refresh needed since tags don't affect displayed columns
+        if self.sw_model:
+            self.sw_model.reload()
+        self._update_software_summary()
 
     # ===== Application Execution Methods =====
 
@@ -813,6 +816,7 @@ class OSArtifactsTab(QWidget):
             db_manager=db_manager,
             evidence_id=self.evidence_id,
             evidence_label=evidence_label,
+            case_data=self.case_data,
             parent=self,
         )
         self.ae_table.setModel(self.ae_model)
@@ -916,6 +920,9 @@ class OSArtifactsTab(QWidget):
         """Refresh after app execution tag changes."""
         if self.case_data:
             self.case_data.invalidate_filter_cache(self.evidence_id)
+        if self.ae_model:
+            self.ae_model.reload()
+        self._update_app_execution_summary()
 
     def _export_app_execution_csv(self) -> None:
         """Export application execution entries to CSV."""
