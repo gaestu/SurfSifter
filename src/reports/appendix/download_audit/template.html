@@ -1,0 +1,154 @@
+{# Appendix Download Audit Template — two-row layout #}
+<style>
+.appendix-audit {
+    margin: 0;
+}
+
+.appendix-audit-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.68em;
+}
+
+.appendix-audit-table th,
+.appendix-audit-table td {
+    border: 1px solid #ddd;
+    padding: 3px 5px;
+    text-align: left;
+    vertical-align: top;
+    word-break: break-word;
+    overflow-wrap: break-word;
+}
+
+.appendix-audit-table th {
+    background-color: #f5f5f5;
+    font-weight: 600;
+    font-size: 0.95em;
+    white-space: nowrap;
+}
+
+.appendix-audit-table .outcome-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 2px;
+    padding: 1px 5px;
+    border-radius: 3px;
+    font-size: 0.9em;
+    font-weight: 500;
+    white-space: nowrap;
+}
+
+.outcome-badge.outcome-success { background: #e8f5e9; color: #2e7d32; }
+.outcome-badge.outcome-failed { background: #fce4ec; color: #c62828; }
+.outcome-badge.outcome-blocked { background: #fff3e0; color: #e65100; }
+.outcome-badge.outcome-cancelled { background: #fff8e1; color: #f57f17; }
+.outcome-badge.outcome-error { background: #fce4ec; color: #b71c1c; }
+
+.appendix-audit-table .url-row td {
+    border-top: none;
+    padding-top: 0;
+    padding-bottom: 5px;
+    font-size: 0.9em;
+    color: #444;
+    word-break: break-all;
+}
+
+.appendix-audit-table .url-row td .url-label {
+    font-weight: 600;
+    color: #666;
+}
+
+.appendix-audit-table .data-row td {
+    border-bottom: none;
+    padding-bottom: 1px;
+}
+
+.appendix-audit-table .reason-cell {
+    font-size: 0.9em;
+    color: #555;
+}
+
+.appendix-audit-table .caller-cell {
+    font-size: 0.9em;
+    color: #666;
+    font-family: monospace;
+}
+
+.appendix-audit .audit-count {
+    font-size: 0.78em;
+    color: #666;
+    margin-top: 6px;
+}
+
+.appendix-audit .empty-message {
+    text-align: center;
+    color: #888;
+    font-style: italic;
+    padding: 40px 20px;
+    background: #f9f9f9;
+    border-radius: 4px;
+}
+
+@media print {
+    .appendix-audit-table { font-size: 0.6em; }
+    .appendix-audit-table th,
+    .appendix-audit-table td { padding: 2px 3px; }
+}
+</style>
+
+<div class="appendix-audit">
+{% if entries %}
+    {% set col_count = 7 %}
+    {% if include_reason %}{% set col_count = col_count + 1 %}{% endif %}
+    {% if include_caller %}{% set col_count = col_count + 1 %}{% endif %}
+
+    <table class="appendix-audit-table">
+        <thead>
+            <tr>
+                <th>{{ t.audit_timestamp | default('Timestamp') }}</th>
+                <th>{{ t.audit_method | default('Method') }}</th>
+                <th>{{ t.audit_outcome | default('Outcome') }}</th>
+                <th>{{ t.audit_status_code | default('Status') }}</th>
+                <th>{{ t.audit_duration | default('Duration') }}</th>
+                <th>{{ t.size | default('Size') }}</th>
+                <th>{{ t.audit_content_type | default('Content Type') }}</th>
+                {% if include_reason %}
+                <th>{{ t.audit_reason | default('Reason') }}</th>
+                {% endif %}
+                {% if include_caller %}
+                <th>{{ t.audit_caller | default('Caller') }}</th>
+                {% endif %}
+            </tr>
+        </thead>
+        <tbody>
+            {% for entry in entries %}
+            <tr class="data-row">
+                <td>{{ entry.timestamp }}</td>
+                <td>{{ entry.method }}</td>
+                <td>
+                    <span class="outcome-badge {{ entry.outcome_class }}">
+                        {{ entry.outcome_icon }} {{ entry.outcome | capitalize }}
+                    </span>
+                </td>
+                <td style="text-align:center;">{{ entry.status_code or '' }}</td>
+                <td style="text-align:right;">{{ entry.duration }}</td>
+                <td style="text-align:right;">{{ entry.bytes_written }}</td>
+                <td>{{ entry.content_type }}</td>
+                {% if include_reason %}
+                <td class="reason-cell">{{ entry.reason }}</td>
+                {% endif %}
+                {% if include_caller %}
+                <td class="caller-cell">{{ entry.caller_info }}</td>
+                {% endif %}
+            </tr>
+            <tr class="url-row">
+                <td colspan="{{ col_count }}"><span class="url-label">URL:</span> {{ entry.url }}</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    <p class="audit-count">{{ total_count }} {{ t.audit_entries | default('entries') }}</p>
+{% else %}
+    <p class="empty-message">{{ t.appendix_download_audit_empty | default('No download audit entries found.') }}</p>
+{% endif %}
+</div>

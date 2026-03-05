@@ -259,6 +259,32 @@ TRANSLATIONS: Dict[str, TranslationDict] = {
         "downloaded": "Downloaded",
         "size": "Size",
         "no_downloaded_images": "No downloaded images found matching the filter criteria.",
+        "downloaded_images_default_title": "Downloaded Images",
+        "showing_x_of_y_downloaded": "Showing {shown} of {total} downloaded images",
+
+        # ===================
+        # Downloaded images appendix
+        # ===================
+        "appendix_download_list_title": "Downloaded Images",
+        "appendix_download_list_empty": "No downloaded images found.",
+
+        # ===================
+        # Download audit appendix
+        # ===================
+        "appendix_download_audit_title": "Download Audit Trail",
+        "appendix_download_audit_empty": "No download audit entries found.",
+        "audit_timestamp": "Timestamp",
+        "audit_outcome": "Outcome",
+        "audit_method": "Method",
+        "audit_status_code": "Status",
+        "audit_duration": "Duration",
+        "audit_content_type": "Content Type",
+        "audit_reason": "Reason",
+        "audit_caller": "Caller",
+        "audit_attempts": "Attempts",
+        "audit_blocked": "Blocked",
+        "audit_entries": "entries",
+        "audit_total": "Total",
 
         # ===================
         # Browser Downloads module
@@ -286,9 +312,13 @@ TRANSLATIONS: Dict[str, TranslationDict] = {
         # ===================
         # Credentials module
         # ===================
+        "credentials_title": "Stored Credentials",
+        "credentials_description": "Overview of saved login credentials found in browser profiles, including usernames, password storage status, and associated websites.",
         "origin_url": "Origin URL",
+        "stored_site": "Stored site",
         "username_field": "Username Field",
         "username": "Username",
+        "no_username": "(no username)",
         "browser": "Browser",
         "profile": "Profile",
         "password": "Password",
@@ -711,6 +741,32 @@ TRANSLATIONS: Dict[str, TranslationDict] = {
         "downloaded": "Heruntergeladen",
         "size": "Grösse",
         "no_downloaded_images": "Keine heruntergeladenen Bilder gefunden, die den Filterkriterien entsprechen.",
+        "downloaded_images_default_title": "Heruntergeladene Bilder",
+        "showing_x_of_y_downloaded": "Zeige {shown} von {total} heruntergeladenen Bildern",
+
+        # ===================
+        # Downloaded images appendix
+        # ===================
+        "appendix_download_list_title": "Heruntergeladene Bilder",
+        "appendix_download_list_empty": "Keine heruntergeladenen Bilder gefunden.",
+
+        # ===================
+        # Download-Audit-Anhang
+        # ===================
+        "appendix_download_audit_title": "Download-Audit-Protokoll",
+        "appendix_download_audit_empty": "Keine Download-Audit-Einträge gefunden.",
+        "audit_timestamp": "Zeitstempel",
+        "audit_outcome": "Ergebnis",
+        "audit_method": "Methode",
+        "audit_status_code": "Status",
+        "audit_duration": "Dauer",
+        "audit_content_type": "Inhaltstyp",
+        "audit_reason": "Grund",
+        "audit_caller": "Aufrufer",
+        "audit_attempts": "Versuche",
+        "audit_blocked": "Blockiert",
+        "audit_entries": "Einträge",
+        "audit_total": "Gesamt",
 
         # ===================
         # Browser Downloads module
@@ -738,9 +794,13 @@ TRANSLATIONS: Dict[str, TranslationDict] = {
         # ===================
         # Credentials module
         # ===================
+        "credentials_title": "Gespeicherte Anmeldedaten",
+        "credentials_description": "Übersicht der in Browserprofilen gespeicherten Anmeldedaten, einschließlich Benutzernamen, Passwortstatus und zugehöriger Websites.",
         "origin_url": "Ursprungs-URL",
+        "stored_site": "Gespeicherte Seite",
         "username_field": "Benutzerfeld",
         "username": "Benutzername",
+        "no_username": "(kein Benutzername)",
         "browser": "Browser",
         "profile": "Profil",
         "password": "Passwort",
