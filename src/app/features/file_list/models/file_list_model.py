@@ -232,7 +232,8 @@ class FileListModel(QAbstractTableModel):
                     fl.extension,
                     fl.size_bytes,
                     fl.modified_ts,
-                    fl.deleted
+                    fl.deleted,
+                    fl.partition_index
                 FROM file_list fl
                 WHERE fl.evidence_id = ?
                 {filter_clause}
@@ -253,6 +254,7 @@ class FileListModel(QAbstractTableModel):
                     "size_bytes": row[4] or 0,
                     "modified_ts": row[5] or "",
                     "deleted": bool(row[6]),
+                    "partition_index": row[7],
                     # matches and tags loaded on-demand via _get_matches()/_get_tags()
                 })
                 rows_loaded += 1
@@ -389,6 +391,24 @@ class FileListModel(QAbstractTableModel):
             List of file_list IDs
         """
         return [self._rows[row_idx]["id"] for row_idx in self.selected_rows]
+
+    def get_selected_file_info(self) -> List[Dict[str, Any]]:
+        """Return ``file_path`` and ``partition_index`` for each selected row.
+
+        Used by the file-export handler to know *which* files to read from
+        the evidence image and on *which* partition they reside.
+
+        Returns:
+            List of dicts, each with keys ``file_path`` and ``partition_index``.
+        """
+        return [
+            {
+                "file_path": self._rows[idx]["file_path"],
+                "partition_index": self._rows[idx].get("partition_index"),
+            }
+            for idx in sorted(self.selected_rows)
+            if 0 <= idx < len(self._rows)
+        ]
 
     def toggle_selection(self, row_idx: int) -> None:
         """

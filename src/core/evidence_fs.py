@@ -1327,6 +1327,7 @@ class MountedFS(EvidenceFS):
         Walk a specific directory and yield all file paths within it.
 
         Uses os.walk() starting from the specified directory.
+        Enforces mount-root confinement via ``_resolve_under_mount``.
 
         Args:
             dir_path: Path to directory to walk (relative to mount point)
@@ -1334,7 +1335,7 @@ class MountedFS(EvidenceFS):
         Yields:
             Normalized file paths (files only, not directories)
         """
-        resolved = (self.mount_point / dir_path).resolve()
+        resolved = self._resolve_under_mount(dir_path)
         if not resolved.exists() or not resolved.is_dir():
             LOGGER.debug("walk_directory: Directory not found: %s", dir_path)
             return
@@ -1350,8 +1351,9 @@ class MountedFS(EvidenceFS):
         Yield file content in chunks (memory-efficient).
 
         Opens file and yields in chunks for streaming hash computation.
+        Enforces mount-root confinement via ``_resolve_under_mount``.
         """
-        resolved = (self.mount_point / path).resolve()
+        resolved = self._resolve_under_mount(path)
         if not resolved.is_file():
             raise FileNotFoundError(f"Path {path} not found under mount {self.mount_point}.")
         with open(resolved, "rb") as f:
