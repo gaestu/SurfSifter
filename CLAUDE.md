@@ -369,6 +369,14 @@ Follow this pipeline for every non-trivial task. Skip to step 2 for simple, well
 - If requirements are ambiguous → ask the user via `ask_questions` (subagents cannot do this)
 - Do NOT proceed to coding until all open questions are resolved
 
+### 1b. Implementation Plan (issue-driven work only)
+- If the task originates from a GitHub Issue, write a structured implementation plan summarizing:
+  - Affected files and planned changes
+  - New files/migrations to create
+  - Key design decisions and trade-offs
+- Post the plan as a comment on the GitHub Issue before proceeding
+- This creates a traceable link between the plan and the implementation
+
 ### 2. Implementation Phase
 - Launch a `runSubagent` with a detailed prompt containing:
   - The full task description
@@ -387,10 +395,16 @@ Follow this pipeline for every non-trivial task. Skip to step 2 for simple, well
   - Focus: **architecture** — dependency rules, code quality, bloat, style
   - Reviews all uncommitted changes via `git diff`
   - Returns a structured verdict: ✅ GOOD TO COMMIT, ⚠️ NEEDS FIXES, or ❌ NEEDS REWORK
+- **Reviewer 3 — Issue Completeness (issue-driven work only):** Launch a `runSubagent` receiving:
+  - The full GitHub Issue body (title, description, acceptance criteria, checkboxes)
+  - The implementation plan from step 1b
+  - The summary of all changes made
+  - Focus: **completeness** — verify every requirement/acceptance criterion from the issue is addressed, and the implementation matches the plan
+  - Returns: **"Issue fully resolved"** or **"Gaps found"** with numbered list of unaddressed items
 
 ### 4. Decision Phase
-- If BOTH reviewers say "good to commit" → run tests, summarize changes, propose commit message
-- If EITHER reviewer found issues → fix the issues, then repeat from step 3 (max 3 iterations before escalating to user)
+- If ALL applicable reviewers say "good to commit" / "issue fully resolved" → run tests, summarize changes, propose commit message
+- If ANY reviewer found issues → fix the issues, then repeat from step 3 (max 3 iterations before escalating to user)
 - If only the GPT reviewer was used (simple changes), its verdict alone is sufficient
 
 ### 5. Finalize
