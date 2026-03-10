@@ -358,3 +358,42 @@ poetry run python -m app.main
 # or
 poetry run surfsifter
 ```
+
+## Coding Procedure
+
+Follow this pipeline for every non-trivial task. Skip to step 2 for simple, well-defined changes.
+
+### 1. Research Phase (main agent)
+- Use `search_subagent` / `runSubagent` to gather all relevant codebase context
+- Identify affected files, existing patterns, migration state, and test coverage
+- If requirements are ambiguous → ask the user via `ask_questions` (subagents cannot do this)
+- Do NOT proceed to coding until all open questions are resolved
+
+### 2. Implementation Phase
+- Launch a `runSubagent` with a detailed prompt containing:
+  - The full task description
+  - All research findings from step 1 (file paths, code snippets, patterns)
+  - Explicit constraints (dependency rules, migration rules, etc.)
+- The coding agent implements the change and returns a summary of all modified/created files
+
+### 3. Review Phase
+- **Reviewer 1 (Claude Opus 4.6):** Launch a `runSubagent` review agent receiving:
+  - The task description
+  - The full content of every changed/created file
+  - Focus: **correctness** — logic flaws, bugs, edge cases, data integrity, forensic safety
+  - Returns: **"Good to commit"** or **"Issues found"** with numbered list
+- **Reviewer 2 (GPT-5.4):** Prompt the user to invoke `@gpt_code_review` in Copilot Chat
+  - This triggers the custom agent at `.github/agents/gpt_code_review.agent.md`
+  - Focus: **architecture** — dependency rules, code quality, bloat, style
+  - Reviews all uncommitted changes via `git diff`
+  - Returns a structured verdict: ✅ GOOD TO COMMIT, ⚠️ NEEDS FIXES, or ❌ NEEDS REWORK
+
+### 4. Decision Phase
+- If BOTH reviewers say "good to commit" → run tests, summarize changes, propose commit message
+- If EITHER reviewer found issues → fix the issues, then repeat from step 3 (max 3 iterations before escalating to user)
+- If only the GPT reviewer was used (simple changes), its verdict alone is sufficient
+
+### 5. Finalize
+- Run: `poetry run pytest -m "not gui_offscreen and not gui_live and not slow and not compat" -q`
+- If tests pass → present summary + commit message to user
+- If tests fail → fix and re-run (max 3 attempts before escalating to user)
