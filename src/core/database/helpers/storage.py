@@ -224,8 +224,9 @@ def insert_indexeddb_database(
         "profile": kwargs.get("profile"),
         "origin": origin,
         "database_name": database_name,
-        "version": kwargs.get("version"),
+        "database_version": kwargs.get("version"),
         "object_stores": kwargs.get("object_stores"),  # JSON array
+        "total_entries": kwargs.get("total_entries", 0),
         "run_id": kwargs.get("run_id"),
         "source_path": kwargs.get("source_path"),
         "discovered_by": kwargs.get("discovered_by"),
