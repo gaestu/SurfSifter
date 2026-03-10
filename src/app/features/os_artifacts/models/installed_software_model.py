@@ -40,6 +40,7 @@ class InstalledSoftwareModel(QAbstractTableModel):
         "install_location",
         "size_kb",
         "forensic_interest",
+        "os_source",
         "tags",
     ]
 
@@ -51,6 +52,7 @@ class InstalledSoftwareModel(QAbstractTableModel):
         "Install Location",
         "Size (KB)",
         "Forensic",
+        "OS",
         "Tags",
     ]
 
@@ -62,7 +64,8 @@ class InstalledSoftwareModel(QAbstractTableModel):
     COL_INSTALL_LOCATION = 4
     COL_SIZE = 5
     COL_FORENSIC = 6
-    COL_TAGS = 7
+    COL_OS = 7
+    COL_TAGS = 8
 
     ARTIFACT_TYPE = "installed_software"
 
@@ -117,11 +120,15 @@ class InstalledSoftwareModel(QAbstractTableModel):
                 self._rows = []
                 return
 
-            # Query installed software indicators
+            # Query installed software indicators (cross-platform)
             sql = """
-                SELECT id, value, path, hive, extra_json
+                SELECT id, type, value, path, hive, provenance, extra_json
                 FROM os_indicators
-                WHERE type = 'system:installed_software'
+                WHERE type IN (
+                    'system:installed_software',
+                    'system:installed_app_macos',
+                    'system:install_receipt_macos'
+                )
                 ORDER BY value COLLATE NOCASE
             """
 
@@ -131,7 +138,7 @@ class InstalledSoftwareModel(QAbstractTableModel):
             # Parse extra_json and build row data
             parsed_rows = []
             for row in raw_rows:
-                row_id, value, path, hive, extra_json_str = row
+                row_id, indicator_type, value, path, hive, provenance, extra_json_str = row
 
                 # Parse extra_json
                 extra = {}
@@ -141,9 +148,14 @@ class InstalledSoftwareModel(QAbstractTableModel):
                     except json.JSONDecodeError:
                         pass
 
+                # Determine OS from provenance
+                _OS_MAP = {"macos_plist": "macOS", "registry": "Windows"}
+                os_source = _OS_MAP.get(provenance, provenance or "Unknown")
+
                 # Build row dict
                 row_data = {
                     "id": row_id,
+                    "type": indicator_type,
                     "name": value or extra.get("name", "Unknown"),
                     "publisher": extra.get("publisher", ""),
                     "version": extra.get("version", ""),
@@ -158,8 +170,10 @@ class InstalledSoftwareModel(QAbstractTableModel):
                     "url": extra.get("url", ""),
                     "comments": extra.get("comments", ""),
                     "architecture": extra.get("architecture", ""),
+                    "os_source": os_source,
                     "path": path,
                     "hive": hive,
+                    "provenance": provenance or "",
                     "extra": extra,
                 }
                 parsed_rows.append(row_data)
@@ -247,6 +261,8 @@ class InstalledSoftwareModel(QAbstractTableModel):
                     else:
                         return "⚠️ Interest"
                 return ""
+            elif col == self.COL_OS:
+                return row.get("os_source", "")
             elif col == self.COL_TAGS:
                 return self._tag_map.get(row.get("id"), "") or ""
 

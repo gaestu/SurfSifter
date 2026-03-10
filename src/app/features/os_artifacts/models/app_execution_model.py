@@ -55,6 +55,7 @@ class AppExecutionModel(QAbstractTableModel):
         "focus_time",
         "focus_count",
         "source",
+        "os_source",
         "tags",
     ]
 
@@ -65,6 +66,7 @@ class AppExecutionModel(QAbstractTableModel):
         "Focus Time",
         "Focus Count",
         "Source",
+        "OS",
         "Tags",
     ]
 
@@ -74,7 +76,8 @@ class AppExecutionModel(QAbstractTableModel):
     COL_FOCUS_TIME = 3
     COL_FOCUS_COUNT = 4
     COL_SOURCE = 5
-    COL_TAGS = 6
+    COL_OS = 6
+    COL_TAGS = 7
 
     ARTIFACT_TYPE = "app_execution"
 
@@ -128,9 +131,9 @@ class AppExecutionModel(QAbstractTableModel):
                 return
 
             sql = """
-                SELECT id, value, path, hive, extra_json
+                SELECT id, type, value, path, hive, provenance, extra_json
                 FROM os_indicators
-                WHERE type = 'execution:user_assist'
+                WHERE type IN ('execution:user_assist', 'execution:launch_services')
                 ORDER BY value COLLATE NOCASE
             """
 
@@ -139,7 +142,7 @@ class AppExecutionModel(QAbstractTableModel):
 
             parsed_rows = []
             for row in raw_rows:
-                row_id, value, path, hive, extra_json_str = row
+                row_id, indicator_type, value, path, hive, provenance, extra_json_str = row
 
                 extra = {}
                 if extra_json_str:
@@ -148,9 +151,20 @@ class AppExecutionModel(QAbstractTableModel):
                     except json.JSONDecodeError:
                         pass
 
+                # Determine OS from provenance
+                _OS_MAP = {"macos_plist": "macOS", "registry": "Windows"}
+                os_source = _OS_MAP.get(provenance, provenance or "Unknown")
+
+                # For macOS Launch Services: use different display logic
+                if indicator_type == "execution:launch_services":
+                    decoded_path = value or extra.get("handler_bundle_id", "")
+                else:
+                    decoded_path = extra.get("decoded_path", value or "")
+
                 row_data = {
                     "id": row_id,
-                    "decoded_path": extra.get("decoded_path", value or ""),
+                    "type": indicator_type,
+                    "decoded_path": decoded_path,
                     "run_count": extra.get("run_count"),
                     "focus_count": extra.get("focus_count"),
                     "focus_time_ms": extra.get("focus_time_ms"),
@@ -158,8 +172,10 @@ class AppExecutionModel(QAbstractTableModel):
                     "rot13_name": extra.get("rot13_name", ""),
                     "forensic_interest": extra.get("forensic_interest", False),
                     "forensic_category": extra.get("forensic_category", ""),
+                    "os_source": os_source,
                     "path": path,
                     "hive": hive,
+                    "provenance": provenance or "",
                     "extra": extra,
                 }
                 parsed_rows.append(row_data)
@@ -235,6 +251,8 @@ class AppExecutionModel(QAbstractTableModel):
                     parts = hive.replace("\\", "/").split("/")
                     return parts[-1] if parts else hive
                 return ""
+            elif col == self.COL_OS:
+                return row.get("os_source", "")
             elif col == self.COL_TAGS:
                 return self._tag_map.get(row.get("id"), "") or ""
 

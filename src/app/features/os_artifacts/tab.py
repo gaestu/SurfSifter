@@ -24,7 +24,13 @@ from PySide6.QtWidgets import (
 
 from app.common.dialogs.tagging import TagArtifactsDialog
 from app.data.case_data import CaseDataAccess
-from app.features.os_artifacts.models import AppExecutionModel, IndicatorsTableModel, JumpListsTableModel, InstalledSoftwareModel
+from app.features.os_artifacts.models import (
+    AppExecutionModel,
+    IndicatorsTableModel,
+    JumpListsTableModel,
+    InstalledSoftwareModel,
+    UserActivityModel,
+)
 from core.logging import get_logger
 
 LOGGER = get_logger(__name__)
@@ -218,6 +224,42 @@ class OSArtifactsTab(QWidget):
 
         self.tabs.addTab(self.app_exec_widget, "Application Execution")
 
+        # ===== User Activity Tab =====
+        self.ua_widget = QWidget()
+        ua_layout = QVBoxLayout(self.ua_widget)
+
+        # User Activity filters
+        ua_filter_layout = QHBoxLayout()
+        ua_filter_layout.addWidget(QLabel("Search"))
+        self.ua_search_edit = QLineEdit()
+        self.ua_search_edit.setPlaceholderText("Filter by name, value, or type...")
+        self.ua_search_edit.textChanged.connect(self._on_user_activity_filters_changed)
+        ua_filter_layout.addWidget(self.ua_search_edit)
+
+        export_ua_btn = QPushButton("📄 Export CSV")
+        export_ua_btn.clicked.connect(self._export_user_activity_csv)
+        ua_filter_layout.addWidget(export_ua_btn)
+
+        ua_filter_layout.addStretch()
+        ua_layout.addLayout(ua_filter_layout)
+
+        # User Activity table (model initialized later when evidence is set)
+        self.ua_model: Optional[UserActivityModel] = None
+        self.ua_table = QTableView()
+        self.ua_table.horizontalHeader().setStretchLastSection(True)
+        self.ua_table.setSelectionBehavior(QTableView.SelectRows)
+        self.ua_table.setSelectionMode(QTableView.ExtendedSelection)
+        self.ua_table.setSortingEnabled(True)
+        self.ua_table.doubleClicked.connect(self._on_user_activity_double_clicked)
+        self.ua_table.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.ua_table.customContextMenuRequested.connect(self._show_user_activity_context_menu)
+        ua_layout.addWidget(self.ua_table)
+
+        self.ua_summary_label = QLabel("No user activity data loaded.")
+        ua_layout.addWidget(self.ua_summary_label)
+
+        self.tabs.addTab(self.ua_widget, "User Activity")
+
         layout.addWidget(self.tabs)
 
         # Analyze section
@@ -259,12 +301,14 @@ class OSArtifactsTab(QWidget):
             self._init_jump_lists_model()  # Initialize Jump Lists model
             self._init_software_model()  # Initialize Installed Software model
             self._init_app_execution_model()  # Initialize App Execution model
+            self._init_user_activity_model()  # Initialize User Activity model
             self._populate_filters()
             self._populate_jump_lists_filters()
             self._update_summary()
             self._update_jump_lists_summary()
             self._update_software_summary()
             self._update_app_execution_summary()
+            self._update_user_activity_summary()
         else:
             # Deferred loading - just store the ID, load on showEvent
             self._load_pending = True
@@ -277,10 +321,13 @@ class OSArtifactsTab(QWidget):
             self.sw_model.reload()
         if self.ae_model:
             self.ae_model.reload()
+        if self.ua_model:
+            self.ua_model.reload()
         self._update_summary()
         self._update_jump_lists_summary()
         self._update_software_summary()
         self._update_app_execution_summary()
+        self._update_user_activity_summary()
 
     def mark_stale(self) -> None:
         """Mark data as stale - will refresh on next showEvent.
@@ -316,12 +363,14 @@ class OSArtifactsTab(QWidget):
             self._init_jump_lists_model()
             self._init_software_model()
             self._init_app_execution_model()
+            self._init_user_activity_model()
         self._populate_filters()
         self._populate_jump_lists_filters()
         self._update_summary()
         self._update_jump_lists_summary()
         self._update_software_summary()
         self._update_app_execution_summary()
+        self._update_user_activity_summary()
 
     def _populate_filters(self) -> None:
         """Populate registry indicator type filters."""
@@ -970,6 +1019,177 @@ class OSArtifactsTab(QWidget):
                 f"Exported {self.ae_model.rowCount()} application execution entries to:\n{file_path}",
             )
             LOGGER.info(f"Exported {self.ae_model.rowCount()} app execution entries to {file_path}")
+        except Exception as e:
+            LOGGER.error(f"Export failed: {e}")
+            QMessageBox.critical(self, "Export Error", f"Failed to export: {e}")
+
+    # ===== User Activity Methods =====
+
+    def _init_user_activity_model(self) -> None:
+        """Initialize User Activity model when evidence is set."""
+        if not self.case_data or self.evidence_id is None:
+            return
+
+        db_manager = self.case_data._db_manager
+        evidence_label = self.case_data.get_evidence_label(self.evidence_id)
+
+        if not db_manager or not evidence_label:
+            LOGGER.warning("Cannot initialize User Activity model: missing db_manager or evidence_label")
+            return
+
+        self.ua_model = UserActivityModel(
+            db_manager=db_manager,
+            evidence_id=self.evidence_id,
+            evidence_label=evidence_label,
+            case_data=self.case_data,
+            parent=self,
+        )
+        self.ua_table.setModel(self.ua_model)
+        self.ua_table.resizeColumnsToContents()
+
+    def _on_user_activity_filters_changed(self) -> None:
+        """Apply User Activity filters."""
+        if not self.ua_model:
+            return
+
+        search_text = self.ua_search_edit.text()
+        self.ua_model.set_filters(search_text=search_text)
+        self._update_user_activity_summary()
+
+    def _update_user_activity_summary(self) -> None:
+        """Update User Activity summary label."""
+        if not self.ua_model:
+            self.ua_summary_label.setText("No user activity data loaded.")
+            return
+
+        count = self.ua_model.rowCount()
+        if count == 0:
+            self.ua_summary_label.setText("No user activity entries found for current filters.")
+            return
+
+        stats = self.ua_model.get_stats()
+        quarantine = stats.get("quarantine_count", 0)
+        recent = stats.get("recent_count", 0)
+
+        summary = f"User Activity Entries: {count}"
+        if quarantine > 0:
+            summary += f" | ⚠️ Quarantine Events: {quarantine}"
+        if recent > 0:
+            summary += f" | Recent Items: {recent}"
+
+        self.ua_summary_label.setText(summary)
+
+    def _on_user_activity_double_clicked(self, index) -> None:
+        """Handle double-click on user activity entry to show details."""
+        if not self.ua_model:
+            return
+
+        row_data = self.ua_model.get_row_data(index.row())
+        if not row_data:
+            return
+
+        from app.features.os_artifacts.dialogs import UserActivityDetailsDialog
+        dialog = UserActivityDetailsDialog(row_data, parent=self)
+        dialog.exec()
+
+    def _show_user_activity_context_menu(self, pos) -> None:
+        """Show context menu for user activity table."""
+        index = self.ua_table.indexAt(pos)
+        if not index.isValid():
+            return
+
+        menu = QMenu(self)
+
+        view_action = menu.addAction("View Details")
+        view_action.triggered.connect(lambda: self._on_user_activity_double_clicked(index))
+
+        menu.addSeparator()
+
+        tag_action = menu.addAction("🏷️ Tag Selected…")
+        tag_action.triggered.connect(self._tag_selected_user_activity)
+
+        menu.exec(self.ua_table.viewport().mapToGlobal(pos))
+
+    def _tag_selected_user_activity(self) -> None:
+        """Launch tagging dialog for selected user activity entries."""
+        if not self.case_data or self.evidence_id is None:
+            QMessageBox.warning(self, "Tagging Unavailable", "Case data is not loaded.")
+            return
+
+        if not self.ua_model:
+            return
+
+        selection_model = self.ua_table.selectionModel()
+        if not selection_model:
+            return
+
+        selected_ids = []
+        for index in selection_model.selectedRows():
+            row_data = self.ua_model.get_row_data(index.row())
+            if row_data and row_data.get("id") is not None:
+                selected_ids.append(int(row_data["id"]))
+
+        if not selected_ids:
+            QMessageBox.information(self, "No Selection", "Select at least one entry to tag.")
+            return
+
+        dialog = TagArtifactsDialog(
+            self.case_data, self.evidence_id, "user_activity", selected_ids, self
+        )
+        dialog.tags_changed.connect(self._on_user_activity_tags_changed)
+        dialog.exec()
+
+    def _on_user_activity_tags_changed(self) -> None:
+        """Refresh after user activity tag changes."""
+        if self.case_data:
+            self.case_data.invalidate_filter_cache(self.evidence_id)
+        if self.ua_model:
+            self.ua_model.reload()
+        self._update_user_activity_summary()
+
+    def _export_user_activity_csv(self) -> None:
+        """Export user activity entries to CSV."""
+        if not self.ua_model or self.evidence_id is None:
+            QMessageBox.warning(self, "Export Error", "No user activity data available.")
+            return
+
+        file_path, _ = QFileDialog.getSaveFileName(
+            self,
+            "Export User Activity",
+            f"user_activity_{self.evidence_id}.csv",
+            "CSV Files (*.csv)",
+        )
+        if not file_path:
+            return
+
+        try:
+            with open(file_path, 'w', newline='', encoding='utf-8') as f:
+                writer = csv.writer(f)
+                writer.writerow([
+                    "Activity Type", "Name", "Value", "Timestamp",
+                    "Source Path", "OS", "Confidence", "Provenance",
+                ])
+
+                for row_idx in range(self.ua_model.rowCount()):
+                    row_data = self.ua_model.get_row_data(row_idx)
+                    if row_data:
+                        writer.writerow([
+                            row_data.get("activity_type", ""),
+                            row_data.get("name", ""),
+                            row_data.get("value", ""),
+                            row_data.get("detected_at_utc", ""),
+                            row_data.get("path", ""),
+                            row_data.get("os_source", ""),
+                            row_data.get("confidence", ""),
+                            row_data.get("provenance", ""),
+                        ])
+
+            QMessageBox.information(
+                self,
+                "Export Complete",
+                f"Exported {self.ua_model.rowCount()} user activity entries to:\n{file_path}",
+            )
+            LOGGER.info(f"Exported {self.ua_model.rowCount()} user activity entries to {file_path}")
         except Exception as e:
             LOGGER.error(f"Export failed: {e}")
             QMessageBox.critical(self, "Export Error", f"Failed to export: {e}")
