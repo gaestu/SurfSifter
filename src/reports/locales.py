@@ -233,6 +233,9 @@ TRANSLATIONS: Dict[str, TranslationDict] = {
         # ===================
         "no_preview": "No Preview",
         "md5": "MD5",
+        "source_date": "Source Date",
+        "creation_date": "Creation Date",
+        "found_by": "Found by",
         "no_images_found": "No images found matching the filter criteria.",
         "images": "images",
         "exif_taken": "Taken",
@@ -241,6 +244,7 @@ TRANSLATIONS: Dict[str, TranslationDict] = {
         "exif_gps_lat": "GPS Lat",
         "exif_gps_lon": "GPS Lon",
         "showing_x_of_y_images": "Showing {shown} of {total} images",
+        "images_auto_description": "Images found on the evidence.",
 
         # ===================
         # Screenshots module
@@ -715,6 +719,9 @@ TRANSLATIONS: Dict[str, TranslationDict] = {
         # ===================
         "no_preview": "Keine Vorschau",
         "md5": "MD5",
+        "source_date": "Quelldatum",
+        "creation_date": "Erstellungsdatum",
+        "found_by": "Gefunden von",
         "no_images_found": "Keine Bilder gefunden, die den Filterkriterien entsprechen.",
         "images": "Bilder",
         "exif_taken": "Aufgenommen",
@@ -723,6 +730,7 @@ TRANSLATIONS: Dict[str, TranslationDict] = {
         "exif_gps_lat": "GPS-Breitengrad",
         "exif_gps_lon": "GPS-Längengrad",
         "showing_x_of_y_images": "{shown} von {total} Bildern",
+        "images_auto_description": "Bilder welche auf dem Beweismittel gefunden wurden.",
 
         # ===================
         # Screenshots module
