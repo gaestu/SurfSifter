@@ -1,4 +1,6 @@
 {# Browser Downloads Module Template #}
+{# Calculate colspan for URL row #}
+{% set col_count = 2 + (1 if show_browser else 0) + (1 if show_state else 0) + (1 if show_size else 0) + (1 if show_end_time else 0) %}
 <div class="module-browser-downloads{% if shorten_urls %} shorten-urls{% endif %}">
     {% if section_title %}
     <h3 class="module-title">{{ section_title }}</h3>
@@ -8,7 +10,6 @@
         <thead>
             <tr>
                 <th class="col-filename">{{ t.filename | default('Filename') }}</th>
-                <th class="col-url">{{ t.url | default('URL') }}</th>
                 {% if show_browser %}
                 <th class="col-browser">{{ t.browser | default('Browser') }}</th>
                 {% endif %}
@@ -26,11 +27,8 @@
         </thead>
         <tbody>
             {% for item in downloads %}
-            <tr>
+            <tr class="data-row">
                 <td class="col-filename" title="{{ item.filename }}">{{ item.filename }}</td>
-                <td class="col-url" title="{{ item.url }}">
-                    <span class="url-value">{{ item.url }}</span>
-                </td>
                 {% if show_browser %}
                 <td class="col-browser">{{ item.browser }}</td>
                 {% endif %}
@@ -45,9 +43,14 @@
                 <td class="col-end-time">{{ item.end_time }}</td>
                 {% endif %}
             </tr>
+            <tr class="url-row">
+                <td colspan="{{ col_count }}" class="col-url" title="{{ item.url }}">
+                    <span class="url-prefix">{{ t.url | default('URL') }}:</span> <span class="url-value">{{ item.url }}</span>
+                </td>
+            </tr>
             {% else %}
             <tr>
-                <td colspan="{{ 3 + (1 if show_browser else 0) + (1 if show_state else 0) + (1 if show_size else 0) + (1 if show_end_time else 0) }}" class="empty-message">
+                <td colspan="{{ col_count }}" class="empty-message">
                     {{ t.no_downloads_found | default('No browser downloads found matching the filter criteria.') }}
                 </td>
             </tr>
@@ -101,6 +104,7 @@
 
 .browser-downloads-table {
     width: 100%;
+    max-width: 100%;
     border-collapse: collapse;
     font-size: 0.85em;
     table-layout: fixed;
@@ -109,37 +113,66 @@
 .browser-downloads-table th,
 .browser-downloads-table td {
     border: 1px solid #ddd;
-    padding: 6px 8px;
+    padding: 4px 6px;
     text-align: left;
     vertical-align: top;
-    overflow: hidden;
-    text-overflow: ellipsis;
 }
 
 .browser-downloads-table th {
     background-color: #f5f5f5;
     font-weight: 600;
+    white-space: nowrap;
 }
 
-.browser-downloads-table tbody tr:nth-child(even) {
-    background-color: #fafafa;
+/* Data row - main download info */
+.browser-downloads-table .data-row td {
+    border-bottom: none;
+    padding-bottom: 2px;
 }
 
-.browser-downloads-table tbody tr:hover {
+.browser-downloads-table .data-row:hover,
+.browser-downloads-table .data-row:hover + .url-row {
     background-color: #f0f7ff;
 }
 
-.browser-downloads-table .col-filename {
-    width: 18%;
+/* URL row - below data row */
+.browser-downloads-table .url-row td {
+    border-top: none;
+    padding-top: 0;
+    padding-bottom: 6px;
 }
 
-.browser-downloads-table .col-url {
-    width: 34%;
+.browser-downloads-table .url-row .col-url {
+    font-size: 0.9em;
+    color: #666;
+    overflow-wrap: break-word;
+    word-break: break-all;
+}
+
+.browser-downloads-table .url-row .url-prefix {
+    font-weight: 500;
+    color: #888;
+    font-style: italic;
+}
+
+.browser-downloads-table .url-row:hover {
+    background-color: #f0f7ff;
+}
+
+/* Alternate row coloring (every other download pair) */
+.browser-downloads-table tbody tr.data-row:nth-of-type(4n+1),
+.browser-downloads-table tbody tr.data-row:nth-of-type(4n+1) + .url-row {
+    background-color: #fafafa;
+}
+
+.browser-downloads-table .col-filename {
+    width: 25%;
+    overflow-wrap: break-word;
     word-break: break-all;
 }
 
 .browser-downloads-table .col-browser {
-    width: 8%;
+    width: 10%;
 }
 
 .browser-downloads-table .col-state {
@@ -154,19 +187,17 @@
 
 .browser-downloads-table .col-start-time,
 .browser-downloads-table .col-end-time {
-    width: 11%;
+    width: 23%;
     white-space: nowrap;
 }
 
-.module-browser-downloads.shorten-urls .browser-downloads-table .col-url {
-    word-break: normal;
-}
-
-.module-browser-downloads.shorten-urls .browser-downloads-table .col-url .url-value {
-    display: block;
+.module-browser-downloads.shorten-urls .browser-downloads-table .url-row .col-url .url-value {
+    display: inline-block;
+    max-width: 100%;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
+    vertical-align: bottom;
 }
 
 .browser-downloads-table .empty-message {

@@ -312,7 +312,7 @@ class ApplicationExecutionModule(BaseReportModule):
         """Format last-run timestamp for report output."""
         if not last_run_utc:
             return ""
-        return format_datetime(str(last_run_utc), date_format)
+        return format_datetime(str(last_run_utc), date_format, include_seconds=False)
 
     def _resolve_focus_time(self, extra: Dict[str, Any]) -> str:
         """Resolve focus time from current or legacy keys."""

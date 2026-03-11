@@ -178,7 +178,7 @@ class TestActivitySummaryModule:
 
         assert len(fields) >= 5
         field_keys = [f.key for f in fields]
-        assert "event_group" in field_keys
+        assert "event_kinds" in field_keys
         assert "min_gap_hours" in field_keys
         assert "show_daily_breakdown" in field_keys
         assert "confidence_filter" in field_keys
