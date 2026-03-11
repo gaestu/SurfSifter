@@ -32,22 +32,60 @@ from ..base import (
 class ActivitySummaryModule(BaseReportModule):
     """Module for displaying system/browser activity summary in reports."""
 
-    # Event type groups for filtering
-    EVENT_GROUPS = {
-        "all": "All Events",
-        "browser": "Browser Activity",
-        "downloads": "Downloads",
-        "authentication": "Authentication",
-        "media": "Media Playback",
-    }
+    # All available event kinds with human-readable labels and group membership
+    # Ordered by group for UI presentation
+    EVENT_KIND_OPTIONS = [
+        # Browser activity
+        ("browser_visit", "Browser Visit"),
+        ("url_discovered", "URL Discovered"),
+        ("tab_accessed", "Tab Accessed"),
+        ("tab_closed", "Tab Closed"),
+        ("tab_navigated", "Tab Navigated"),
+        ("bookmark_added", "Bookmark Added"),
+        ("search_performed", "Search Performed"),
+        # Downloads
+        ("download_started", "Download Started"),
+        ("download_completed", "Download Completed"),
+        # Authentication
+        ("credential_saved", "Credential Saved"),
+        ("credential_used", "Credential Used"),
+        ("autofill_created", "Autofill Created"),
+        ("autofill_used", "Autofill Used"),
+        # Media
+        ("media_played", "Media Played"),
+        # Filesystem (unchecked by default — timestamps reflect copy, not original activity)
+        ("file_created", "File Created"),
+        ("file_modified", "File Modified"),
+        ("file_accessed", "File Accessed"),
+        # Extensions & Engagement
+        ("site_engaged", "Site Engaged"),
+        ("extension_installed", "Extension Installed"),
+        ("extension_updated", "Extension Updated"),
+        # Other
+        ("cookie_created", "Cookie Created"),
+        ("cookie_accessed", "Cookie Accessed"),
+        ("os_artifact", "OS Artifact"),
+        ("hsts_observed", "HSTS Observed"),
+        ("hsts_expiry", "HSTS Expiry"),
+        ("jumplist_accessed", "Jump List Accessed"),
+        ("jumplist_created", "Jump List Created"),
+        ("image_extracted", "Image Extracted"),
+        ("form_data_deleted", "Form Data Deleted"),
+    ]
 
-    # Map event kinds to groups
+    # Kinds excluded from the default selection (unreliable timestamps)
+    _DEFAULT_UNCHECKED = {"file_created", "file_modified", "file_accessed"}
+
+    # Map event kinds to groups (kept for backward compat and group labels)
     KIND_TO_GROUP = {
         # Browser activity
         "browser_visit": "browser",
         "url_discovered": "browser",
         "tab_accessed": "browser",
         "bookmark_added": "browser",
+        "search_performed": "browser",
+        "tab_closed": "browser",
+        "tab_navigated": "browser",
         # Downloads
         "download_started": "downloads",
         "download_completed": "downloads",
@@ -58,6 +96,14 @@ class ActivitySummaryModule(BaseReportModule):
         "autofill_used": "authentication",
         # Media
         "media_played": "media",
+        # Filesystem
+        "file_created": "filesystem",
+        "file_modified": "filesystem",
+        "file_accessed": "filesystem",
+        # Extensions & Engagement
+        "site_engaged": "extensions",
+        "extension_installed": "extensions",
+        "extension_updated": "extensions",
         # Other (included in "all" only)
         "cookie_created": "other",
         "cookie_accessed": "other",
@@ -67,6 +113,7 @@ class ActivitySummaryModule(BaseReportModule):
         "jumplist_accessed": "other",
         "jumplist_created": "other",
         "image_extracted": "other",
+        "form_data_deleted": "other",
     }
 
     @property
@@ -83,12 +130,63 @@ class ActivitySummaryModule(BaseReportModule):
         """Return filter fields for activity summary configuration."""
         return [
             FilterField(
-                key="event_group",
+                key="show_title",
+                label="Show Title",
+                filter_type=FilterType.CHECKBOX,
+                default=True,
+                help_text="Display a title at the top of this section",
+                required=False,
+            ),
+            FilterField(
+                key="custom_title",
+                label="Custom Title",
+                filter_type=FilterType.TEXT,
+                default="",
+                help_text="Custom title (leave empty for default)",
+                required=False,
+            ),
+            FilterField(
+                key="show_description",
+                label="Show Description",
+                filter_type=FilterType.CHECKBOX,
+                default=True,
+                help_text="Display a short description below the title",
+                required=False,
+            ),
+            FilterField(
+                key="custom_description",
+                label="Custom Description",
+                filter_type=FilterType.TEXT,
+                default="",
+                help_text="Custom description (leave empty for default)",
+                required=False,
+            ),
+            FilterField(
+                key="date_from",
+                label="From Date",
+                filter_type=FilterType.TEXT,
+                default="",
+                help_text="Start date filter (YYYY-MM-DD). Leave empty for no limit.",
+                required=False,
+            ),
+            FilterField(
+                key="date_to",
+                label="To Date",
+                filter_type=FilterType.TEXT,
+                default="",
+                help_text="End date filter (YYYY-MM-DD). Leave empty for no limit.",
+                required=False,
+            ),
+            FilterField(
+                key="event_kinds",
                 label="Event Types",
-                filter_type=FilterType.DROPDOWN,
-                default="all",
-                options=list(self.EVENT_GROUPS.items()),
-                help_text="Which types of events to include in the summary",
+                filter_type=FilterType.MULTI_SELECT,
+                default=[
+                    kind for kind, _ in self.EVENT_KIND_OPTIONS
+                    if kind not in self._DEFAULT_UNCHECKED
+                ],
+                options=self.EVENT_KIND_OPTIONS,
+                help_text="Select which event types to include (file timestamps unchecked by default — they reflect copy time, not original activity)",
                 required=False,
             ),
             FilterField(
@@ -166,16 +264,35 @@ class ActivitySummaryModule(BaseReportModule):
         date_format = config.get("_date_format", "eu")
 
         # Extract config
-        event_group = config.get("event_group", "all")
+        event_kinds = config.get("event_kinds", None)
         min_gap_hours = int(config.get("min_gap_hours", 24))
         show_daily = config.get("show_daily_breakdown", True)
         max_days = config.get("max_days_shown", "60")
         show_event_breakdown = config.get("show_event_breakdown", True)
         confidence_filter = config.get("confidence_filter", "all")
 
+        # Title and description
+        show_title = config.get("show_title", True)
+        custom_title = config.get("custom_title", "")
+        show_description = config.get("show_description", True)
+        custom_description = config.get("custom_description", "")
+        date_from = config.get("date_from", "")
+        date_to = config.get("date_to", "")
+
+        # Backward compat: old configs may have event_group instead of event_kinds
+        if event_kinds is None:
+            event_group = config.get("event_group", "all")
+            if event_group and event_group != "all":
+                event_kinds = [
+                    kind for kind, group in self.KIND_TO_GROUP.items()
+                    if group == event_group
+                ]
+            # else: event_kinds stays None → no kind filter (all kinds)
+
         # Query timeline data
         events = self._query_events(
-            db_conn, evidence_id, event_group, confidence_filter
+            db_conn, evidence_id, event_kinds, confidence_filter,
+            date_from, date_to,
         )
 
         # Calculate statistics
@@ -192,6 +309,7 @@ class ActivitySummaryModule(BaseReportModule):
         )
         template = env.get_template("template.html")
 
+        t = translations
         return template.render(
             stats=stats,
             daily_counts=daily_counts if show_daily else [],
@@ -199,8 +317,15 @@ class ActivitySummaryModule(BaseReportModule):
             event_breakdown=event_breakdown,
             show_daily=show_daily,
             show_event_breakdown=show_event_breakdown,
-            event_group_name=self._get_event_group_label(event_group, translations),
+            selected_kinds_label=self._get_kinds_label(event_kinds, translations),
             min_gap_hours=min_gap_hours,
+            show_title=show_title,
+            title_text=custom_title or t.get("activity_summary_title", "Activity Summary"),
+            show_description=show_description,
+            description_text=custom_description or t.get(
+                "activity_summary_desc",
+                "Overview of system and browser activity patterns, showing when the device was actively used, significant periods of inactivity, and the distribution of events across different categories.",
+            ),
             t=translations,
             locale=locale,
         )
@@ -209,23 +334,26 @@ class ActivitySummaryModule(BaseReportModule):
         self,
         db_conn: sqlite3.Connection,
         evidence_id: int,
-        event_group: str,
+        event_kinds: Optional[List[str]],
         confidence_filter: str,
+        date_from: str = "",
+        date_to: str = "",
     ) -> List[Dict[str, Any]]:
-        """Query timeline events with optional filtering."""
+        """Query timeline events with optional filtering.
+
+        Args:
+            event_kinds: List of kind strings to include, or None for all.
+        """
         conditions = ["evidence_id = ?", "ts_utc IS NOT NULL"]
         params: List[Any] = [evidence_id]
 
-        # Filter by event group
-        if event_group != "all":
-            kinds_in_group = [
-                kind for kind, group in self.KIND_TO_GROUP.items()
-                if group == event_group
-            ]
-            if kinds_in_group:
-                placeholders = ",".join("?" * len(kinds_in_group))
+        # Filter by selected event kinds
+        if event_kinds is not None and len(event_kinds) > 0:
+            all_kinds = {k for k, _ in self.EVENT_KIND_OPTIONS}
+            if set(event_kinds) != all_kinds:
+                placeholders = ",".join("?" * len(event_kinds))
                 conditions.append(f"kind IN ({placeholders})")
-                params.extend(kinds_in_group)
+                params.extend(event_kinds)
 
         # Filter by confidence
         if confidence_filter == "high":
@@ -234,6 +362,22 @@ class ActivitySummaryModule(BaseReportModule):
             conditions.append("confidence IN ('high', 'medium')")
         elif confidence_filter == "low":
             conditions.append("confidence IN ('high', 'medium', 'low')")
+
+        # Date range filtering (validate YYYY-MM-DD format)
+        if date_from:
+            try:
+                datetime.strptime(date_from[:10], "%Y-%m-%d")
+                conditions.append("ts_utc >= ?")
+                params.append(date_from[:10])
+            except ValueError:
+                pass  # Skip invalid date
+        if date_to:
+            try:
+                datetime.strptime(date_to[:10], "%Y-%m-%d")
+                conditions.append("ts_utc <= ?")
+                params.append(date_to[:10] + "T23:59:59")
+            except ValueError:
+                pass  # Skip invalid date
 
         query = f"""
             SELECT ts_utc, kind, confidence, note
@@ -403,19 +547,15 @@ class ActivitySummaryModule(BaseReportModule):
             return None
         return format_datetime(ts_str, date_format, include_time=True, include_seconds=True)
 
-    def _get_event_group_label(self, event_group: str, t: Dict[str, str]) -> str:
-        """Get localized event group label for report output."""
-        key_map = {
-            "all": "event_group_all",
-            "browser": "event_group_browser",
-            "downloads": "event_group_downloads",
-            "authentication": "event_group_authentication",
-            "media": "event_group_media",
-        }
-        key = key_map.get(event_group, "")
-        if key:
-            return t.get(key, self.EVENT_GROUPS.get(event_group, "All Events"))
-        return self.EVENT_GROUPS.get(event_group, "All Events")
+    def _get_kinds_label(self, event_kinds: Optional[List[str]], t: Dict[str, str]) -> str:
+        """Build a label summarizing which event kinds are selected."""
+        all_kinds = {k for k, _ in self.EVENT_KIND_OPTIONS}
+        if event_kinds is None or set(event_kinds) >= all_kinds:
+            return t.get("event_group_all", "All Events")
+        if not event_kinds:
+            return t.get("no_events_selected", "No Events Selected")
+        # Summarize: show count
+        return f"{len(event_kinds)} / {len(all_kinds)} " + t.get("event_types_selected", "event types selected")
 
     def _calculate_event_breakdown(
         self,
