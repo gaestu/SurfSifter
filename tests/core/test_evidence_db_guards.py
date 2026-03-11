@@ -160,6 +160,16 @@ class TestCaseDataAccessGuards:
             stats = cda.get_download_stats(1)
             assert stats == {}
 
+    def test_get_tag_statistics_returns_empty_before_extraction(self, tmp_path: Path):
+        """get_tag_statistics() returns zero counts when evidence DB missing."""
+        case_db_path = create_case_db(tmp_path)
+
+        with CaseDataAccess(tmp_path, case_db_path) as cda:
+            stats = cda.get_tag_statistics(1)
+            assert stats["tag_count"] == 0
+            assert stats["tagged_artifact_count"] == 0
+            assert stats["breakdown"] == {}
+
 
 class TestGuardPreventsDbCreation:
     """Tests verifying guards prevent database auto-creation."""
@@ -179,6 +189,7 @@ class TestGuardPreventsDbCreation:
             cda.list_downloads(1)
             cda.count_downloads(1)
             cda.get_download_stats(1)
+            cda.get_tag_statistics(1)
 
         # Evidence DB should NOT have been created
         expected_db_path = tmp_path / "evidences" / "test-evidence" / "evidence_test-evidence.sqlite"

@@ -151,3 +151,37 @@ class EvidenceMetadataMixin(BaseDataAccess):
         return EvidenceCounts(
             urls=urls, images=images, indicators=indicators, last_run_utc=last_run_str
         )
+
+    def get_tag_statistics(self, evidence_id: int) -> Dict[str, Any]:
+        """Get tag statistics for an evidence.
+
+        Returns dict with keys: tag_count, tagged_artifact_count, breakdown
+        (dict of artifact_type -> count).
+        """
+        empty = {"tag_count": 0, "tagged_artifact_count": 0, "breakdown": {}}
+        if not self._evidence_db_exists(evidence_id):
+            return empty
+        with self._use_evidence_conn(evidence_id):
+            with self._connect() as conn:
+                tag_count = self._scalar(
+                    conn,
+                    "SELECT COUNT(*) FROM tags WHERE evidence_id = ?",
+                    (evidence_id,),
+                )
+                tagged_artifact_count = self._scalar(
+                    conn,
+                    "SELECT COUNT(*) FROM tag_associations WHERE evidence_id = ?",
+                    (evidence_id,),
+                )
+                cursor = conn.execute(
+                    "SELECT artifact_type, COUNT(*) AS cnt "
+                    "FROM tag_associations WHERE evidence_id = ? "
+                    "GROUP BY artifact_type ORDER BY cnt DESC",
+                    (evidence_id,),
+                )
+                breakdown = {row["artifact_type"]: row["cnt"] for row in cursor.fetchall()}
+        return {
+            "tag_count": tag_count,
+            "tagged_artifact_count": tagged_artifact_count,
+            "breakdown": breakdown,
+        }

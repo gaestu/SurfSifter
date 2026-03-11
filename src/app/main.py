@@ -371,6 +371,25 @@ class MainWindow(QMainWindow):
         stats_group.setLayout(stats_form)
         layout.addWidget(stats_group)
 
+        # Store stat labels as properties for refresh
+        widget.setProperty("urls_count_label", urls_count_label)
+        widget.setProperty("images_count_label", images_count_label)
+        widget.setProperty("indicators_count_label", indicators_count_label)
+        widget.setProperty("last_run_label", last_run_label)
+
+        # Tag summary statistics
+        tag_group = QGroupBox("Tag Summary")
+        tag_form = QFormLayout()
+        tags_count_label = QLabel("—")
+        tagged_artifacts_label = QLabel("—")
+        tag_form.addRow(QLabel("Total Tags"), tags_count_label)
+        tag_form.addRow(QLabel("Tagged Artifacts"), tagged_artifacts_label)
+        tag_group.setLayout(tag_form)
+        layout.addWidget(tag_group)
+
+        widget.setProperty("tags_count_label", tags_count_label)
+        widget.setProperty("tagged_artifacts_label", tagged_artifacts_label)
+
         # Disk/Partition overview (view-only)
         disk_group = QGroupBox("Disk & Partitions")
         disk_layout = QVBoxLayout()
@@ -576,6 +595,9 @@ class MainWindow(QMainWindow):
         # Statistics tab is now inside audit_tab - access via audit_tab.statistics_tab
         evidence_tabs.setProperty("statistics_tab", audit_tab.statistics_tab)
         evidence_tabs.setProperty("overview_widget", overview_widget)
+
+        # Deferred overview refresh after tabs are fully built
+        QTimer.singleShot(100, lambda tabs=evidence_tabs: self._refresh_overview_for_evidence(tabs))
 
         # Phase 3: Connect tab change for lazy loading trigger
         if defer_load:
@@ -1816,10 +1838,48 @@ class MainWindow(QMainWindow):
     # Counts --------------------------------------------------------------
 
     def _refresh_counts(self) -> None:
-        # Counts are now per-evidence tab
-        # This method is kept for compatibility but does nothing
-        # Each evidence tab updates its own counts
-        pass
+        """Refresh overview counts for the current evidence tab."""
+        current_index = self.main_tabs.currentIndex()
+        if current_index <= 0:
+            return
+        evidence_tab_widget = self.main_tabs.widget(current_index)
+        if isinstance(evidence_tab_widget, QTabWidget):
+            self._refresh_overview_for_evidence(evidence_tab_widget)
+
+    def _refresh_overview_for_evidence(self, evidence_tabs: QTabWidget) -> None:
+        """Refresh the Overview tab's summary labels for the given evidence tabs."""
+        if not self.case_data:
+            return
+        evidence_id = evidence_tabs.property("evidence_id")
+        if evidence_id is None:
+            return
+
+        overview_widget = evidence_tabs.property("overview_widget")
+        if overview_widget is None:
+            return
+
+        counts = self.case_data.get_evidence_counts(int(evidence_id))
+
+        urls_label = overview_widget.property("urls_count_label")
+        if urls_label:
+            urls_label.setText(f"{counts.urls:,}")
+        images_label = overview_widget.property("images_count_label")
+        if images_label:
+            images_label.setText(f"{counts.images:,}")
+        indicators_label = overview_widget.property("indicators_count_label")
+        if indicators_label:
+            indicators_label.setText(f"{counts.indicators:,}")
+        last_run_label = overview_widget.property("last_run_label")
+        if last_run_label:
+            last_run_label.setText(counts.last_run_utc or "No extraction yet")
+
+        tag_stats = self.case_data.get_tag_statistics(int(evidence_id))
+        tags_label = overview_widget.property("tags_count_label")
+        if tags_label:
+            tags_label.setText(f"{tag_stats['tag_count']:,}")
+        tagged_label = overview_widget.property("tagged_artifacts_label")
+        if tagged_label:
+            tagged_label.setText(f"{tag_stats['tagged_artifact_count']:,}")
 
     def _clear_counts(self) -> None:
         # Counts are now per-evidence tab
@@ -2080,6 +2140,7 @@ class MainWindow(QMainWindow):
 
         # Refresh counts
         self._refresh_counts()
+        self._refresh_overview_for_evidence(evidence_tabs)
 
         self.log_widget.append("Data updated - current tab refreshed, others will refresh on view")
 
@@ -2465,6 +2526,10 @@ class MainWindow(QMainWindow):
 
         Triggers deferred data loading when a lazy-loaded tab becomes visible.
         """
+        if index == 0:  # Overview tab
+            self._refresh_overview_for_evidence(evidence_tabs)
+            return
+
         widget = evidence_tabs.widget(index)
         if widget is None:
             return
