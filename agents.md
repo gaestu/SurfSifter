@@ -297,6 +297,7 @@ Before submitting changes:
 | `tests/README.md` | Test organization and markers |
 | `planning/wip/` | Active work items |
 | `src/core/database/migrations*/0001_*.sql` | Schema source of truth |
+| `src/reports/modules/MODULE_GUIDE.md` | Report module development guide (field order, templates, localization) |
 
 ---
 

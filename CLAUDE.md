@@ -347,6 +347,7 @@ Before submitting any change:
 |----------|---------|
 | `tests/README.md` | Test organization and markers |
 | `src/core/database/migrations*/0001_*.sql` | Schema source of truth |
+| `src/reports/modules/MODULE_GUIDE.md` | Report module development guide (field order, templates, localization) |
 | GitHub Issues | Active work items — check before starting |
 
 ---
