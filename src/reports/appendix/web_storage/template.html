@@ -1,0 +1,97 @@
+{# Appendix Web Storage List Template #}
+<style>
+.appendix-web-storage-table {
+    width: 100%;
+    table-layout: fixed;
+    border-collapse: collapse;
+    font-size: 0.85em;
+}
+.appendix-web-storage-table th,
+.appendix-web-storage-table td {
+    border: 1px solid #ddd;
+    padding: 3px 6px;
+    text-align: left;
+    vertical-align: top;
+    line-height: 1.3;
+}
+.appendix-web-storage-table th {
+    background-color: #f5f5f5;
+    font-weight: 600;
+    white-space: nowrap;
+}
+.appendix-web-storage-table .col-key {
+    width: 30%;
+    word-break: break-all;
+}
+.appendix-web-storage-table .col-value {
+    width: 60%;
+    word-break: break-all;
+    font-family: monospace;
+    font-size: 0.9em;
+    white-space: pre-wrap;
+}
+.appendix-web-storage-table .col-type {
+    width: 10%;
+    text-align: center;
+}
+.appendix-web-storage-table tbody tr:nth-child(even) {
+    background-color: #fafafa;
+}
+.appendix-origin-header {
+    margin: 1em 0 0.3em 0;
+    font-size: 0.95em;
+    font-weight: 600;
+    color: #333;
+    page-break-after: avoid;
+}
+.appendix-origin-header .origin-name {
+    word-break: break-all;
+}
+.appendix-origin-header .entry-count {
+    font-weight: normal;
+    color: #666;
+}
+
+/* Print styles */
+@media print {
+    .appendix-web-storage-table th {
+        background-color: #f0f0f0 !important;
+        -webkit-print-color-adjust: exact;
+        print-color-adjust: exact;
+    }
+    .appendix-web-storage-table tbody tr:nth-child(even) {
+        background-color: #f8f8f8 !important;
+        -webkit-print-color-adjust: exact;
+        print-color-adjust: exact;
+    }
+}
+</style>
+
+{% if total_entries == 0 %}
+<p class="text-muted">{{ t.no_web_storage_appendix | default('No web storage entries found for the selected filters.') }}</p>
+{% else %}
+    {% for group in grouped %}
+    <h4 class="appendix-origin-header">
+        <span class="origin-name">{{ group.origin }}</span>
+        <span class="entry-count">({{ group.count }} {{ t.web_storage_entries | default('entries') }})</span>
+    </h4>
+    <table class="appendix-web-storage-table">
+        <thead>
+            <tr>
+                <th class="col-key">{{ t.web_storage_key | default('Key') }}</th>
+                <th class="col-value">{{ t.web_storage_value | default('Value') }}</th>
+                <th class="col-type">{{ t.web_storage_type | default('Type') }}</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for entry in group.entries %}
+            <tr>
+                <td class="col-key">{{ entry.key }}</td>
+                <td class="col-value">{{ entry.value }}</td>
+                <td class="col-type">{{ entry.type }}</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    {% endfor %}
+{% endif %}

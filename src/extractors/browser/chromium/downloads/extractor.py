@@ -730,10 +730,14 @@ class ChromiumDownloadsExtractor(BaseExtractor):
         browser = file_info["browser"]
         profile = file_info.get("profile") or "Unknown"
 
-        # Create output filename (guard against None profile)
+        # Create output filename with partition suffix and mini-hash to prevent collision
+        # Mini-hash: first 8 chars of SHA256 of source path, ensures uniqueness for
+        # same browser/profile in different locations (e.g., different OS users, portable installs)
+        # Format: {browser}_{profile}_p{partition}_{mini_hash}_History
         safe_profile = profile.replace(" ", "_").replace("/", "_")
         partition_index = file_info.get("partition_index", 0)
-        filename = f"{browser}_{safe_profile}_p{partition_index}_History"
+        path_hash = hashlib.sha256(source_path.encode()).hexdigest()[:8]
+        filename = f"{browser}_{safe_profile}_p{partition_index}_{path_hash}_History"
         dest_path = output_dir / filename
 
         # Read and write file

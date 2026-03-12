@@ -1,7 +1,8 @@
 """Credentials Report Module.
 
-Displays a table of credentials (saved login data) with filtering by browser
-and tags. Supports multi-select tag filtering with checkboxes.
+Displays a table of credentials (saved login data) with optional title,
+description, filtering by browser and tags, and configurable column visibility.
+Supports multi-select tag filtering with checkboxes.
 """
 
 from __future__ import annotations
@@ -38,8 +39,32 @@ class CredentialsModule(BaseReportModule):
         )
 
     def get_filter_fields(self) -> List[FilterField]:
-        """Return filter fields for browser, tags, and display options."""
+        """Return filter fields for title, description, browser, tags, and display options."""
         return [
+            FilterField(
+                key="section_title",
+                label="Section Title",
+                filter_type=FilterType.TEXT,
+                default="",
+                help_text="Optional custom heading (leave empty to use default title)",
+                required=False,
+            ),
+            FilterField(
+                key="section_description",
+                label="Section Description",
+                filter_type=FilterType.TEXT,
+                default="",
+                help_text="Optional custom description text (overrides default description)",
+                required=False,
+            ),
+            FilterField(
+                key="show_default_description",
+                label="Show Default Description",
+                filter_type=FilterType.CHECKBOX,
+                default=True,
+                help_text="Show a built-in description explaining credential artifacts",
+                required=False,
+            ),
             FilterField(
                 key="browser_filter",
                 label="Browser",
@@ -75,11 +100,19 @@ class CredentialsModule(BaseReportModule):
                 required=False,
             ),
             FilterField(
-                key="show_dates",
-                label="Show Date Columns",
+                key="show_created",
+                label="Show Created Column",
                 filter_type=FilterType.CHECKBOX,
                 default=True,
-                help_text="Display Created and Last Used date columns",
+                help_text="Display the Created date column",
+                required=False,
+            ),
+            FilterField(
+                key="show_last_used",
+                label="Show Last Used Column",
+                filter_type=FilterType.CHECKBOX,
+                default=True,
+                help_text="Display the Last Used date column",
                 required=False,
             ),
             FilterField(
@@ -181,12 +214,18 @@ class CredentialsModule(BaseReportModule):
         translations = config.get("_translations", {})
         date_format = config.get("_date_format", "eu")
 
+        # Extract title and description config
+        section_title = config.get("section_title", "")
+        section_description = config.get("section_description", "")
+        show_default_description = bool(config.get("show_default_description", True))
+
         # Extract config values
         browser_filter = config.get("browser_filter", self.ALL_BROWSERS)
         tag_filter = config.get("tag_filter") or []
         show_profile = bool(config.get("show_profile", False))
         show_password = bool(config.get("show_password", True))
-        show_dates = bool(config.get("show_dates", True))
+        show_created = bool(config.get("show_created", True))
+        show_last_used = bool(config.get("show_last_used", True))
         sort_by = config.get("sort_by", "last_used_desc")
         show_filter_info = bool(config.get("show_filter_info", False))
 
@@ -200,10 +239,14 @@ class CredentialsModule(BaseReportModule):
             db_conn.row_factory = sqlite3.Row
             cursor = db_conn.execute(query, params)
             for row in cursor.fetchall():
+                username_value = row["username_value"] or ""
                 cred = {
                     "origin_url": row["origin_url"] or "",
                     "username_element": row["username_element"] or "",
-                    "username_value": row["username_value"] or "",
+                    "username_value": username_value if username_value else (
+                        translations.get("no_username", "(no username)")
+                    ),
+                    "username_empty": not username_value,
                     "browser": (row["browser"] or "").capitalize(),
                     "profile": row["profile"] or "",
                     "has_password": bool(row["has_password"]),
@@ -234,9 +277,13 @@ class CredentialsModule(BaseReportModule):
         return template.render(
             credentials=credentials,
             total_count=len(credentials),
+            section_title=section_title,
+            section_description=section_description,
+            show_default_description=show_default_description,
             show_profile=show_profile,
             show_password=show_password,
-            show_dates=show_dates,
+            show_created=show_created,
+            show_last_used=show_last_used,
             show_filter_info=show_filter_info,
             filter_description=filter_description,
             t=translations,

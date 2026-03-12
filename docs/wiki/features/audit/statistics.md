@@ -4,8 +4,8 @@ View extractor run statistics (summary cards)
 
 ## Purpose
 
-- Statistics Tab - Summary cards showing extractor run statistics.
-- This tab is added as a subtab within each evidence's QTabWidget (per-evidence).
+- Summary cards showing extractor run statistics per evidence.
+- This subtab is within the Audit tab for each evidence.
 
 ## Inputs
 
@@ -20,4 +20,4 @@ View extractor run statistics (summary cards)
 - Visual summary only; no exported output from this subtab.
 
 ## Notes
-TODO: Insert the different states that a extractor can have
+- Moved from standalone Statistics tab to Audit subtab.

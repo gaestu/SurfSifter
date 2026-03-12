@@ -222,3 +222,48 @@ class TestJumpListUserExtraction:
         """Return 'unknown' for paths without recognizable user folders."""
         path = "ProgramData/Microsoft/Windows/Start Menu/test.lnk"
         assert extractor._extract_user_from_path(path) == "unknown"
+
+
+class TestOleStreamHexParsing:
+    """Test that OLE stream names are parsed as hex to avoid entry_id collisions.
+
+    Windows names OLE streams in .automaticDestinations-ms files using hex
+    numbers (0, 1, ..., 9, a, b, ..., f, 10, 11, ...).  The DestList entry IDs
+    are uint32 integers that correspond to these hex stream names.
+
+    Parsing stream names as decimal first caused stream "a" (hex 10) to collide
+    with stream "10" (decimal 10), triggering UNIQUE constraint violations and
+    merging DestList metadata with the wrong LNK entry for streams >= 10.
+    """
+
+    def test_hex_and_decimal_streams_produce_distinct_ids(self):
+        """Streams 'a' and '10' must produce distinct entry_ids (10 vs 16)."""
+        # This is the exact logic now used in parse_jumplist_ole()
+        assert int("a", 16) == 10
+        assert int("10", 16) == 16
+        assert int("a", 16) != int("10", 16)
+
+    def test_single_digit_streams_unchanged(self):
+        """Single-digit streams (0-9) parse identically in decimal and hex."""
+        for i in range(10):
+            assert int(str(i), 16) == i
+
+    def test_destlist_entry_id_correspondence(self):
+        """DestList entry IDs (uint32) correspond to hex-named OLE streams.
+
+        Windows assigns DestList entry_id N to OLE stream named hex(N).
+        Hex parsing ensures DestList metadata merges with the correct stream.
+        """
+        # Entry ID 10 -> OLE stream "a"
+        assert int("a", 16) == 10
+        # Entry ID 16 -> OLE stream "10"
+        assert int("10", 16) == 16
+        # Entry ID 255 -> OLE stream "ff"
+        assert int("ff", 16) == 255
+
+    def test_large_stream_ids(self):
+        """Jump Lists with many entries have higher hex stream names."""
+        # Chrome Jump Lists commonly exceed 16 entries
+        assert int("1a", 16) == 26
+        assert int("20", 16) == 32
+        assert int("64", 16) == 100

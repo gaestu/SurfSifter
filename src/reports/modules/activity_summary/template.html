@@ -1,9 +1,19 @@
 {# Activity Summary Module Template #}
 <div class="module-activity-summary">
     
+    {# ===== TITLE ===== #}
+    {% if show_title %}
+    <h3 class="module-title">{{ title_text }}</h3>
+    {% endif %}
+
+    {# ===== DESCRIPTION ===== #}
+    {% if show_description %}
+    <p class="module-description">{{ description_text }}</p>
+    {% endif %}
+
     {# ===== SUMMARY STATISTICS ===== #}
     <div class="summary-section">
-        <h4 class="section-title">{{ t.activity_overview | default('Activity Overview') }} ({{ event_group_name }})</h4>
+        <h4 class="section-title">{{ t.activity_overview | default('Activity Overview') }} ({{ selected_kinds_label }})</h4>
         
         {% if stats.total_events > 0 %}
         <table class="data-table stats-table">
@@ -122,6 +132,19 @@
 <style>
 .module-activity-summary {
     margin: 1em 0;
+}
+
+.module-title {
+    margin: 0 0 0.3em 0;
+    color: #222;
+    font-size: 1.3em;
+}
+
+.module-description {
+    color: #555;
+    font-size: 0.95em;
+    margin: 0 0 1em 0;
+    line-height: 1.4;
 }
 
 .module-activity-summary h4 {

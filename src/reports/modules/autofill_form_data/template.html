@@ -27,8 +27,12 @@
                 <tr>
                     <th class="col-name">{{ t.field_name | default('Name') }}</th>
                     <th class="col-value">{{ t.value | default('Value') }}</th>
+                    {% if show_first_used %}
                     <th class="col-first-used">{{ t.first_used | default('First Used') }}</th>
+                    {% endif %}
+                    {% if show_last_used %}
                     <th class="col-last-used">{{ t.last_used | default('Last Used') }}</th>
+                    {% endif %}
                 </tr>
             </thead>
             <tbody>
@@ -44,8 +48,12 @@
                             {%- endif -%}
                         </span>
                     </td>
+                    {% if show_first_used %}
                     <td class="col-first-used"><span class="date-value">{{ entry.first_used }}</span></td>
+                    {% endif %}
+                    {% if show_last_used %}
                     <td class="col-last-used"><span class="date-value">{{ entry.last_used }}</span></td>
+                    {% endif %}
                 </tr>
                 {% endfor %}
             </tbody>
@@ -143,7 +151,9 @@
 .autofill-table th {
     background-color: #f5f5f5;
     font-weight: 600;
-    white-space: nowrap;
+    white-space: normal;
+    word-break: normal;
+    overflow-wrap: break-word;
 }
 
 .autofill-table .col-name {

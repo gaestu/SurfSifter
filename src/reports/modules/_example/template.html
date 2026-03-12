@@ -1,38 +1,135 @@
-<!-- Example module template -->
-<div class="report-module example-module">
-    <h4>{{ title }}</h4>
-    
-    {% if sample_text %}
-    <p>Sample text: {{ sample_text }}</p>
+{# Example Module Template — follows MODULE_GUIDE.md conventions #}
+<div class="module-example">
+
+    {# ── Title ────────────────────────────────────────────── #}
+    {% if show_title %}
+    <h3 class="module-title">{{ title_text }}</h3>
     {% endif %}
-    
-    {% if include_details %}
-    <div class="details">
-        <p><em>Additional details would appear here...</em></p>
-    </div>
+
+    {# ── Description ──────────────────────────────────────── #}
+    {% if show_description %}
+    <p class="module-description">{{ description_text }}</p>
     {% endif %}
-    
-    <p class="meta">Showing up to {{ limit }} items.</p>
+
+    {# ── Main Content ─────────────────────────────────────── #}
+    {% if items %}
+    <table class="example-table">
+        <thead>
+            <tr>
+                <th class="col-name">{{ t.name | default('Name') }}</th>
+                <th class="col-value">{{ t.value | default('Value') }}</th>
+                {% if show_details %}
+                <th class="col-details">{{ t.details | default('Details') }}</th>
+                {% endif %}
+            </tr>
+        </thead>
+        <tbody>
+            {% for item in items %}
+            <tr>
+                <td class="col-name">{{ item.name }}</td>
+                <td class="col-value">{{ item.value }}</td>
+                {% if show_details %}
+                <td class="col-details">{{ item.details }}</td>
+                {% endif %}
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    {% else %}
+    <p class="empty-message">
+        {{ t.no_data | default('No data found matching the filter criteria.') }}
+    </p>
+    {% endif %}
+
+    {# ── Truncation Notice ────────────────────────────────── #}
+    {% if is_truncated %}
+    <p class="truncation-info">
+        {{ t.showing_x_of_y | default('showing {shown} of {total}')
+           | replace('{shown}', shown_count|string)
+           | replace('{total}', total_count|string) }}
+        {{ t.entries | default('entries') }}
+    </p>
+    {% endif %}
+
+    {# ── Filter Info Footer ───────────────────────────────── #}
+    {% if show_filter_info %}
+    <p class="filter-info">
+        <strong>{{ t.filter | default('Filter') }}:</strong> {{ filter_description }}
+        <span class="entry-count">({{ total_count }} {{ t.entries | default('entries') }})</span>
+    </p>
+    {% endif %}
+
 </div>
 
 <style>
-.example-module {
-    border: 1px solid #ddd;
-    border-radius: 4px;
-    padding: 12px;
-    margin: 8px 0;
-}
-.example-module h4 {
-    margin-top: 0;
+/* All styles scoped to .module-example */
+.module-example { margin: 1em 0; }
+.module-example .module-title {
+    margin: 0 0 0.5em 0;
+    font-size: 1.1em;
+    font-weight: 600;
     color: #333;
 }
-.example-module .details {
-    background: #f9f9f9;
-    padding: 8px;
-    border-radius: 4px;
-}
-.example-module .meta {
-    color: #666;
+.module-example .module-description {
+    margin: 0 0 0.75em 0;
+    color: #555;
     font-size: 0.9em;
+    line-height: 1.4;
+}
+
+/* Table */
+.module-example .example-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.85em;
+    table-layout: fixed;
+}
+.module-example .example-table th,
+.module-example .example-table td {
+    border: 1px solid #ddd;
+    padding: 6px 8px;
+    text-align: left;
+    vertical-align: top;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.module-example .example-table th {
+    background-color: #f5f5f5;
+    font-weight: 600;
+}
+.module-example .example-table tbody tr:nth-child(even) {
+    background-color: #fafafa;
+}
+.module-example .example-table tbody tr:hover {
+    background-color: #f0f7ff;
+}
+
+/* Empty state */
+.module-example .empty-message {
+    text-align: center;
+    color: #888;
+    font-style: italic;
+    padding: 2em;
+}
+
+/* Footer */
+.module-example .truncation-info {
+    margin-top: 0.75em;
+    margin-bottom: 0.5em;
+    color: #666;
+    font-size: 0.85em;
+    font-style: italic;
+}
+.module-example .filter-info {
+    margin-top: 0.75em;
+    color: #555;
+    font-size: 0.9em;
+}
+.module-example .entry-count {
+    color: #888;
+}
+
+@media print {
+    .module-example .example-table { font-size: 0.8em; }
 }
 </style>

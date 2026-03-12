@@ -421,16 +421,20 @@ def _make_evidence_db(tmp_path: Path) -> sqlite3.Connection:
         CREATE TABLE process_log (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             evidence_id INTEGER NOT NULL,
-            tool_name TEXT,
-            command_line TEXT,
-            started_at TEXT,
-            finished_at TEXT,
+            task TEXT NOT NULL,
+            command TEXT,
+            started_at_utc TEXT NOT NULL,
+            finished_at_utc TEXT,
             exit_code INTEGER,
-            output_path TEXT,
+            stdout TEXT,
+            stderr TEXT,
             run_id TEXT,
+            extractor_name TEXT,
             extractor_version TEXT,
-            record_count INTEGER,
-            metadata TEXT
+            records_extracted INTEGER,
+            records_ingested INTEGER,
+            warnings_json TEXT,
+            log_file_path TEXT
         )
         """
     )
@@ -529,9 +533,9 @@ class TestIngestion:
         logs = conn.execute("SELECT * FROM process_log").fetchall()
         assert len(logs) == 1
         log = logs[0]
-        assert log["tool_name"] == "chromium_embedded_artifacts"
+        assert log["task"] == "chromium_embedded_artifacts"
         assert log["exit_code"] == 0
-        meta = json.loads(log["metadata"])
+        meta = json.loads(log["warnings_json"])
         assert "unique_urls_ingested" in meta
         assert "log_entries_parsed" in meta
 

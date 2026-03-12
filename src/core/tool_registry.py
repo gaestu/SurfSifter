@@ -37,7 +37,7 @@ class ToolRegistry:
         "bulk_extractor": {
             "executable": "bulk_extractor",
             "min_version": "1.6.0",
-            "version_command": ["-V"],
+            "version_command": ["--version"],
             "version_parser": lambda out: out.split()[1] if len(out.split()) > 1 else None,
             "capabilities": [
                 "url_extraction",
@@ -69,7 +69,8 @@ class ToolRegistry:
             "executable": "scalpel",
             "min_version": "1.0.0",
             "version_command": ["-V"],
-            "version_parser": lambda out: out.split()[1] if len(out.split()) > 1 else None,
+            # scalpel -V outputs "Scalpel version 1.60\n..." — version is word at index 2
+            "version_parser": lambda out: out.split()[2] if len(out.split()) > 2 else None,
             "capabilities": [
                 "file_carving",
                 "jpg_recovery",
@@ -462,9 +463,13 @@ class ToolRegistry:
                 capture_output=True,
                 text=True,
                 timeout=5,
-                check=True
+                check=False,  # Don't raise on non-zero; some tools use non-zero for version
             )
-            return True, f"Successfully executed {tool_name} v{tool_info.version}"
+            output = (result.stdout or result.stderr or "").strip()
+            if result.returncode == 0 or output:
+                return True, f"Successfully executed {tool_name} v{tool_info.version}"
+            else:
+                return False, f"Tool returned exit code {result.returncode} with no output"
 
         except Exception as e:
             return False, f"Test failed: {e}"

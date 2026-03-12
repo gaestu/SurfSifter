@@ -1,5 +1,16 @@
 {# Autofill Report Module Template #}
+{% set col_count = 2 + (1 if show_profile else 0) + 1 + (1 if show_count else 0) %}
 <div class="module-autofill">
+    {% if section_title %}
+    <h3 class="module-title">{{ section_title }}</h3>
+    {% endif %}
+
+    {% if section_description %}
+    <p class="module-description">{{ section_description }}</p>
+    {% elif show_default_description %}
+    <p class="module-description">{{ t.autofill_description | default('Autofill entries are form field values saved by browsers to assist with repeated data entry. They can reveal personal information such as names, addresses, and email addresses entered into web forms.') }}</p>
+    {% endif %}
+
     <table class="autofill-table">
         <thead>
             <tr>
@@ -10,27 +21,15 @@
                 <th class="col-profile">{{ t.profile | default('Profile') }}</th>
                 {% endif %}
                 {% if show_count %}
-                <th class="col-count"><abbr title="{{ t.use_count | default('Use Count') }}">{{ t.use_count | default('Use Count') }}</abbr></th>
-                {% endif %}
-                {% if show_dates %}
-                <th class="col-first-used"><abbr title="{{ t.first_used | default('First Used') }}">{{ t.first_used | default('First Used') }}</abbr></th>
-                <th class="col-last-used"><abbr title="{{ t.last_used | default('Last Used') }}">{{ t.last_used | default('Last Used') }}</abbr></th>
+                <th class="col-count">{{ t.use_count | default('Use Count') }}</th>
                 {% endif %}
             </tr>
         </thead>
         <tbody>
             {% for entry in entries %}
-            <tr>
+            <tr class="data-row">
                 <td class="col-name">{{ entry.name }}</td>
-                <td class="col-value">
-                    <span class="value-text" title="{{ entry.value }}">
-                        {%- if entry.value|length > 50 -%}
-                            {{ entry.value[:47] }}...
-                        {%- else -%}
-                            {{ entry.value }}
-                        {%- endif -%}
-                    </span>
-                </td>
+                <td class="col-value">{{ entry.value }}</td>
                 <td class="col-browser">{{ entry.browser }}</td>
                 {% if show_profile %}
                 <td class="col-profile">{{ entry.profile }}</td>
@@ -38,14 +37,25 @@
                 {% if show_count %}
                 <td class="col-count">{{ entry.count }}</td>
                 {% endif %}
-                {% if show_dates %}
-                <td class="col-first-used">{{ entry.date_created }}</td>
-                <td class="col-last-used">{{ entry.date_last_used }}</td>
-                {% endif %}
             </tr>
+            {% if show_dates and (entry.date_created or entry.date_last_used) %}
+            <tr class="date-row">
+                <td colspan="{{ col_count }}" class="col-dates">
+                    {% if entry.date_created %}
+                    <span class="date-label">{{ t.first_used | default('First Used') }}:</span> {{ entry.date_created }}
+                    {% endif %}
+                    {% if entry.date_created and entry.date_last_used %}
+                    <span class="date-separator">&mdash;</span>
+                    {% endif %}
+                    {% if entry.date_last_used %}
+                    <span class="date-label">{{ t.last_used | default('Last Used') }}:</span> {{ entry.date_last_used }}
+                    {% endif %}
+                </td>
+            </tr>
+            {% endif %}
             {% else %}
             <tr>
-                <td colspan="{{ 3 + (1 if show_profile else 0) + (1 if show_count else 0) + (2 if show_dates else 0) }}" class="empty-message">
+                <td colspan="{{ col_count }}" class="empty-message">
                     {{ t.no_autofill_found | default('No autofill entries found matching the filter criteria.') }}
                 </td>
             </tr>
@@ -66,6 +76,20 @@
     margin: 1em 0;
 }
 
+.module-autofill .module-title {
+    margin: 0 0 0.5em 0;
+    font-size: 1.1em;
+    font-weight: 600;
+    color: #333;
+}
+
+.module-autofill .module-description {
+    margin: 0 0 0.75em 0;
+    color: #555;
+    font-size: 0.9em;
+    line-height: 1.4;
+}
+
 .module-autofill .filter-info {
     margin-top: 0.5em;
     color: #555;
@@ -78,18 +102,17 @@
 
 .autofill-table {
     width: 100%;
+    max-width: 100%;
     border-collapse: collapse;
     font-size: 0.85em;
-    table-layout: fixed;
+    table-layout: auto;
 }
 
 .autofill-table th,
 .autofill-table td {
     border: 1px solid #ddd;
-    padding: 5px 8px;
+    padding: 4px 6px;
     text-align: left;
-    overflow: hidden;
-    text-overflow: ellipsis;
     vertical-align: top;
 }
 
@@ -99,53 +122,76 @@
     white-space: nowrap;
 }
 
-.autofill-table tbody tr:nth-child(even) {
-    background-color: #fafafa;
+/* Data row - main entry info */
+.autofill-table .data-row td {
+    padding-bottom: 2px;
 }
 
-.autofill-table tbody tr:hover {
+.autofill-table .data-row:hover,
+.autofill-table .data-row:hover + .date-row {
     background-color: #f0f7ff;
 }
 
+/* When dates are shown, merge data row bottom with date row top */
+.autofill-table .data-row + .date-row td {
+    border-top: none;
+}
+.autofill-table .data-row:has(+ .date-row) td {
+    border-bottom: none;
+}
+
+/* Date row - below data row */
+.autofill-table .date-row td {
+    padding-top: 0;
+    padding-bottom: 6px;
+}
+
+.autofill-table .date-row .col-dates {
+    font-size: 0.9em;
+    color: #666;
+}
+
+.autofill-table .date-row .date-label {
+    font-weight: 500;
+    color: #555;
+}
+
+.autofill-table .date-row .date-separator {
+    margin: 0 0.5em;
+    color: #aaa;
+}
+
+.autofill-table .date-row:hover {
+    background-color: #f0f7ff;
+}
+
+/* Alternate row coloring (every other entry pair) */
+.autofill-table tbody tr.data-row:nth-of-type(4n+1),
+.autofill-table tbody tr.data-row:nth-of-type(4n+1) + .date-row {
+    background-color: #fafafa;
+}
+
 .autofill-table .col-name {
-    width: 18%;
     word-break: break-word;
     font-weight: 500;
 }
 
 .autofill-table .col-value {
-    width: 30%;
     word-break: break-word;
 }
 
-.autofill-table .col-value .value-text {
-    display: block;
-}
-
 .autofill-table .col-browser {
-    width: 10%;
     text-align: center;
+    white-space: nowrap;
 }
 
 .autofill-table .col-profile {
-    width: 10%;
+    white-space: nowrap;
 }
 
 .autofill-table .col-count {
-    width: 8%;
     text-align: center;
-}
-
-.autofill-table .col-first-used,
-.autofill-table .col-last-used {
-    width: 12%;
     white-space: nowrap;
-    text-align: center;
-}
-
-.autofill-table th abbr {
-    text-decoration: none;
-    border-bottom: none;
 }
 
 .autofill-table .empty-message {
@@ -153,5 +199,6 @@
     color: #666;
     font-style: italic;
     padding: 1em;
+    border-top: 1px solid #ddd;
 }
 </style>

@@ -20,7 +20,7 @@ from PySide6.QtWidgets import (
     QListWidgetItem,
     QFrame,
 )
-from PySide6.QtGui import QFont, QTextCharFormat, QAction, QTextListFormat
+from PySide6.QtGui import QFont, QTextCharFormat, QTextCursor, QAction, QTextListFormat
 from PySide6.QtCore import Qt, Signal
 
 from .module_picker import ModulePickerDialog
@@ -496,7 +496,7 @@ class SectionEditorDialog(QDialog):
         """Toggle monospace / code font on selection."""
         cursor = self._content_edit.textCursor()
         if not cursor.hasSelection():
-            cursor.select(cursor.WordUnderCursor)
+            cursor.select(QTextCursor.SelectionType.WordUnderCursor)
 
         current_family = cursor.charFormat().fontFamily()
         fmt = QTextCharFormat()
@@ -529,7 +529,7 @@ class SectionEditorDialog(QDialog):
         """Apply format to current selection or cursor position."""
         cursor = self._content_edit.textCursor()
         if not cursor.hasSelection():
-            cursor.select(cursor.WordUnderCursor)
+            cursor.select(QTextCursor.SelectionType.WordUnderCursor)
         cursor.mergeCharFormat(fmt)
         self._content_edit.mergeCurrentCharFormat(fmt)
 

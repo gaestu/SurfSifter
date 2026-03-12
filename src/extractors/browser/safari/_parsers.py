@@ -232,35 +232,50 @@ def parse_cookies(file_path: Path) -> List[SafariCookie]:
 
     try:
         with open(file_path, 'rb') as f:
-            jar = binarycookies.parse(f)
+            jar = binarycookies.load(f)
 
         for cookie in jar:
-            # Convert expiry timestamp
+            # The binarycookies library Cookie model uses:
+            #   url (domain), name, value, path,
+            #   expiry_datetime (datetime|None), create_datetime (datetime|None),
+            #   flag (Flag enum: SECURE, HTTPONLY, SECURE_HTTPONLY, UNKNOWN)
+
+            # Expiry timestamp
             expires = None
             expires_utc = None
-            if hasattr(cookie, 'expires') and cookie.expires:
+            expiry_dt = getattr(cookie, 'expiry_datetime', None)
+            if expiry_dt is not None:
                 try:
-                    expires = datetime.fromtimestamp(
-                        cookie.expires, tz=timezone.utc
-                    )
+                    if isinstance(expiry_dt, datetime):
+                        expires = expiry_dt if expiry_dt.tzinfo else expiry_dt.replace(tzinfo=timezone.utc)
+                    else:
+                        expires = datetime.fromtimestamp(float(expiry_dt), tz=timezone.utc)
                     expires_utc = expires.isoformat()
-                except (ValueError, OSError, OverflowError):
+                except (ValueError, OSError, OverflowError, TypeError):
                     pass
 
-            # Creation time (if available)
+            # Creation time
             creation = None
             creation_utc = None
-            if hasattr(cookie, 'creation') and cookie.creation:
+            create_dt = getattr(cookie, 'create_datetime', None)
+            if create_dt is not None:
                 try:
-                    creation = datetime.fromtimestamp(
-                        cookie.creation, tz=timezone.utc
-                    )
+                    if isinstance(create_dt, datetime):
+                        creation = create_dt if create_dt.tzinfo else create_dt.replace(tzinfo=timezone.utc)
+                    else:
+                        creation = datetime.fromtimestamp(float(create_dt), tz=timezone.utc)
                     creation_utc = creation.isoformat()
-                except (ValueError, OSError, OverflowError):
+                except (ValueError, OSError, OverflowError, TypeError):
                     pass
 
+            # Flag-based secure/httponly detection
+            flag = getattr(cookie, 'flag', None)
+            flag_str = str(flag).upper() if flag is not None else ""
+            is_secure = "SECURE" in flag_str
+            is_httponly = "HTTPONLY" in flag_str
+
             cookies.append(SafariCookie(
-                domain=getattr(cookie, 'domain', '') or '',
+                domain=getattr(cookie, 'url', '') or '',
                 name=getattr(cookie, 'name', '') or '',
                 value=getattr(cookie, 'value', '') or '',
                 path=getattr(cookie, 'path', '/') or '/',
@@ -268,8 +283,8 @@ def parse_cookies(file_path: Path) -> List[SafariCookie]:
                 expires_utc=expires_utc,
                 creation_time=creation,
                 creation_time_utc=creation_utc,
-                is_secure=getattr(cookie, 'secure', False),
-                is_httponly=getattr(cookie, 'http_only', False),
+                is_secure=is_secure,
+                is_httponly=is_httponly,
             ))
 
     except Exception:
@@ -554,6 +569,7 @@ class SafariTopSite:
     title: str
     rank: int
     is_built_in: bool
+    is_banned: bool = False
 
 
 def parse_top_sites(file_path: Path) -> List[SafariTopSite]:
@@ -563,6 +579,7 @@ def parse_top_sites(file_path: Path) -> List[SafariTopSite]:
     Supports known plist layouts:
     - {"TopSites": [ ... ]}
     - {"BannerList": [ ... ]}
+    - {"BannedURLStrings": [ ... ]}  (user-removed sites, forensically relevant)
     - [ ... ] (root list fallback)
     """
     sites: List[SafariTopSite] = []
@@ -603,6 +620,25 @@ def parse_top_sites(file_path: Path) -> List[SafariTopSite]:
             )
         )
 
+    # Parse BannedURLStrings — these are URLs the user explicitly removed
+    # from Top Sites.  Forensically significant as indicators of user intent.
+    if isinstance(plist_data, dict):
+        banned = plist_data.get("BannedURLStrings")
+        if isinstance(banned, list):
+            for idx, raw_url in enumerate(banned):
+                url = str(raw_url or "").strip()
+                if not url:
+                    continue
+                sites.append(
+                    SafariTopSite(
+                        url=url,
+                        title="",
+                        rank=-1,
+                        is_built_in=False,
+                        is_banned=True,
+                    )
+                )
+
     return sites
 
 
@@ -613,12 +649,14 @@ def get_top_site_stats(sites: List[SafariTopSite]) -> Dict[str, Any]:
             "total_sites": 0,
             "unique_urls": 0,
             "built_in_count": 0,
+            "banned_count": 0,
         }
 
     return {
         "total_sites": len(sites),
         "unique_urls": len({site.url for site in sites}),
         "built_in_count": sum(1 for site in sites if site.is_built_in),
+        "banned_count": sum(1 for site in sites if site.is_banned),
     }
 
 

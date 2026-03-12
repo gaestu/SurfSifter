@@ -1,5 +1,13 @@
 {# Downloaded Images Module Template #}
 <div class="module-downloaded-images">
+    {% if section_title %}
+    <h3 class="module-title">{{ section_title }}</h3>
+    {% endif %}
+    
+    {% if section_description %}
+    <p class="module-description">{{ section_description }}</p>
+    {% endif %}
+    
     {% if images %}
     <div class="downloaded-images-grid">
         {% for image in images %}
@@ -56,6 +64,12 @@
     <p class="empty-message">{{ t.no_downloaded_images | default('No downloaded images found matching the filter criteria.') }}</p>
     {% endif %}
     
+    {% if show_image_count and shown_count < total_count %}
+    <p class="limit-note">
+        {{ t.showing_x_of_y_downloaded | default('Showing {shown} of {total} downloaded images') | replace('{shown}', shown_count|string) | replace('{total}', total_count|string) }}
+    </p>
+    {% endif %}
+    
     {% if show_filter_info %}
     <p class="filter-info">
         <strong>{{ t.filter | default('Filter') }}:</strong> {{ filter_description }} 
@@ -67,6 +81,26 @@
 <style>
 .module-downloaded-images {
     margin: 1em 0;
+}
+
+.module-downloaded-images .module-title {
+    margin: 0 0 0.3em 0;
+    font-size: 1.3em;
+    color: #333;
+}
+
+.module-downloaded-images .module-description {
+    margin: 0 0 1em 0;
+    color: #555;
+    font-size: 0.95em;
+}
+
+.module-downloaded-images .limit-note {
+    text-align: center;
+    color: #666;
+    font-style: italic;
+    font-size: 0.9em;
+    margin: 1em 0 0.5em 0;
 }
 
 .module-downloaded-images .filter-info {

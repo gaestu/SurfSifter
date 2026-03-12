@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass, asdict, field
 from pathlib import Path
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 
 # Expanded content types for downloads
@@ -57,6 +57,15 @@ class ToolPaths:
 @dataclass
 class GeneralSettings:
     thumbnail_size: int = 180
+
+
+@dataclass
+class WindowSettings:
+    x: Optional[int] = None
+    y: Optional[int] = None
+    width: Optional[int] = None
+    height: Optional[int] = None
+    maximized: bool = False
 
 
 @dataclass
@@ -117,6 +126,7 @@ class ReportSettings:
 @dataclass
 class AppSettings:
     general: GeneralSettings = field(default_factory=GeneralSettings)
+    window: WindowSettings = field(default_factory=WindowSettings)
     tools: ToolPaths = field(default_factory=ToolPaths)
     network: NetworkSettings = field(default_factory=NetworkSettings)
     hash: HashSettings = field(default_factory=HashSettings)
@@ -132,6 +142,9 @@ class AppSettings:
         general_data = data.get("general", {})
         general_fields = {f.name for f in GeneralSettings.__dataclass_fields__.values()}
         general = GeneralSettings(**{k: v for k, v in general_data.items() if k in general_fields})
+        window_data = data.get("window", {})
+        window_fields = {f.name for f in WindowSettings.__dataclass_fields__.values()}
+        window = WindowSettings(**{k: v for k, v in window_data.items() if k in window_fields})
         tools = ToolPaths(**data.get("tools", {}))
         network = NetworkSettings(**data.get("network", {}))
         hash_cfg = HashSettings(**data.get("hash", {}))
@@ -141,12 +154,21 @@ class AppSettings:
         reports_data = data.get("reports", {})
         reports_fields = {f.name for f in ReportSettings.__dataclass_fields__.values()}
         reports = ReportSettings(**{k: v for k, v in reports_data.items() if k in reports_fields})
-        return cls(general=general, tools=tools, network=network, hash=hash_cfg, sandbox=sandbox, reports=reports)
+        return cls(
+            general=general,
+            window=window,
+            tools=tools,
+            network=network,
+            hash=hash_cfg,
+            sandbox=sandbox,
+            reports=reports,
+        )
 
     def save(self, path: Path) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
         payload: Dict[str, object] = {
             "general": asdict(self.general),
+            "window": asdict(self.window),
             "tools": asdict(self.tools),
             "network": asdict(self.network),
             "hash": asdict(self.hash),

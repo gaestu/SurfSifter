@@ -185,6 +185,81 @@ DEFAULT_TIMELINE_CONFIG = TimelineConfig(
                     "note_template": "Jump list created: {url}"
                 }
             ]
+        },
+        "file_list": {
+            "confidence": "low",
+            "mappings": [
+                {
+                    "timestamp_field": "created_ts",
+                    "kind": "file_created",
+                    "note_template": "File created: {file_name}"
+                },
+                {
+                    "timestamp_field": "modified_ts",
+                    "kind": "file_modified",
+                    "note_template": "File modified: {file_name}"
+                },
+                {
+                    "timestamp_field": "accessed_ts",
+                    "kind": "file_accessed",
+                    "note_template": "File accessed: {file_name}"
+                }
+            ]
+        },
+        "browser_search_terms": {
+            "confidence": "high",
+            "mappings": [{
+                "timestamp_field": "search_time_utc",
+                "kind": "search_performed",
+                "note_template": "Search: {term} ({browser})"
+            }]
+        },
+        "closed_tabs": {
+            "confidence": "medium",
+            "mappings": [{
+                "timestamp_field": "closed_at_utc",
+                "kind": "tab_closed",
+                "note_template": "Tab closed: {title}"
+            }]
+        },
+        "session_tab_history": {
+            "confidence": "medium",
+            "mappings": [{
+                "timestamp_field": "timestamp_utc",
+                "kind": "tab_navigated",
+                "note_template": "Navigation: {title}"
+            }]
+        },
+        "site_engagement": {
+            "confidence": "medium",
+            "mappings": [{
+                "timestamp_field": "last_engagement_time_utc",
+                "kind": "site_engaged",
+                "note_template": "Site engagement: {origin} (score: {raw_score})"
+            }]
+        },
+        "deleted_form_history": {
+            "confidence": "medium",
+            "mappings": [{
+                "timestamp_field": "time_deleted_utc",
+                "kind": "form_data_deleted",
+                "note_template": "Form data deleted: {original_fieldname}"
+            }]
+        },
+        "browser_extensions": {
+            "confidence": "medium",
+            "mappings": [
+                {
+                    "timestamp_field": "install_time",
+                    "kind": "extension_installed",
+                    "note_template": "Extension installed: {name} ({browser})"
+                },
+                {
+                    "timestamp_field": "update_time",
+                    "kind": "extension_updated",
+                    "note_template": "Extension updated: {name} ({browser})"
+                }
+            ]
         }
     },
     confidence_weights={"high": 1.0, "medium": 0.7, "low": 0.4},

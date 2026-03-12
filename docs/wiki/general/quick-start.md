@@ -13,6 +13,21 @@ Use this checklist to get a case running end-to-end.
 5. **Tag and report**
    - Tag findings -> generate a **PDF report**
 
+## Batch Extraction
+
+The **Case** tab provides an **⚡ Extract & Ingest All Selected** button that runs a chosen set of extractors across multiple evidences in one operation. This opens the **Case-Wide Extract & Ingest** dialog where you can:
+
+- See the selected evidences (read-only list).
+- Pick extractors from the full registry with Select All / Select None shortcuts.
+- Configure individual extractors before running.
+- Choose an ingestion mode: **Overwrite**, **Append**, or **Skip if exists**.
+
+Evidences are processed sequentially; progress is tracked in the main window.
+
+For a single evidence, the **Extraction** tab's **Run All** button performs the same operation scoped to that evidence only.
+
+---
+
 ## Tips
 - Extraction is offline and read-only by design.
 - Use the **Tools** tab to verify optional external tools are detected.

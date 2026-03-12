@@ -299,6 +299,14 @@ class SafariTopSitesExtractor(BaseExtractor):
 
                 urls_parsed = 0
                 for site in sites:
+                    # Determine notes field
+                    if site.is_banned:
+                        site_notes = "banned"
+                    elif site.is_built_in:
+                        site_notes = "built-in"
+                    else:
+                        site_notes = None
+
                     top_site_records.append(
                         {
                             "browser": "safari",
@@ -312,7 +320,7 @@ class SafariTopSitesExtractor(BaseExtractor):
                             "fs_type": file_info.get("fs_type"),
                             "logical_path": source_path,
                             "forensic_path": source_path,
-                            "notes": "built-in" if site.is_built_in else None,
+                            "notes": site_notes,
                         }
                     )
 
@@ -349,6 +357,7 @@ class SafariTopSitesExtractor(BaseExtractor):
 
         site_stats = get_top_site_stats(parsed_sites)
         counts["built_in"] = site_stats.get("built_in_count", 0)
+        counts["banned"] = site_stats.get("banned_count", 0)
 
         manifest["parsed_counts"] = {
             **site_stats,

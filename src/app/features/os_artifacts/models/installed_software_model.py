@@ -40,6 +40,8 @@ class InstalledSoftwareModel(QAbstractTableModel):
         "install_location",
         "size_kb",
         "forensic_interest",
+        "os_source",
+        "tags",
     ]
 
     HEADERS = [
@@ -50,6 +52,8 @@ class InstalledSoftwareModel(QAbstractTableModel):
         "Install Location",
         "Size (KB)",
         "Forensic",
+        "OS",
+        "Tags",
     ]
 
     # Column indexes
@@ -60,6 +64,10 @@ class InstalledSoftwareModel(QAbstractTableModel):
     COL_INSTALL_LOCATION = 4
     COL_SIZE = 5
     COL_FORENSIC = 6
+    COL_OS = 7
+    COL_TAGS = 8
+
+    ARTIFACT_TYPE = "installed_software"
 
     # Forensic interest colors
     COLOR_FORENSIC_RESTORE = QColor(255, 200, 200)  # Light red for system restore tools
@@ -71,6 +79,7 @@ class InstalledSoftwareModel(QAbstractTableModel):
         db_manager: DatabaseManager,
         evidence_id: int,
         evidence_label: str,
+        case_data=None,
         parent=None
     ):
         """
@@ -80,15 +89,18 @@ class InstalledSoftwareModel(QAbstractTableModel):
             db_manager: Database manager instance
             evidence_id: Evidence ID
             evidence_label: Evidence label for database path resolution
+            case_data: CaseDataAccess for tag lookups
             parent: Parent widget
         """
         super().__init__(parent)
         self.db_manager = db_manager
         self.evidence_id = evidence_id
         self.evidence_label = evidence_label
+        self.case_data = case_data
 
         # Data storage
         self._rows: List[Dict[str, Any]] = []
+        self._tag_map: Dict[int, str] = {}
 
         # Filters
         self._search_text: str = ""
@@ -108,11 +120,15 @@ class InstalledSoftwareModel(QAbstractTableModel):
                 self._rows = []
                 return
 
-            # Query installed software indicators
+            # Query installed software indicators (cross-platform)
             sql = """
-                SELECT id, value, path, hive, extra_json
+                SELECT id, type, value, path, hive, provenance, extra_json
                 FROM os_indicators
-                WHERE type = 'system:installed_software'
+                WHERE type IN (
+                    'system:installed_software',
+                    'system:installed_app_macos',
+                    'system:install_receipt_macos'
+                )
                 ORDER BY value COLLATE NOCASE
             """
 
@@ -122,7 +138,7 @@ class InstalledSoftwareModel(QAbstractTableModel):
             # Parse extra_json and build row data
             parsed_rows = []
             for row in raw_rows:
-                row_id, value, path, hive, extra_json_str = row
+                row_id, indicator_type, value, path, hive, provenance, extra_json_str = row
 
                 # Parse extra_json
                 extra = {}
@@ -132,9 +148,14 @@ class InstalledSoftwareModel(QAbstractTableModel):
                     except json.JSONDecodeError:
                         pass
 
+                # Determine OS from provenance
+                _OS_MAP = {"macos_plist": "macOS", "registry": "Windows"}
+                os_source = _OS_MAP.get(provenance, provenance or "Unknown")
+
                 # Build row dict
                 row_data = {
                     "id": row_id,
+                    "type": indicator_type,
                     "name": value or extra.get("name", "Unknown"),
                     "publisher": extra.get("publisher", ""),
                     "version": extra.get("version", ""),
@@ -149,8 +170,10 @@ class InstalledSoftwareModel(QAbstractTableModel):
                     "url": extra.get("url", ""),
                     "comments": extra.get("comments", ""),
                     "architecture": extra.get("architecture", ""),
+                    "os_source": os_source,
                     "path": path,
                     "hive": hive,
+                    "provenance": provenance or "",
                     "extra": extra,
                 }
                 parsed_rows.append(row_data)
@@ -158,10 +181,12 @@ class InstalledSoftwareModel(QAbstractTableModel):
             # Apply filters
             filtered_rows = self._apply_filters(parsed_rows)
             self._rows = filtered_rows
+            self._refresh_tags()
 
         except Exception as e:
             logger.exception("Failed to load installed software: %s", e)
             self._rows = []
+            self._tag_map = {}
 
     def _apply_filters(self, rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """Apply search and forensic filters."""
@@ -181,6 +206,18 @@ class InstalledSoftwareModel(QAbstractTableModel):
             result = [r for r in result if r.get("forensic_interest")]
 
         return result
+
+    def _refresh_tags(self) -> None:
+        """Refresh tag strings for current rows."""
+        if not self.case_data:
+            self._tag_map = {}
+            return
+        ids = [row.get("id") for row in self._rows if row.get("id") is not None]
+        self._tag_map = self.case_data.get_tag_strings_for_artifacts(
+            self.evidence_id,
+            self.ARTIFACT_TYPE,
+            ids,
+        )
 
     def rowCount(self, parent: QModelIndex = QModelIndex()) -> int:
         if parent.isValid():
@@ -224,6 +261,10 @@ class InstalledSoftwareModel(QAbstractTableModel):
                     else:
                         return "⚠️ Interest"
                 return ""
+            elif col == self.COL_OS:
+                return row.get("os_source", "")
+            elif col == self.COL_TAGS:
+                return self._tag_map.get(row.get("id"), "") or ""
 
         elif role == Qt.BackgroundRole:
             # Highlight forensically interesting software
@@ -256,6 +297,9 @@ class InstalledSoftwareModel(QAbstractTableModel):
                 tips.append(f"Registry Key: {row['registry_key']}")
             if row.get("forensic_category"):
                 tips.append(f"Forensic Category: {row['forensic_category']}")
+            tag_str = self._tag_map.get(row.get("id"), "")
+            if tag_str:
+                tips.append(f"Tags: {tag_str}")
             return "\n".join(tips)
 
         elif role == Qt.UserRole:

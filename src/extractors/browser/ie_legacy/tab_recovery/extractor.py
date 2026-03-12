@@ -582,9 +582,11 @@ class IETabRecoveryExtractor(BaseExtractor):
         # Get original filename
         original_name = Path(source_path).name
 
-        # Create unique output filename
+        # Create unique output filename with path hash for collision prevention
+        # Path hash prevents collisions when same user exists in different locations
         safe_user = user.replace(" ", "_").replace("/", "_").replace("\\", "_")
-        filename = f"p{partition_index}_{safe_user}_{recovery_type}_{original_name}"
+        path_hash = hashlib.sha256(source_path.encode()).hexdigest()[:8]
+        filename = f"p{partition_index}_{safe_user}_{recovery_type}_{path_hash}_{original_name}"
         dest_path = output_dir / filename
 
         # Read and write file

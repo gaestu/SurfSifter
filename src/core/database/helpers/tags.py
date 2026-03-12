@@ -529,6 +529,104 @@ def query_all_tagged_artifacts(
     return conn.execute(sql, params).fetchall()
 
 
+# -----------------------------------------------------------------------------
+# Tag & Match Summary Queries
+# -----------------------------------------------------------------------------
+
+def get_tag_artifact_summary(
+    conn: sqlite3.Connection,
+    evidence_id: int,
+) -> List[Dict[str, Any]]:
+    """
+    Get per-tag, per-artifact-type counts for a given evidence.
+
+    Returns a list of dicts, each with:
+        tag_id, tag_name, artifact_type, count
+
+    Results are ordered by tag name then artifact type.
+
+    Args:
+        conn: Evidence database connection
+        evidence_id: Evidence ID
+
+    Returns:
+        List of summary rows
+    """
+    sql = """
+        SELECT ta.tag_id, t.name AS tag_name,
+               ta.artifact_type, COUNT(*) AS count
+        FROM tag_associations ta
+        JOIN tags t ON t.id = ta.tag_id
+        WHERE ta.evidence_id = ?
+        GROUP BY ta.tag_id, ta.artifact_type
+        ORDER BY t.name COLLATE NOCASE, ta.artifact_type
+    """
+    cursor = conn.execute(sql, (evidence_id,))
+    return [dict(row) for row in cursor.fetchall()]
+
+
+def get_match_summary(
+    conn: sqlite3.Connection,
+    evidence_id: int,
+) -> List[Dict[str, Any]]:
+    """
+    Get per-reference-list match counts across URL, hash, and file list matches.
+
+    Returns a list of dicts, each with:
+        list_name, url_count, image_count, file_count
+
+    Args:
+        conn: Evidence database connection
+        evidence_id: Evidence ID
+
+    Returns:
+        List of summary rows (one per reference list name)
+    """
+    # Gather counts from three match tables, keyed by list name
+    totals: Dict[str, Dict[str, int]] = {}
+
+    # URL matches
+    url_sql = """
+        SELECT list_name, COUNT(DISTINCT url_id) AS cnt
+        FROM url_matches
+        WHERE evidence_id = ?
+        GROUP BY list_name
+    """
+    for row in conn.execute(url_sql, (evidence_id,)):
+        name = row["list_name"]
+        totals.setdefault(name, {"url_count": 0, "image_count": 0, "file_count": 0})
+        totals[name]["url_count"] = row["cnt"]
+
+    # Hash matches (images)
+    hash_sql = """
+        SELECT list_name, COUNT(DISTINCT image_id) AS cnt
+        FROM hash_matches
+        WHERE evidence_id = ?
+        GROUP BY list_name
+    """
+    for row in conn.execute(hash_sql, (evidence_id,)):
+        name = row["list_name"]
+        totals.setdefault(name, {"url_count": 0, "image_count": 0, "file_count": 0})
+        totals[name]["image_count"] = row["cnt"]
+
+    # File list matches
+    file_sql = """
+        SELECT reference_list_name AS list_name, COUNT(DISTINCT file_list_id) AS cnt
+        FROM file_list_matches
+        WHERE evidence_id = ?
+        GROUP BY reference_list_name
+    """
+    for row in conn.execute(file_sql, (evidence_id,)):
+        name = row["list_name"]
+        totals.setdefault(name, {"url_count": 0, "image_count": 0, "file_count": 0})
+        totals[name]["file_count"] = row["cnt"]
+
+    return [
+        {"list_name": name, **counts}
+        for name, counts in sorted(totals.items(), key=lambda x: x[0].lower())
+    ]
+
+
 __all__ = [
     # Tag CRUD
     "get_all_tags",
@@ -549,4 +647,7 @@ __all__ = [
     # Tag-based queries
     "query_artifacts_by_tags",
     "query_all_tagged_artifacts",
+    # Summary queries
+    "get_tag_artifact_summary",
+    "get_match_summary",
 ]

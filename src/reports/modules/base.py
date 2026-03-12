@@ -255,3 +255,33 @@ class BaseReportModule(ABC):
             for f in self.get_filter_fields()
             if f.default is not None
         }
+
+
+# ---------------------------------------------------------------------------
+# Browser placeholder / dummy values
+# ---------------------------------------------------------------------------
+# Known internal placeholder strings that browsers store in autofill or
+# credential tables. These are not real user input and can be hidden in
+# reports to avoid confusing non-technical readers (e.g. lawyers).
+# The database is never modified — replacement only happens at render time.
+BROWSER_DUMMY_VALUES: frozenset[str] = frozenset({
+    "edge_default_dummy_password_value",
+})
+
+_PLACEHOLDER_DISPLAY = "\u2014"  # em-dash
+
+
+def sanitize_display_value(value: str, hide: bool = True) -> str:
+    """Replace known browser placeholder values for display.
+
+    Args:
+        value: The raw value from the database.
+        hide: When True, known placeholders are replaced with an em-dash.
+              When False, the original value is returned unchanged.
+
+    Returns:
+        Cleaned display string.
+    """
+    if hide and value in BROWSER_DUMMY_VALUES:
+        return _PLACEHOLDER_DISPLAY
+    return value

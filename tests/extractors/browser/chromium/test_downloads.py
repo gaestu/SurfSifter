@@ -409,3 +409,86 @@ class TestErrorHandling:
         )
 
         assert mock_fs.iter_paths.call_count > 0
+
+# =============================================================================
+# Test Filename Generation (collision prevention)
+# =============================================================================
+
+class TestFilenameGeneration:
+    """Test unique filename generation for multi-user/multi-partition support.
+
+    Regression: When multiple OS users have the same browser and profile name
+    (e.g., both 'Anwender' and 'User' have Edge/Default), the extracted files
+    must NOT overwrite each other.  The filename must include a path-based hash.
+    """
+
+    def test_filename_includes_path_hash(self, tmp_path):
+        """Filename must include path hash for uniqueness."""
+        import hashlib
+
+        ext = ChromiumDownloadsExtractor()
+        mock_fs = MagicMock()
+        mock_fs.read_file.return_value = b"\x00" * 100
+
+        file_info = {
+            "logical_path": "/Users/Anwender/AppData/Local/Microsoft/Edge/User Data/Default/History",
+            "browser": "edge",
+            "profile": "Default",
+            "partition_index": 3,
+        }
+
+        result = ext._extract_file_from_info(mock_fs, file_info, tmp_path, "test_run")
+
+        filename = result["local_filename"]
+        expected_hash = hashlib.sha256(file_info["logical_path"].encode()).hexdigest()[:8]
+        assert expected_hash in filename, (
+            f"Filename '{filename}' must contain path hash '{expected_hash}'"
+        )
+        # Format: edge_Default_p3_{hash}_History
+        assert filename == f"edge_Default_p3_{expected_hash}_History"
+
+    def test_different_users_produce_unique_filenames(self, tmp_path):
+        """Same browser/profile from different OS users must produce unique filenames."""
+        ext = ChromiumDownloadsExtractor()
+        mock_fs = MagicMock()
+        mock_fs.read_file.return_value = b"\x00" * 100
+
+        file_info_user1 = {
+            "logical_path": "/Users/Anwender/AppData/Local/Microsoft/Edge/User Data/Default/History",
+            "browser": "edge",
+            "profile": "Default",
+            "partition_index": 3,
+        }
+        file_info_user2 = {
+            "logical_path": "/Users/User/AppData/Local/Microsoft/Edge/User Data/Default/History",
+            "browser": "edge",
+            "profile": "Default",
+            "partition_index": 3,
+        }
+
+        result1 = ext._extract_file_from_info(mock_fs, file_info_user1, tmp_path, "run1")
+        result2 = ext._extract_file_from_info(mock_fs, file_info_user2, tmp_path, "run2")
+
+        assert result1["local_filename"] != result2["local_filename"], (
+            f"Files from different OS users must have unique names, "
+            f"got '{result1['local_filename']}' for both"
+        )
+        # Both files should exist on disk (not overwritten)
+        assert (tmp_path / result1["local_filename"]).exists()
+        assert (tmp_path / result2["local_filename"]).exists()
+
+    def test_filename_includes_partition(self, tmp_path):
+        """Filename must include partition index."""
+        ext = ChromiumDownloadsExtractor()
+        mock_fs = MagicMock()
+        mock_fs.read_file.return_value = b"\x00" * 100
+
+        file_info = {
+            "logical_path": "/Users/test/Chrome/Default/History",
+            "browser": "chrome",
+            "profile": "Default",
+            "partition_index": 2,
+        }
+
+        result = ext._extract_file_from_info(mock_fs, file_info, tmp_path, "run1")
+        assert "_p2_" in result["local_filename"]

@@ -17,6 +17,7 @@ Exported Extractors:
 - SafariFaviconsExtractor: Favicons, touch icons, and template icon mappings
 - SafariTopSitesExtractor: Frequently visited sites from TopSites.plist
 - SafariSessionsExtractor: Open windows/tabs and recently closed tabs
+- SafariStorageExtractor: LocalStorage and IndexedDB web storage
 """
 
 from .history import SafariHistoryExtractor
@@ -27,6 +28,7 @@ from .favicons import SafariFaviconsExtractor
 from .top_sites import SafariTopSitesExtractor
 from .sessions import SafariSessionsExtractor
 from .cache import SafariCacheExtractor
+from .storage import SafariStorageExtractor
 
 __all__ = [
     "SafariHistoryExtractor",
@@ -37,4 +39,5 @@ __all__ = [
     "SafariTopSitesExtractor",
     "SafariSessionsExtractor",
     "SafariCacheExtractor",
+    "SafariStorageExtractor",
 ]

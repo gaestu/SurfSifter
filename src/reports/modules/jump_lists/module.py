@@ -8,10 +8,14 @@ each entry shows the Jump List path and App ID.
 from __future__ import annotations
 
 import sqlite3
-from pathlib import PureWindowsPath
 from typing import Any, Dict, List
 
 from jinja2 import Environment, FileSystemLoader
+
+try:
+    from extractors._shared.appid_loader import get_app_name as _registry_get_app_name
+except ImportError:
+    _registry_get_app_name = None
 
 from ...dates import format_datetime
 from ...paths import get_module_template_dir
@@ -177,6 +181,14 @@ class JumpListsModule(BaseReportModule):
                 required=False,
             ),
             FilterField(
+                key="show_appid",
+                label="Show App ID",
+                filter_type=FilterType.CHECKBOX,
+                default=False,
+                help_text="Show the App ID in the detail row below each entry",
+                required=False,
+            ),
+            FilterField(
                 key="show_filter_info",
                 label="Show Filter Info",
                 filter_type=FilterType.CHECKBOX,
@@ -258,6 +270,7 @@ class JumpListsModule(BaseReportModule):
         show_creation_time = config.get("show_creation_time", True)
         show_access_count = config.get("show_access_count", False)
         show_pin_status = config.get("show_pin_status", True)
+        show_appid = config.get("show_appid", False)
 
         query, params = self._build_query(evidence_id, tag_filter, sort_by)
 
@@ -279,7 +292,7 @@ class JumpListsModule(BaseReportModule):
                 browser = row["browser"] or ""
                 target_path = row["target_path"] or ""
 
-                application = self._resolve_app_name(browser, target_path, appid)
+                application = self._resolve_app_name(browser, appid)
 
                 entries.append(
                     {
@@ -337,6 +350,7 @@ class JumpListsModule(BaseReportModule):
             show_creation_time=show_creation_time,
             show_access_count=show_access_count,
             show_pin_status=show_pin_status,
+            show_appid=show_appid,
             col_count=col_count,
             filter_description=filter_desc,
             total_count=total_count,
@@ -348,18 +362,16 @@ class JumpListsModule(BaseReportModule):
         )
 
     @staticmethod
-    def _resolve_app_name(browser: str, target_path: str, appid: str) -> str:
+    def _resolve_app_name(browser: str, appid: str) -> str:
         """Derive a human-readable application name.
 
         Priority:
         1. Browser name (e.g. "Chrome", "Firefox")
-        2. Executable name from target_path (e.g. "Application" from "C:\\Application\\Application.exe")
-        3. Last folder component from target_path (e.g. "Application" from "C:\\Application")
-        4. Raw appid as fallback
+        2. AppID registry lookup (700+ known Windows applications)
+        3. Raw appid as fallback
 
         Args:
             browser: Browser name from DB (may be empty)
-            target_path: Target path from the LNK entry (may be empty)
             appid: Raw Windows AppUserModelId hash
 
         Returns:
@@ -368,14 +380,11 @@ class JumpListsModule(BaseReportModule):
         if browser:
             return browser
 
-        if target_path:
-            p = PureWindowsPath(target_path)
-            # If it's an executable, use the filename without extension
-            if p.suffix.lower() == ".exe":
-                return p.stem
-            # Otherwise use the last path component (folder or file name)
-            if p.name:
-                return p.name
+        if appid and _registry_get_app_name is not None:
+            name = _registry_get_app_name(appid)
+            # The registry returns "Unknown (AppID:xxx)" for unrecognized IDs
+            if not name.startswith("Unknown"):
+                return name
 
         return appid
 

@@ -15,8 +15,10 @@ from __future__ import annotations
 # New v2.0 extractors with StatisticsCollector integration
 from .registry import SystemRegistryExtractor
 from .jump_lists import SystemJumpListsExtractor
+from .dpapi_decrypt import SystemDpapiDecryptExtractor
 
 __all__ = [
     "SystemRegistryExtractor",
     "SystemJumpListsExtractor",
+    "SystemDpapiDecryptExtractor",
 ]

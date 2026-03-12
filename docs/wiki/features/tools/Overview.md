@@ -1,6 +1,6 @@
 # Tools (Tab)
 
-Enhanced Tools Tab for Preferences Dialog
+View and configure external forensic tools and Python library status.
 
 ## Purpose
 - Configure and validate external forensic tools and Python libraries.
@@ -27,5 +27,5 @@ Enhanced Tools Tab for Preferences Dialog
 - None
 
 ## Notes
-- dependency (settings importing from tools).
-- This module re-exports for backward compatibility.
+- Tool paths are saved in `~/.config/surfsifter/tool_paths.json`.
+- See the **External Tools** page for installation guides.

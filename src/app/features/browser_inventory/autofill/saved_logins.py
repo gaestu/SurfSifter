@@ -41,12 +41,14 @@ class SavedLoginsSubtab(BaseArtifactSubtab):
         t.setColumnWidth(0, 200)   # Origin URL
         t.setColumnWidth(1, 100)   # Username Element
         t.setColumnWidth(2, 120)   # Username
-        t.setColumnWidth(3, 80)    # Browser
-        t.setColumnWidth(4, 80)    # Profile
-        t.setColumnWidth(5, 70)    # Encrypted
-        t.setColumnWidth(6, 100)   # Created
-        t.setColumnWidth(7, 100)   # Last Used
-        t.setColumnWidth(8, 140)   # Tags
+        t.setColumnWidth(3, 150)   # Encrypted
+        t.setColumnWidth(4, 100)   # Decrypt
+        t.setColumnWidth(5, 120)   # Decrypted
+        t.setColumnWidth(6, 80)    # Browser
+        t.setColumnWidth(7, 80)    # Profile
+        t.setColumnWidth(8, 100)   # Created
+        t.setColumnWidth(9, 100)   # Last Used
+        t.setColumnWidth(10, 140)  # Tags
 
     def _populate_filter_options(self):
         for b in self._model.get_available_browsers():

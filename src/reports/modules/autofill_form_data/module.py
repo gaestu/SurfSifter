@@ -22,6 +22,7 @@ from ..base import (
     FilterField,
     FilterType,
     ModuleMetadata,
+    sanitize_display_value,
 )
 
 
@@ -89,6 +90,30 @@ class AutofillFormDataModule(BaseReportModule):
                     ("name_desc", "Field Name (Z-A)"),
                 ],
                 help_text="Sort order for entries within each domain",
+                required=False,
+            ),
+            FilterField(
+                key="show_first_used",
+                label="Show First Used",
+                filter_type=FilterType.CHECKBOX,
+                default=True,
+                help_text="Display the First Used date column",
+                required=False,
+            ),
+            FilterField(
+                key="show_last_used",
+                label="Show Last Used",
+                filter_type=FilterType.CHECKBOX,
+                default=True,
+                help_text="Display the Last Used date column",
+                required=False,
+            ),
+            FilterField(
+                key="hide_placeholders",
+                label="Hide Browser Placeholders",
+                filter_type=FilterType.CHECKBOX,
+                default=True,
+                help_text="Replace known browser dummy values (e.g. edge_default_dummy_password_value) with an em-dash",
                 required=False,
             ),
             FilterField(
@@ -160,6 +185,9 @@ class AutofillFormDataModule(BaseReportModule):
         tag_filter = config.get("tag_filter") or []
         group_by_domain = bool(config.get("group_by_domain", True))
         sort_by = config.get("sort_by", "last_used_desc")
+        show_first_used = bool(config.get("show_first_used", True))
+        show_last_used = bool(config.get("show_last_used", True))
+        hide_placeholders = bool(config.get("hide_placeholders", True))
         show_filter_info = bool(config.get("show_filter_info", False))
 
         # Get autofill entries
@@ -170,6 +198,7 @@ class AutofillFormDataModule(BaseReportModule):
             sort_by,
             date_format,
             group_by_domain,
+            hide_placeholders,
         )
 
         # Build filter description
@@ -193,6 +222,8 @@ class AutofillFormDataModule(BaseReportModule):
             total_entries=total_entries,
             show_title=show_title,
             show_description=show_description,
+            show_first_used=show_first_used,
+            show_last_used=show_last_used,
             group_by_domain=group_by_domain,
             show_filter_info=show_filter_info,
             filter_description=filter_description,
@@ -220,6 +251,7 @@ class AutofillFormDataModule(BaseReportModule):
         sort_by: str,
         date_format: str,
         group_by_domain: bool,
+        hide_placeholders: bool = True,
     ) -> List[Dict[str, Any]]:
         """Get autofill entries grouped by domain.
 
@@ -281,9 +313,10 @@ class AutofillFormDataModule(BaseReportModule):
             # Use empty string key for entries without domain
             domain_key = domain if domain else ""
 
+            raw_value = row["value"] or ""
             entry = {
                 "name": row["name"] or "",
-                "value": row["value"] or "",
+                "value": sanitize_display_value(raw_value, hide_placeholders),
                 "first_used": format_datetime(row["date_created_utc"], date_format) if row["date_created_utc"] else "",
                 "last_used": format_datetime(row["date_last_used_utc"], date_format) if row["date_last_used_utc"] else "",
             }

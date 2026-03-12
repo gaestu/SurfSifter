@@ -254,7 +254,7 @@ def parse_cookies(
             {col_persistent} as is_persistent,
             has_expires,
             COALESCE(priority, 1) as priority,
-            encrypted_value
+            CAST(encrypted_value AS BLOB) as encrypted_value
         FROM cookies
         ORDER BY creation_utc DESC
     """

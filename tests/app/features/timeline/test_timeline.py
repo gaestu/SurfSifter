@@ -17,6 +17,7 @@ from app.features.timeline.engine import (
     _parse_timestamp,
     _format_note,
     _unix_to_datetime,
+    _check_plausibility,
     TimelineEvent,
     build_timeline,
     persist_timeline,
@@ -35,6 +36,13 @@ from app.features.timeline.engine import (
     map_media_playback_to_events,
     map_hsts_to_events,
     map_jump_list_to_events,
+    map_file_list_to_events,
+    map_browser_search_terms_to_events,
+    map_closed_tabs_to_events,
+    map_session_tab_history_to_events,
+    map_site_engagement_to_events,
+    map_deleted_form_history_to_events,
+    map_browser_extensions_to_events,
 )
 from app.features.timeline.config import DEFAULT_TIMELINE_CONFIG, TimelineConfig, load_timeline_config
 
@@ -59,6 +67,13 @@ timelines_module = SimpleNamespace(
     map_media_playback_to_events=map_media_playback_to_events,
     map_hsts_to_events=map_hsts_to_events,
     map_jump_list_to_events=map_jump_list_to_events,
+    map_file_list_to_events=map_file_list_to_events,
+    map_browser_search_terms_to_events=map_browser_search_terms_to_events,
+    map_closed_tabs_to_events=map_closed_tabs_to_events,
+    map_session_tab_history_to_events=map_session_tab_history_to_events,
+    map_site_engagement_to_events=map_site_engagement_to_events,
+    map_deleted_form_history_to_events=map_deleted_form_history_to_events,
+    map_browser_extensions_to_events=map_browser_extensions_to_events,
 )
 
 
@@ -890,7 +905,10 @@ def test_timeline_mappers_registry():
         "browser_history", "urls", "images", "os_indicators",
         "cookies", "bookmarks", "browser_downloads", "session_tabs",
         "autofill", "credentials", "media_playback",
-        "hsts_entries", "jump_list_entries"
+        "hsts_entries", "jump_list_entries",
+        "file_list", "browser_search_terms", "closed_tabs",
+        "session_tab_history", "site_engagement",
+        "deleted_form_history", "browser_extensions",
     ]
 
     for source in expected:

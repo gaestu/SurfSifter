@@ -34,21 +34,15 @@ EXTRACTOR_SECTIONS: List[ExtractorSection] = [
             "file_list",
             "system_registry",
             "system_jump_lists",
+            "system_macos_plist",
         ],
-        "collapsed": True,
-        "auto_populate": False,
-    },
-    {
-        "name": "General Forensic Tools",
-        "icon": "🔍",
-        "extractors": ["bulk_extractor"],
         "collapsed": True,
         "auto_populate": False,
     },
     {
         "name": "Media Extraction",
         "icon": "🖼️",
-        "extractors": ["filesystem_images", "foremost_carver", "scalpel"],
+        "extractors": ["filesystem_images"],
         "collapsed": True,
         "auto_populate": False,
     },
@@ -74,6 +68,8 @@ EXTRACTOR_SECTIONS: List[ExtractorSection] = [
             # Chromium-specific (cache, media)
             "cache_simple",
             "media_history",
+            # Embedded Chromium
+            "chromium_embedded_artifacts",
         ],
         "collapsed": True,
         "auto_populate": False,
@@ -98,6 +94,8 @@ EXTRACTOR_SECTIONS: List[ExtractorSection] = [
             "firefox_transport_security",
             # Firefox-specific (cache)
             "cache_firefox",
+            # Tor
+            "tor_state",
         ],
         "collapsed": True,
         "auto_populate": False,
@@ -113,6 +111,8 @@ EXTRACTOR_SECTIONS: List[ExtractorSection] = [
             "safari_favicons",
             "safari_sessions",
             "safari_cache",
+            "safari_storage",
+            "safari_top_sites",
         ],
         "collapsed": True,
         "auto_populate": False,
@@ -141,10 +141,22 @@ EXTRACTOR_SECTIONS: List[ExtractorSection] = [
         "auto_populate": False,
     },
     {
+        "name": "Carvers",
+        "icon": "🔍",
+        "extractors": [
+            "bulk_extractor",
+            "foremost_carver",
+            "scalpel",
+        ],
+        "collapsed": True,
+        "auto_populate": False,
+    },
+    {
         "name": "Advanced Forensics (Experimental)",
         "icon": "🧪",
         "extractors": [
             "browser_carver",
+            "system_dpapi_decrypt",
         ],
         "collapsed": True,
         "auto_populate": False,

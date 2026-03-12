@@ -44,14 +44,16 @@ class CookiesSubtab(BaseArtifactSubtab):
         t.setColumnWidth(0, 150)   # Domain
         t.setColumnWidth(1, 120)   # Name
         t.setColumnWidth(2, 150)   # Value
-        t.setColumnWidth(3, 80)    # Browser
-        t.setColumnWidth(4, 80)    # Profile
-        t.setColumnWidth(5, 50)    # Secure
-        t.setColumnWidth(6, 60)    # HttpOnly
-        t.setColumnWidth(7, 70)    # SameSite
-        t.setColumnWidth(8, 80)    # Expires
-        t.setColumnWidth(9, 60)    # Encrypted
-        t.setColumnWidth(10, 140)  # Tags
+        t.setColumnWidth(3, 120)   # Decrypted Value
+        t.setColumnWidth(4, 80)    # Browser
+        t.setColumnWidth(5, 80)    # Profile
+        t.setColumnWidth(6, 50)    # Secure
+        t.setColumnWidth(7, 60)    # HttpOnly
+        t.setColumnWidth(8, 70)    # SameSite
+        t.setColumnWidth(9, 80)    # Expires
+        t.setColumnWidth(10, 60)   # Encrypted
+        t.setColumnWidth(11, 100)  # Decrypt
+        t.setColumnWidth(12, 140)  # Tags
 
     def _populate_filter_options(self):
         for b in self._model.get_available_browsers():

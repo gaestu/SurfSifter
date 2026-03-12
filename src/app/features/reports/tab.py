@@ -6,8 +6,9 @@ from pathlib import Path
 from typing import Any, Dict, Optional, TYPE_CHECKING, Union
 
 from PySide6.QtCore import Signal
-from PySide6.QtWidgets import QWidget, QVBoxLayout
+from PySide6.QtWidgets import QHBoxLayout, QPushButton, QWidget, QVBoxLayout
 
+from app.common.dialogs.tag_match_summary import TagMatchSummaryDialog
 from reports.ui import ReportTabWidget
 
 if TYPE_CHECKING:
@@ -32,12 +33,27 @@ class ReportsTab(QWidget):
         self._evidence_label: Optional[str] = None
         self._db_manager = None
 
+        self._summary_dialog: Optional[TagMatchSummaryDialog] = None
+
         self._setup_ui()
 
     def _setup_ui(self) -> None:
         """Setup the shim UI - just embed the report widget."""
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
+
+        # Toolbar row with summary button (right-aligned)
+        toolbar = QHBoxLayout()
+        toolbar.setContentsMargins(8, 4, 8, 0)
+        toolbar.addStretch()
+
+        self._summary_btn = QPushButton("📊 Tag && Match Summary")
+        self._summary_btn.setToolTip(
+            "Open a floating panel showing tagged artifacts and reference-list matches"
+        )
+        self._summary_btn.clicked.connect(self._open_summary)
+        toolbar.addWidget(self._summary_btn)
+        layout.addLayout(toolbar)
 
         # The actual report UI from src/reports/
         self._report_widget = ReportTabWidget(parent=self)
@@ -112,6 +128,27 @@ class ReportsTab(QWidget):
             conn = self._db_manager.get_evidence_conn(evidence_id, evidence_label)
             self._report_widget.set_db_connection(conn)
         else:
+            conn = None
             self._report_widget.set_db_connection(None)
 
         self._report_widget.set_evidence(evidence_id, evidence_label)
+
+        # Keep summary dialog in sync if it exists
+        if self._summary_dialog is not None:
+            self._summary_dialog.set_db_connection(conn, evidence_id)
+
+    # --- Summary dialog ---
+
+    def _open_summary(self) -> None:
+        """Open (or raise) the floating Tag & Match Summary panel."""
+        if self._summary_dialog is None:
+            self._summary_dialog = TagMatchSummaryDialog(parent=self.window())
+
+        # Ensure connection is current
+        conn = None
+        if self._db_manager is not None and self._evidence_id is not None:
+            conn = self._db_manager.get_evidence_conn(
+                self._evidence_id, self._evidence_label
+            )
+        self._summary_dialog.set_db_connection(conn, self._evidence_id)
+        self._summary_dialog.show()

@@ -670,17 +670,12 @@ class ChromiumTransportSecurityExtractor(BaseExtractor):
             safe_profile = profile.replace(" ", "_").replace("/", "_")
             safe_user = (user or "unknown").replace(" ", "_").replace("/", "_")
 
-            # Include partition and user for uniqueness
+            # Include partition, user, and path hash for uniqueness
+            # Path hash prevents collisions when same user+profile exists in different locations
             partition_prefix = f"p{partition_idx}_" if partition_idx is not None else ""
-            filename = f"{partition_prefix}{browser}_{safe_user}_{safe_profile}_TransportSecurity"
+            path_hash = hashlib.sha256(source_path.encode()).hexdigest()[:8]
+            filename = f"{partition_prefix}{browser}_{safe_user}_{safe_profile}_{path_hash}_TransportSecurity"
             dest_path = output_dir / filename
-
-            # Handle potential collisions (same user+profile but different paths)
-            counter = 0
-            original_dest = dest_path
-            while dest_path.exists():
-                counter += 1
-                dest_path = output_dir / f"{original_dest.stem}_{counter}{original_dest.suffix}"
 
             callbacks.on_log(f"Copying {source_path} to {dest_path.name}", "info")
 

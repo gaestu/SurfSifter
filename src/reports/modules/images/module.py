@@ -77,6 +77,22 @@ class ImagesModule(BaseReportModule):
                 required=False,
             ),
             FilterField(
+                key="show_description",
+                label="Show Description",
+                filter_type=FilterType.CHECKBOX,
+                default=False,
+                help_text="Show an auto-generated summary (e.g. 'X images were found on the evidence')",
+                required=False,
+            ),
+            FilterField(
+                key="custom_description",
+                label="Custom Description",
+                filter_type=FilterType.TEXT,
+                default="",
+                help_text="Optional custom description displayed above the image grid",
+                required=False,
+            ),
+            FilterField(
                 key="tag_filter",
                 label="Tags",
                 filter_type=FilterType.DROPDOWN,
@@ -247,6 +263,8 @@ class ImagesModule(BaseReportModule):
         """
         # Get filter values
         title = config.get("title", "")
+        show_description = config.get("show_description", False)
+        custom_description = config.get("custom_description", "")
         tag_filter = config.get("tag_filter", self.ALL)
         match_filter = config.get("match_filter", self.ALL)
         include_filename = config.get("include_filename", True)
@@ -317,9 +335,20 @@ class ImagesModule(BaseReportModule):
         if template_path and template_path.exists():
             template_content = template_path.read_text(encoding="utf-8")
             template = Template(template_content)
+            # Build auto-generated description
+            auto_description = ""
+            if show_description:
+                auto_description = translations.get(
+                    "images_auto_description",
+                    "Images found on the evidence.",
+                )
+
             return template.render(
                 images=images,
                 title=title,
+                show_description=show_description,
+                auto_description=auto_description,
+                custom_description=custom_description,
                 shown_count=len(images),
                 total_count=total_count,
                 filter_description=filter_description,

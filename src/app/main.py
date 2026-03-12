@@ -91,7 +91,10 @@ class MainWindow(QMainWindow):
         icon_path = base_dir / "config" / "branding" / "surfsifter.png"
         if icon_path.exists():
             self.setWindowIcon(QIcon(str(icon_path)))
-        self.resize(1100, 720)
+        settings_file = settings_path(base_dir)
+        self.settings = AppSettings.load(settings_file)
+        self.settings_file = settings_file
+        self._restore_window_geometry()
 
         # Apply logging config (level, rotation sizes)
         log_level = getattr(logging, self.app_config.logging.level.upper(), logging.INFO)
@@ -102,10 +105,6 @@ class MainWindow(QMainWindow):
             backup_count=self.app_config.logging.app_log_backup_count
         )
         self.logger = get_logger("app.gui")
-
-        settings_file = settings_path(base_dir)
-        self.settings = AppSettings.load(settings_file)
-        self.settings_file = settings_file
 
         # Initialize tool registry and discover tools
         from core.tool_registry import ToolRegistry
@@ -160,6 +159,7 @@ class MainWindow(QMainWindow):
     def closeEvent(self, event):
         """Handle application close - cancel all running tasks and wait for thread pool."""
         LOGGER.info("Application closing - shutting down workers...")
+        self._persist_window_geometry()
 
         # Shutdown all tab workers in evidence tabs
         if hasattr(self, 'main_tabs'):
@@ -195,6 +195,57 @@ class MainWindow(QMainWindow):
 
         LOGGER.info("Application shutdown complete")
         event.accept()
+
+    def _default_window_geometry(self) -> Tuple[int, int, int, int]:
+        screen = QApplication.primaryScreen()
+        if not screen:
+            return 80, 60, 1500, 960
+
+        available = screen.availableGeometry()
+        width = min(1800, max(1200, int(available.width() * 0.9)))
+        height = min(1100, max(820, int(available.height() * 0.9)))
+        width = min(width, available.width())
+        height = min(height, available.height())
+        x = available.left() + max(0, (available.width() - width) // 2)
+        y = available.top() + max(0, (available.height() - height) // 2)
+        return x, y, width, height
+
+    def _restore_window_geometry(self) -> None:
+        default_x, default_y, default_width, default_height = self._default_window_geometry()
+        window_settings = self.settings.window
+
+        width = window_settings.width or default_width
+        height = window_settings.height or default_height
+        x = window_settings.x if window_settings.x is not None else default_x
+        y = window_settings.y if window_settings.y is not None else default_y
+
+        screen = QApplication.primaryScreen()
+        if screen:
+            available = screen.availableGeometry()
+            width = min(width, available.width())
+            height = min(height, available.height())
+            x = min(max(x, available.left()), available.right() - width + 1)
+            y = min(max(y, available.top()), available.bottom() - height + 1)
+
+        self.setGeometry(x, y, width, height)
+        if window_settings.maximized:
+            self.setWindowState(self.windowState() | Qt.WindowMaximized)
+
+    def _persist_window_geometry(self) -> None:
+        geometry = self.normalGeometry() if self.isMaximized() else self.geometry()
+        if not geometry.isValid():
+            return
+
+        self.settings.window.x = geometry.x()
+        self.settings.window.y = geometry.y()
+        self.settings.window.width = geometry.width()
+        self.settings.window.height = geometry.height()
+        self.settings.window.maximized = self.isMaximized()
+
+        try:
+            self.settings.save(self.settings_file)
+        except Exception as exc:  # pragma: no cover - file system error path
+            LOGGER.warning("Failed to persist window geometry: %s", exc)
 
     # UI construction -----------------------------------------------------
 
@@ -319,6 +370,25 @@ class MainWindow(QMainWindow):
         stats_form.addRow(QLabel("Last Extraction (UTC)"), last_run_label)
         stats_group.setLayout(stats_form)
         layout.addWidget(stats_group)
+
+        # Store stat labels as properties for refresh
+        widget.setProperty("urls_count_label", urls_count_label)
+        widget.setProperty("images_count_label", images_count_label)
+        widget.setProperty("indicators_count_label", indicators_count_label)
+        widget.setProperty("last_run_label", last_run_label)
+
+        # Tag summary statistics
+        tag_group = QGroupBox("Tag Summary")
+        tag_form = QFormLayout()
+        tags_count_label = QLabel("—")
+        tagged_artifacts_label = QLabel("—")
+        tag_form.addRow(QLabel("Total Tags"), tags_count_label)
+        tag_form.addRow(QLabel("Tagged Artifacts"), tagged_artifacts_label)
+        tag_group.setLayout(tag_form)
+        layout.addWidget(tag_group)
+
+        widget.setProperty("tags_count_label", tags_count_label)
+        widget.setProperty("tagged_artifacts_label", tagged_artifacts_label)
 
         # Disk/Partition overview (view-only)
         disk_group = QGroupBox("Disk & Partitions")
@@ -446,6 +516,15 @@ class MainWindow(QMainWindow):
         if self.case_data:
             os_tab.set_case_data(self.case_data, defer_load=defer_load)
         os_tab.set_evidence(evidence_id, defer_load=defer_load)
+        os_tab.set_db_manager(db_manager, evidence_label)
+        # Embed DPAPI Decrypt as a subtab inside OS Artifacts
+        from app.features.dpapi import DPAPITab
+        dpapi_tab = DPAPITab(parent=os_tab)
+        dpapi_tab.set_db_manager(db_manager)
+        if self.case_data:
+            dpapi_tab.set_case_data(self.case_data, defer_load=True)
+        dpapi_tab.set_evidence(evidence_id, evidence_label, defer_load=True)
+        os_tab.add_subtab(dpapi_tab, "🔐 DPAPI")
         evidence_tabs.addTab(os_tab, "OS Artifacts")
 
         # 8. Timeline - supports lazy loading
@@ -479,21 +558,21 @@ class MainWindow(QMainWindow):
         reports_tab.set_evidence(evidence_id, evidence_label)
         evidence_tabs.addTab(reports_tab, "Reports")
 
-        # 11. Screenshots (NEW)
+        # 11. Screenshots
         from app.features.screenshots import ScreenshotsTab
         screenshots_tab = ScreenshotsTab(self.case_data, case_path, db_manager)
         screenshots_tab.set_evidence(evidence_id, evidence_label)
         evidence_tabs.addTab(screenshots_tab, "Screenshots")
 
-        # 12. Tags (NEW)
+        # 12. Tags
         tags_tab = TagsTab()
         # IMPORTANT: Set case_data BEFORE evidence_id to ensure reload() has data access
         if self.case_data:
             tags_tab.set_case_data(self.case_data)
-        tags_tab.set_evidence(evidence_id)
+        tags_tab.set_evidence(evidence_id, evidence_label)
         evidence_tabs.addTab(tags_tab, "Tags")
 
-        # 13. Audit (NEW) - includes Statistics, Warnings, and Logs subtabs
+        # 13. Audit - includes Statistics, Warnings, and Logs subtabs
         from app.features.audit import AuditTab
         audit_tab = AuditTab(
             db_manager,
@@ -525,6 +604,9 @@ class MainWindow(QMainWindow):
         # Statistics tab is now inside audit_tab - access via audit_tab.statistics_tab
         evidence_tabs.setProperty("statistics_tab", audit_tab.statistics_tab)
         evidence_tabs.setProperty("overview_widget", overview_widget)
+
+        # Deferred overview refresh after tabs are fully built
+        QTimer.singleShot(100, lambda tabs=evidence_tabs: self._refresh_overview_for_evidence(tabs))
 
         # Phase 3: Connect tab change for lazy loading trigger
         if defer_load:
@@ -1130,6 +1212,7 @@ class MainWindow(QMainWindow):
         evidence_id: int,
         evidence_label: str,
         ewf_segments: List[Path],
+        partition_info: Optional[list] = None,
     ) -> bool:
         """
         Auto-generate file list from E01 using SleuthKit fls.
@@ -1142,6 +1225,10 @@ class MainWindow(QMainWindow):
             evidence_id: Database ID of the evidence
             evidence_label: Evidence label for database connection
             ewf_segments: List of EWF segment paths
+            partition_info: Optional pre-detected partition info from
+                list_ewf_partitions(). Passed to the generator to avoid
+                re-detecting partitions via mmls (which can fail in some
+                threading contexts).
 
         Returns:
             True if generation succeeded, False otherwise
@@ -1187,12 +1274,13 @@ class MainWindow(QMainWindow):
         # to intermittent "database is locked" or corruption errors when
         # QApplication.processEvents() triggers other DB access on the main thread.
         class FileListGenerationThread(QThread):
-            def __init__(self, db_manager, evidence_id, evidence_label, ewf_segments, parent=None):
+            def __init__(self, db_manager, evidence_id, evidence_label, ewf_segments, partition_info=None, parent=None):
                 super().__init__(parent)
                 self.db_manager = db_manager
                 self.evidence_id = evidence_id
                 self.evidence_label = evidence_label
                 self.ewf_segments = ewf_segments
+                self.partition_info = partition_info
                 self.result = None
                 self.error = None
                 self._cancelled = False
@@ -1212,6 +1300,7 @@ class MainWindow(QMainWindow):
                         evidence_conn=evidence_conn,
                         evidence_id=self.evidence_id,
                         ewf_paths=self.ewf_segments,
+                        partition_info=self.partition_info,
                     )
 
                     if not generator.fls_available:
@@ -1236,7 +1325,8 @@ class MainWindow(QMainWindow):
                             pass
 
         gen_thread = FileListGenerationThread(
-            self.db_manager, evidence_id, evidence_label, ewf_segments, self
+            self.db_manager, evidence_id, evidence_label, ewf_segments,
+            partition_info=partition_info, parent=self
         )
         gen_thread.start()
 
@@ -1473,6 +1563,7 @@ class MainWindow(QMainWindow):
                             evidence_id=evidence_id,
                             evidence_label=evidence_label,
                             ewf_segments=ewf_segments,
+                            partition_info=partitions,
                         )
 
                     self.logger.info(
@@ -1513,6 +1604,7 @@ class MainWindow(QMainWindow):
                         )
 
                     # Auto-generate file list even on partition detection failure
+                    # No partition_info available since detection failed
                     if self.app_config.extraction.auto_generate_file_list:
                         self._auto_generate_file_list(
                             evidence_id=evidence_id,
@@ -1755,10 +1847,48 @@ class MainWindow(QMainWindow):
     # Counts --------------------------------------------------------------
 
     def _refresh_counts(self) -> None:
-        # Counts are now per-evidence tab
-        # This method is kept for compatibility but does nothing
-        # Each evidence tab updates its own counts
-        pass
+        """Refresh overview counts for the current evidence tab."""
+        current_index = self.main_tabs.currentIndex()
+        if current_index <= 0:
+            return
+        evidence_tab_widget = self.main_tabs.widget(current_index)
+        if isinstance(evidence_tab_widget, QTabWidget):
+            self._refresh_overview_for_evidence(evidence_tab_widget)
+
+    def _refresh_overview_for_evidence(self, evidence_tabs: QTabWidget) -> None:
+        """Refresh the Overview tab's summary labels for the given evidence tabs."""
+        if not self.case_data:
+            return
+        evidence_id = evidence_tabs.property("evidence_id")
+        if evidence_id is None:
+            return
+
+        overview_widget = evidence_tabs.property("overview_widget")
+        if overview_widget is None:
+            return
+
+        counts = self.case_data.get_evidence_counts(int(evidence_id))
+
+        urls_label = overview_widget.property("urls_count_label")
+        if urls_label:
+            urls_label.setText(f"{counts.urls:,}")
+        images_label = overview_widget.property("images_count_label")
+        if images_label:
+            images_label.setText(f"{counts.images:,}")
+        indicators_label = overview_widget.property("indicators_count_label")
+        if indicators_label:
+            indicators_label.setText(f"{counts.indicators:,}")
+        last_run_label = overview_widget.property("last_run_label")
+        if last_run_label:
+            last_run_label.setText(counts.last_run_utc or "No extraction yet")
+
+        tag_stats = self.case_data.get_tag_statistics(int(evidence_id))
+        tags_label = overview_widget.property("tags_count_label")
+        if tags_label:
+            tags_label.setText(f"{tag_stats['tag_count']:,}")
+        tagged_label = overview_widget.property("tagged_artifacts_label")
+        if tagged_label:
+            tagged_label.setText(f"{tag_stats['tagged_artifact_count']:,}")
 
     def _clear_counts(self) -> None:
         # Counts are now per-evidence tab
@@ -2019,6 +2149,7 @@ class MainWindow(QMainWindow):
 
         # Refresh counts
         self._refresh_counts()
+        self._refresh_overview_for_evidence(evidence_tabs)
 
         self.log_widget.append("Data updated - current tab refreshed, others will refresh on view")
 
@@ -2404,6 +2535,10 @@ class MainWindow(QMainWindow):
 
         Triggers deferred data loading when a lazy-loaded tab becomes visible.
         """
+        if index == 0:  # Overview tab
+            self._refresh_overview_for_evidence(evidence_tabs)
+            return
+
         widget = evidence_tabs.widget(index)
         if widget is None:
             return

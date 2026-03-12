@@ -233,6 +233,9 @@ TRANSLATIONS: Dict[str, TranslationDict] = {
         # ===================
         "no_preview": "No Preview",
         "md5": "MD5",
+        "source_date": "Source Date",
+        "creation_date": "Creation Date",
+        "found_by": "Found by",
         "no_images_found": "No images found matching the filter criteria.",
         "images": "images",
         "exif_taken": "Taken",
@@ -241,6 +244,7 @@ TRANSLATIONS: Dict[str, TranslationDict] = {
         "exif_gps_lat": "GPS Lat",
         "exif_gps_lon": "GPS Lon",
         "showing_x_of_y_images": "Showing {shown} of {total} images",
+        "images_auto_description": "Images found on the evidence.",
 
         # ===================
         # Screenshots module
@@ -259,6 +263,32 @@ TRANSLATIONS: Dict[str, TranslationDict] = {
         "downloaded": "Downloaded",
         "size": "Size",
         "no_downloaded_images": "No downloaded images found matching the filter criteria.",
+        "downloaded_images_default_title": "Downloaded Images",
+        "showing_x_of_y_downloaded": "Showing {shown} of {total} downloaded images",
+
+        # ===================
+        # Downloaded images appendix
+        # ===================
+        "appendix_download_list_title": "Downloaded Images",
+        "appendix_download_list_empty": "No downloaded images found.",
+
+        # ===================
+        # Download audit appendix
+        # ===================
+        "appendix_download_audit_title": "Download Audit Trail",
+        "appendix_download_audit_empty": "No download audit entries found.",
+        "audit_timestamp": "Timestamp",
+        "audit_outcome": "Outcome",
+        "audit_method": "Method",
+        "audit_status_code": "Status",
+        "audit_duration": "Duration",
+        "audit_content_type": "Content Type",
+        "audit_reason": "Reason",
+        "audit_caller": "Caller",
+        "audit_attempts": "Attempts",
+        "audit_blocked": "Blocked",
+        "audit_entries": "entries",
+        "audit_total": "Total",
 
         # ===================
         # Browser Downloads module
@@ -286,9 +316,13 @@ TRANSLATIONS: Dict[str, TranslationDict] = {
         # ===================
         # Credentials module
         # ===================
+        "credentials_title": "Stored Credentials",
+        "credentials_description": "Overview of saved login credentials found in browser profiles, including usernames, password storage status, and associated websites.",
         "origin_url": "Origin URL",
+        "stored_site": "Stored site",
         "username_field": "Username Field",
         "username": "Username",
+        "no_username": "(no username)",
         "browser": "Browser",
         "profile": "Profile",
         "password": "Password",
@@ -302,6 +336,7 @@ TRANSLATIONS: Dict[str, TranslationDict] = {
         # ===================
         # Autofill module
         # ===================
+        "autofill_description": "Autofill entries are form field values saved by browsers to assist with repeated data entry. They can reveal personal information such as names, addresses, and email addresses entered into web forms.",
         "field_name": "Field Name",
         "value": "Value",
         "use_count": "Use Count",
@@ -331,6 +366,42 @@ TRANSLATIONS: Dict[str, TranslationDict] = {
         "web_storage_entries": "entries",
         "no_web_storage_entries": "No storage entries found.",
         "no_web_storage_sites": "No web storage sites found matching the filter criteria.",
+        "web_storage_tagged_keys_only": "Tagged keys only",
+        "web_storage_key_tags": "Key tags",
+        "web_storage_show_key_tags": "Show key tags column",
+        "no_web_storage_appendix": "No web storage entries found for the selected filters.",
+
+        # ===================
+        # Jump Lists module
+        # ===================
+        "jl_description": "Jump Lists are a Windows feature that tracks recently and frequently used items per application. They are stored as .lnk shortcut files and can contain file paths, URLs, and access timestamps. This data provides insight into which applications were used and what documents or websites were accessed.",
+        "jl_application": "Application",
+        "jl_appid": "App ID",
+        "jl_title": "Title",
+        "jl_url": "URL",
+        "jl_target_path": "Target Path",
+        "jl_access_time": "Access Time",
+        "jl_creation_time": "Creation Time",
+        "jl_access_count": "Access Count",
+        "jl_pin_status": "Pin Status",
+        "jl_jumplist_path": "Jump List Path",
+        "jl_entries": "entries",
+        "no_jump_lists_found": "No jump list entries found matching the filter criteria.",
+
+        # ===================
+        # Installed Applications module
+        # ===================
+        "installed_applications_title": "Installed Applications",
+        "no_installed_applications_found": "No installed applications found matching the filter criteria.",
+        "applications": "applications",
+
+        # ===================
+        # Application Execution module
+        # ===================
+        "application_execution_title": "Application Execution",
+        "application_execution_description": "Application execution artifacts are derived from Windows UserAssist entries and indicate which programs were launched by a user. They can include execution counts, focus data, and the last observed run time for each application path.",
+        "application_path": "Application Path",
+        "no_application_execution_found": "No application execution entries found matching the filter criteria.",
 
         # ===================
         # Jump Lists module
@@ -680,6 +751,9 @@ TRANSLATIONS: Dict[str, TranslationDict] = {
         # ===================
         "no_preview": "Keine Vorschau",
         "md5": "MD5",
+        "source_date": "Quelldatum",
+        "creation_date": "Erstellungsdatum",
+        "found_by": "Gefunden von",
         "no_images_found": "Keine Bilder gefunden, die den Filterkriterien entsprechen.",
         "images": "Bilder",
         "exif_taken": "Aufgenommen",
@@ -688,6 +762,7 @@ TRANSLATIONS: Dict[str, TranslationDict] = {
         "exif_gps_lat": "GPS-Breitengrad",
         "exif_gps_lon": "GPS-Längengrad",
         "showing_x_of_y_images": "{shown} von {total} Bildern",
+        "images_auto_description": "Bilder welche auf dem Beweismittel gefunden wurden.",
 
         # ===================
         # Screenshots module
@@ -706,6 +781,32 @@ TRANSLATIONS: Dict[str, TranslationDict] = {
         "downloaded": "Heruntergeladen",
         "size": "Grösse",
         "no_downloaded_images": "Keine heruntergeladenen Bilder gefunden, die den Filterkriterien entsprechen.",
+        "downloaded_images_default_title": "Heruntergeladene Bilder",
+        "showing_x_of_y_downloaded": "Zeige {shown} von {total} heruntergeladenen Bildern",
+
+        # ===================
+        # Downloaded images appendix
+        # ===================
+        "appendix_download_list_title": "Heruntergeladene Bilder",
+        "appendix_download_list_empty": "Keine heruntergeladenen Bilder gefunden.",
+
+        # ===================
+        # Download-Audit-Anhang
+        # ===================
+        "appendix_download_audit_title": "Download-Audit-Protokoll",
+        "appendix_download_audit_empty": "Keine Download-Audit-Einträge gefunden.",
+        "audit_timestamp": "Zeitstempel",
+        "audit_outcome": "Ergebnis",
+        "audit_method": "Methode",
+        "audit_status_code": "Status",
+        "audit_duration": "Dauer",
+        "audit_content_type": "Inhaltstyp",
+        "audit_reason": "Grund",
+        "audit_caller": "Aufrufer",
+        "audit_attempts": "Versuche",
+        "audit_blocked": "Blockiert",
+        "audit_entries": "Einträge",
+        "audit_total": "Gesamt",
 
         # ===================
         # Browser Downloads module
@@ -733,9 +834,13 @@ TRANSLATIONS: Dict[str, TranslationDict] = {
         # ===================
         # Credentials module
         # ===================
+        "credentials_title": "Gespeicherte Anmeldedaten",
+        "credentials_description": "Übersicht der in Browserprofilen gespeicherten Anmeldedaten, einschließlich Benutzernamen, Passwortstatus und zugehöriger Websites.",
         "origin_url": "Ursprungs-URL",
+        "stored_site": "Gespeicherte Seite",
         "username_field": "Benutzerfeld",
         "username": "Benutzername",
+        "no_username": "(kein Benutzername)",
         "browser": "Browser",
         "profile": "Profil",
         "password": "Passwort",
@@ -749,6 +854,7 @@ TRANSLATIONS: Dict[str, TranslationDict] = {
         # ===================
         # Autofill module
         # ===================
+        "autofill_description": "Autofill-Einträge sind Formularfeldwerte, die vom Browser zur Unterstützung bei wiederholter Dateneingabe gespeichert werden. Sie können persönliche Informationen wie Namen, Adressen und E-Mail-Adressen enthalten, die in Webformulare eingegeben wurden.",
         "field_name": "Feldname",
         "value": "Wert",
         "use_count": "Anzahl",
@@ -778,6 +884,42 @@ TRANSLATIONS: Dict[str, TranslationDict] = {
         "web_storage_entries": "Einträge",
         "no_web_storage_entries": "Keine Speichereinträge gefunden.",
         "no_web_storage_sites": "Keine Web-Storage-Seiten gefunden, die den Filterkriterien entsprechen.",
+        "web_storage_tagged_keys_only": "Nur markierte Schlüssel",
+        "web_storage_key_tags": "Schlüssel-Tags",
+        "web_storage_show_key_tags": "Schlüssel-Tags Spalte anzeigen",
+        "no_web_storage_appendix": "Keine Web-Speicher-Einträge für die ausgewählten Filter gefunden.",
+
+        # ===================
+        # Jump Lists module
+        # ===================
+        "jl_description": "Sprunglisten (Jump Lists) sind eine Windows-Funktion, die kürzlich und häufig verwendete Elemente pro Anwendung erfasst. Sie werden als .lnk-Verknüpfungsdateien gespeichert und können Dateipfade, URLs und Zugriffszeitstempel enthalten. Diese Daten geben Aufschluss darüber, welche Anwendungen verwendet und welche Dokumente oder Websites aufgerufen wurden.",
+        "jl_application": "Anwendung",
+        "jl_appid": "App-ID",
+        "jl_title": "Titel",
+        "jl_url": "URL",
+        "jl_target_path": "Zielpfad",
+        "jl_access_time": "Zugriffszeit",
+        "jl_creation_time": "Erstellungszeit",
+        "jl_access_count": "Zugriffe",
+        "jl_pin_status": "Anheftstatus",
+        "jl_jumplist_path": "Sprunglisten-Pfad",
+        "jl_entries": "Einträge",
+        "no_jump_lists_found": "Keine Sprunglisten-Einträge gefunden, die den Filterkriterien entsprechen.",
+
+        # ===================
+        # Installed Applications module
+        # ===================
+        "installed_applications_title": "Installierte Anwendungen",
+        "no_installed_applications_found": "Keine installierten Anwendungen gefunden, die den Filterkriterien entsprechen.",
+        "applications": "Anwendungen",
+
+        # ===================
+        # Application Execution module
+        # ===================
+        "application_execution_title": "Anwendungsausführung",
+        "application_execution_description": "Artefakte zur Anwendungsausführung stammen aus Windows-UserAssist-Einträgen und zeigen, welche Programme von einem Benutzer gestartet wurden. Sie können Ausführungsanzahl, Fokusdaten und die zuletzt beobachtete Ausführungszeit pro Anwendungspfad enthalten.",
+        "application_path": "Anwendungspfad",
+        "no_application_execution_found": "Keine Anwendungsausführungs-Einträge gefunden, die den Filterkriterien entsprechen.",
 
         # ===================
         # Jump Lists module

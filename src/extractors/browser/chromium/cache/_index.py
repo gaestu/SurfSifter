@@ -14,9 +14,18 @@ from pathlib import Path
 from typing import List, Optional, Tuple
 
 from core.logging import get_logger
-from ._schemas import SIMPLE_INDEX_MAGIC, SIMPLE_INDEX_VERSION, SIMPLE_INDEX_MIN_VERSION
+from ._schemas import (
+    SIMPLE_INDEX_ACCEPTED_MAGICS,
+    SIMPLE_INDEX_VERSION,
+    SIMPLE_INDEX_MIN_VERSION,
+    SIMPLE_INDEX_V9_ENTRY_FORMAT_VERSION,
+    WINDOWS_EPOCH_OFFSET_MICROSECONDS,
+)
 
 LOGGER = get_logger("extractors.cache_simple.index")
+
+# Seconds between Windows FILETIME epoch (1601) and Unix epoch (1970)
+_WINDOWS_EPOCH_OFFSET_SECONDS = 11644473600
 
 
 @dataclass
@@ -46,7 +55,11 @@ def parse_index_file(file_path: Path) -> Tuple[Optional[IndexMetadata], List[Ind
     1. Pickle header: payload_size (uint32) + CRC (uint32)
     2. Index metadata: magic (uint64), version (uint32), entry_count (uint64),
        cache_size (uint64), write_reason (uint32)
-    3. Entries: For each entry - hash_key (uint64), metadata (2x uint32)
+    3. Entries (format depends on version):
+       V7-V8 (16 bytes): hash_key (uint64) + seconds_since_1601 (uint32)
+                          + size_chunks_and_flags (uint32)
+       V9+   (24 bytes): hash_key (uint64) + last_used_us_since_1601 (int64)
+                          + size_chunks (uint32) + in_memory_data (uint32)
     4. Final data: cache_last_modified (int64)
 
     Args:
@@ -102,9 +115,9 @@ def parse_index_file(file_path: Path) -> Tuple[Optional[IndexMetadata], List[Ind
         offset += 4
 
         # Validate magic and version
-        if magic != SIMPLE_INDEX_MAGIC:
-            LOGGER.debug("Invalid index magic: 0x%x (expected 0x%x) in %s",
-                        magic, SIMPLE_INDEX_MAGIC, file_path)
+        if magic not in SIMPLE_INDEX_ACCEPTED_MAGICS:
+            LOGGER.debug("Invalid index magic: 0x%x in %s (not in accepted set)",
+                        magic, file_path)
             return None, []
 
         if version < SIMPLE_INDEX_MIN_VERSION or version > SIMPLE_INDEX_VERSION:
@@ -124,46 +137,73 @@ def parse_index_file(file_path: Path) -> Tuple[Optional[IndexMetadata], List[Ind
             write_reason=write_reason,
         )
 
-        # Parse entries
-        # Each entry: hash_key (uint64), then EntryMetadata serialized
-        # EntryMetadata on disk:
-        #   - uint32: last_used_time_seconds_since_epoch (or trailer_prefetch_size for APP_CACHE)
-        #   - uint32: entry_size_256b_chunks (30 bits) + in_memory_data (2 bits)
-        # Total: 16 bytes per entry (8 + 4 + 4)
-
-        ENTRY_SIZE_ON_DISK = 16  # 8 (hash) + 4 + 4 (metadata)
+        # Parse entries — format depends on version.
+        # V7-V8 (16 bytes per entry):
+        #   hash_key (uint64) + last_used_seconds_since_1601 (uint32)
+        #   + size_chunks_and_flags (uint32)
+        # V9+ (24 bytes per entry):
+        #   hash_key (uint64) + last_used_us_since_1601 (int64)
+        #   + size_chunks (uint32) + in_memory_data (uint32)
+        is_v9_format = version >= SIMPLE_INDEX_V9_ENTRY_FORMAT_VERSION
+        entry_size_on_disk = 24 if is_v9_format else 16
 
         for i in range(entry_count):
-            if len(data) < offset + ENTRY_SIZE_ON_DISK:
+            if len(data) < offset + entry_size_on_disk:
                 LOGGER.warning("Index file truncated at entry %d/%d: %s", i, entry_count, file_path)
                 break
 
             entry_hash = struct.unpack_from('<Q', data, offset)[0]
             offset += 8
 
-            # EntryMetadata: last_used_time (or trailer_prefetch) + size_chunks_and_flags
-            last_used_seconds = struct.unpack_from('<I', data, offset)[0]
-            offset += 4
+            if is_v9_format:
+                # V9+: 8-byte Chrome timestamp (microseconds since 1601-01-01)
+                last_used_us = struct.unpack_from('<q', data, offset)[0]
+                offset += 8
 
-            size_and_flags = struct.unpack_from('<I', data, offset)[0]
-            offset += 4
+                size_chunks = struct.unpack_from('<I', data, offset)[0]
+                offset += 4
+                # in_memory_data (uint32) — not needed for forensics
+                offset += 4
 
-            # Extract entry size (30 bits) and in_memory_data (2 bits)
-            entry_size_chunks = size_and_flags & 0x3FFFFFFF  # Lower 30 bits
-            # in_memory_data = (size_and_flags >> 30) & 0x03  # Upper 2 bits (not needed for forensics)
+                entry_size_chunks = size_chunks & 0x3FFFFFFF
+                entry_size_bytes = entry_size_chunks * 256
 
-            # Convert size from 256-byte chunks to bytes
-            entry_size_bytes = entry_size_chunks * 256
-
-            # Convert timestamp: seconds since Unix epoch
-            if last_used_seconds > 0:
-                try:
-                    last_used_time = datetime.fromtimestamp(last_used_seconds, tz=timezone.utc)
-                except (ValueError, OSError):
-                    # Invalid timestamp
+                # Convert Chrome timestamp to datetime
+                if last_used_us > WINDOWS_EPOCH_OFFSET_MICROSECONDS:
+                    try:
+                        unix_us = last_used_us - WINDOWS_EPOCH_OFFSET_MICROSECONDS
+                        last_used_time = datetime.fromtimestamp(
+                            unix_us / 1_000_000, tz=timezone.utc
+                        )
+                    except (ValueError, OSError):
+                        last_used_time = datetime.fromtimestamp(0, tz=timezone.utc)
+                elif last_used_us > 0:
+                    # Positive but before Unix epoch — still valid forensic data
+                    last_used_time = datetime.fromtimestamp(0, tz=timezone.utc)
+                else:
                     last_used_time = datetime.fromtimestamp(0, tz=timezone.utc)
             else:
-                last_used_time = datetime.fromtimestamp(0, tz=timezone.utc)
+                # V7-V8: 4-byte timestamp (seconds since 1601-01-01)
+                last_used_seconds_since_1601 = struct.unpack_from('<I', data, offset)[0]
+                offset += 4
+
+                size_and_flags = struct.unpack_from('<I', data, offset)[0]
+                offset += 4
+
+                entry_size_chunks = size_and_flags & 0x3FFFFFFF
+                entry_size_bytes = entry_size_chunks * 256
+
+                # Convert from seconds since Windows FILETIME epoch (1601)
+                if last_used_seconds_since_1601 > _WINDOWS_EPOCH_OFFSET_SECONDS:
+                    try:
+                        unix_seconds = last_used_seconds_since_1601 - _WINDOWS_EPOCH_OFFSET_SECONDS
+                        last_used_time = datetime.fromtimestamp(
+                            unix_seconds, tz=timezone.utc
+                        )
+                    except (ValueError, OSError):
+                        last_used_time = datetime.fromtimestamp(0, tz=timezone.utc)
+                else:
+                    last_used_time = datetime.fromtimestamp(0, tz=timezone.utc)
 
             entries.append(IndexEntry(
                 entry_hash=entry_hash,
@@ -174,15 +214,12 @@ def parse_index_file(file_path: Path) -> Tuple[Optional[IndexMetadata], List[Ind
         # Parse final data: cache_last_modified (int64)
         if len(data) >= offset + 8:
             cache_last_modified_raw = struct.unpack_from('<q', data, offset)[0]
-            # This is base::Time::ToInternalValue() - microseconds since Windows epoch (1601)
-            # Convert to Unix timestamp
+            # This is base::Time::ToInternalValue() — microseconds since 1601
             try:
-                # Windows epoch to Unix epoch offset in microseconds
-                WINDOWS_EPOCH_OFFSET = 11644473600 * 1000000
-                unix_microseconds = cache_last_modified_raw - WINDOWS_EPOCH_OFFSET
+                unix_microseconds = cache_last_modified_raw - WINDOWS_EPOCH_OFFSET_MICROSECONDS
                 if unix_microseconds > 0:
                     metadata.cache_last_modified = datetime.fromtimestamp(
-                        unix_microseconds / 1000000, tz=timezone.utc
+                        unix_microseconds / 1_000_000, tz=timezone.utc
                     )
             except (ValueError, OSError):
                 pass

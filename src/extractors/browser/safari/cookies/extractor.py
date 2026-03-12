@@ -33,6 +33,7 @@ from .._parsers import parse_cookies, get_cookie_stats
 from core.logging import get_logger
 from core.database import (
     insert_browser_inventory,
+    insert_urls,
     update_inventory_ingestion_status,
 )
 
@@ -294,6 +295,7 @@ class SafariCookiesExtractor(BaseExtractor):
         total_cookies = 0
         total_domains = 0
         all_records = []
+        url_records = []  # Collect URLs for unified urls table
 
         discovered_by = self.metadata.name
 
@@ -365,6 +367,27 @@ class SafariCookiesExtractor(BaseExtractor):
                         "discovered_by": discovered_by,
                     })
 
+                # Collect unique cookie domains as URLs for cross-posting
+                seen_domains = set()
+                for cookie in cookies:
+                    domain = cookie.domain
+                    if domain and domain not in seen_domains:
+                        seen_domains.add(domain)
+                        # Normalise bare domain to https URL for the urls table
+                        clean = domain.lstrip('.')
+                        if clean:
+                            url_records.append({
+                                "url": f"https://{clean}/",
+                                "domain": clean,
+                                "scheme": "https",
+                                "discovered_by": discovered_by,
+                                "run_id": run_id,
+                                "source_path": source_path,
+                                "context": f"cookie:safari:{profile}",
+                                "first_seen_utc": cookie.creation_time_utc,
+                                "last_seen_utc": cookie.expires_utc,
+                            })
+
                 stats = get_cookie_stats(cookies)
                 total_cookies += stats.get("total_cookies", 0)
                 total_domains += stats.get("unique_domains", 0)
@@ -397,6 +420,16 @@ class SafariCookiesExtractor(BaseExtractor):
             inserted = insert_cookies(evidence_conn, evidence_id, all_records)
             evidence_conn.commit()
             callbacks.on_log(f"Ingested {inserted} cookies", "info")
+
+        # Cross-post cookie domain URLs to unified urls table
+        urls_inserted = 0
+        if url_records:
+            try:
+                urls_inserted = insert_urls(evidence_conn, evidence_id, url_records)
+                evidence_conn.commit()
+                LOGGER.debug("Cross-posted %d cookie domain URLs to urls table", urls_inserted)
+            except Exception as e:
+                LOGGER.debug("Failed to cross-post cookie domain URLs: %s", e)
 
         manifest_data["parsed_counts"] = {
             "cookies": total_cookies,
@@ -454,10 +487,12 @@ class SafariCookiesExtractor(BaseExtractor):
 
             original_name = Path(path_str).name
             user = extract_user_from_path(path_str) or "unknown"
+            # Path hash prevents collisions when same user exists in different locations
+            path_hash = hashlib.sha256(path_str.encode()).hexdigest()[:8]
             if partition_index is not None:
-                safe_name = f"safari_{user}_p{partition_index}_{original_name}"
+                safe_name = f"safari_{user}_p{partition_index}_{path_hash}_{original_name}"
             else:
-                safe_name = f"safari_{user}_{original_name}"
+                safe_name = f"safari_{user}_{path_hash}_{original_name}"
 
             dest_path = output_dir / safe_name
             dest_path.write_bytes(content)

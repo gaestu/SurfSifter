@@ -73,6 +73,12 @@ SAFARI_BROWSERS: Dict[str, Dict] = {
             "Users/*/Library/Caches/Metadata/Safari",
             "Users/*/Library/Containers/com.apple.Safari/Data/Library/Caches/Metadata/Safari",
         ],
+        # Modern WebKit WebsiteData paths (Safari 10+)
+        "websitedata_roots": [
+            "Users/*/Library/WebKit/com.apple.Safari/WebsiteData",
+            "Users/*/Library/Containers/com.apple.Safari/Data/Library/WebKit/WebsiteData",
+            "Users/*/Library/Containers/com.apple.SafariTechnologyPreview/Data/Library/WebKit/WebsiteData",
+        ],
     },
 }
 
@@ -81,9 +87,10 @@ for browser_info in SAFARI_BROWSERS.values():
     browser_info["cookies_roots"] = _with_absolute_variants(browser_info["cookies_roots"])
     browser_info["cache_roots"] = _with_absolute_variants(browser_info["cache_roots"])
     browser_info["metadata_roots"] = _with_absolute_variants(browser_info["metadata_roots"])
+    browser_info["websitedata_roots"] = _with_absolute_variants(browser_info.get("websitedata_roots", []))
 
 
-SafariRootType = Literal["profile", "cookies", "cache", "metadata"]
+SafariRootType = Literal["profile", "cookies", "cache", "metadata", "websitedata"]
 
 
 class SafariArtifactInfo(TypedDict):
@@ -171,11 +178,46 @@ SAFARI_ARTIFACTS: Dict[str, SafariArtifactInfo] = {
         "root_type": "profile",
     },
     "local_storage": {
-        # Safari Local Storage
+        # Safari Local Storage — per-origin SQLite files
+        # Legacy: ~/Library/Safari/LocalStorage/{scheme}_{host}_{port}.localstorage
+        # Modern: ~/Library/WebKit/com.apple.Safari/WebsiteData/LocalStorage/{origin}/
         "patterns": [
             "LocalStorage/*",
+            "LocalStorage/*.localstorage",
+            "LocalStorage/*.localstorage-wal",
+            "LocalStorage/*.localstorage-shm",
         ],
         "root_type": "profile",
+    },
+    "local_storage_websitedata": {
+        # Modern Safari LocalStorage under WebsiteData paths
+        "patterns": [
+            "LocalStorage/*",
+            "LocalStorage/*/StorageTracker.db",
+        ],
+        "root_type": "websitedata",
+    },
+    "indexeddb": {
+        # Safari IndexedDB — per-origin directories with SQLite databases
+        # Legacy: ~/Library/Safari/Databases/___IndexedDB/v*/{origin}/*.sqlite
+        # Modern: ~/Library/WebKit/.../WebsiteData/IndexedDB/v*/{origin}/*.sqlite
+        "patterns": [
+            "Databases/___IndexedDB/*",
+            "Databases/___IndexedDB/v*/*/*.sqlite",
+            "Databases/___IndexedDB/v*/*/*.sqlite-wal",
+            "Databases/___IndexedDB/v*/*/*.sqlite-shm",
+        ],
+        "root_type": "profile",
+    },
+    "indexeddb_websitedata": {
+        # Modern Safari IndexedDB under WebsiteData paths
+        "patterns": [
+            "IndexedDB/*",
+            "IndexedDB/v*/*/*.sqlite",
+            "IndexedDB/v*/*/*.sqlite-wal",
+            "IndexedDB/v*/*/*.sqlite-shm",
+        ],
+        "root_type": "websitedata",
     },
     "favicons": {
         # Favicon and touch icon caches
@@ -309,6 +351,8 @@ def get_patterns(artifact: str) -> List[str]:
         roots = browser["cache_roots"]
     elif root_type == "metadata":
         roots = browser["metadata_roots"]
+    elif root_type == "websitedata":
+        roots = browser["websitedata_roots"]
     else:
         roots = browser["profile_roots"]
 

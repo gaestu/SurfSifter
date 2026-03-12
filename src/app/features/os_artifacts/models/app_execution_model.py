@@ -55,6 +55,8 @@ class AppExecutionModel(QAbstractTableModel):
         "focus_time",
         "focus_count",
         "source",
+        "os_source",
+        "tags",
     ]
 
     HEADERS = [
@@ -64,6 +66,8 @@ class AppExecutionModel(QAbstractTableModel):
         "Focus Time",
         "Focus Count",
         "Source",
+        "OS",
+        "Tags",
     ]
 
     COL_PATH = 0
@@ -72,6 +76,10 @@ class AppExecutionModel(QAbstractTableModel):
     COL_FOCUS_TIME = 3
     COL_FOCUS_COUNT = 4
     COL_SOURCE = 5
+    COL_OS = 6
+    COL_TAGS = 7
+
+    ARTIFACT_TYPE = "app_execution"
 
     # Forensic interest colors (same palette as InstalledSoftwareModel)
     COLOR_BROWSER = QColor(200, 220, 255)        # Light blue for browsers
@@ -95,14 +103,17 @@ class AppExecutionModel(QAbstractTableModel):
         db_manager: DatabaseManager,
         evidence_id: int,
         evidence_label: str,
+        case_data=None,
         parent=None,
     ):
         super().__init__(parent)
         self.db_manager = db_manager
         self.evidence_id = evidence_id
         self.evidence_label = evidence_label
+        self.case_data = case_data
 
         self._rows: List[Dict[str, Any]] = []
+        self._tag_map: Dict[int, str] = {}
         self._search_text: str = ""
         self._forensic_only: bool = False
 
@@ -120,9 +131,9 @@ class AppExecutionModel(QAbstractTableModel):
                 return
 
             sql = """
-                SELECT id, value, path, hive, extra_json
+                SELECT id, type, value, path, hive, provenance, extra_json
                 FROM os_indicators
-                WHERE type = 'execution:user_assist'
+                WHERE type IN ('execution:user_assist', 'execution:launch_services')
                 ORDER BY value COLLATE NOCASE
             """
 
@@ -131,7 +142,7 @@ class AppExecutionModel(QAbstractTableModel):
 
             parsed_rows = []
             for row in raw_rows:
-                row_id, value, path, hive, extra_json_str = row
+                row_id, indicator_type, value, path, hive, provenance, extra_json_str = row
 
                 extra = {}
                 if extra_json_str:
@@ -140,9 +151,20 @@ class AppExecutionModel(QAbstractTableModel):
                     except json.JSONDecodeError:
                         pass
 
+                # Determine OS from provenance
+                _OS_MAP = {"macos_plist": "macOS", "registry": "Windows"}
+                os_source = _OS_MAP.get(provenance, provenance or "Unknown")
+
+                # For macOS Launch Services: use different display logic
+                if indicator_type == "execution:launch_services":
+                    decoded_path = value or extra.get("handler_bundle_id", "")
+                else:
+                    decoded_path = extra.get("decoded_path", value or "")
+
                 row_data = {
                     "id": row_id,
-                    "decoded_path": extra.get("decoded_path", value or ""),
+                    "type": indicator_type,
+                    "decoded_path": decoded_path,
                     "run_count": extra.get("run_count"),
                     "focus_count": extra.get("focus_count"),
                     "focus_time_ms": extra.get("focus_time_ms"),
@@ -150,17 +172,21 @@ class AppExecutionModel(QAbstractTableModel):
                     "rot13_name": extra.get("rot13_name", ""),
                     "forensic_interest": extra.get("forensic_interest", False),
                     "forensic_category": extra.get("forensic_category", ""),
+                    "os_source": os_source,
                     "path": path,
                     "hive": hive,
+                    "provenance": provenance or "",
                     "extra": extra,
                 }
                 parsed_rows.append(row_data)
 
             self._rows = self._apply_filters(parsed_rows)
+            self._refresh_tags()
 
         except Exception as e:
             logger.exception("Failed to load app execution data: %s", e)
             self._rows = []
+            self._tag_map = {}
 
     def _apply_filters(self, rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """Apply search and forensic filters."""
@@ -177,6 +203,18 @@ class AppExecutionModel(QAbstractTableModel):
             result = [r for r in result if r.get("forensic_interest")]
 
         return result
+
+    def _refresh_tags(self) -> None:
+        """Refresh tag strings for current rows."""
+        if not self.case_data:
+            self._tag_map = {}
+            return
+        ids = [row.get("id") for row in self._rows if row.get("id") is not None]
+        self._tag_map = self.case_data.get_tag_strings_for_artifacts(
+            self.evidence_id,
+            self.ARTIFACT_TYPE,
+            ids,
+        )
 
     def rowCount(self, parent: QModelIndex = QModelIndex()) -> int:
         if parent.isValid():
@@ -213,6 +251,10 @@ class AppExecutionModel(QAbstractTableModel):
                     parts = hive.replace("\\", "/").split("/")
                     return parts[-1] if parts else hive
                 return ""
+            elif col == self.COL_OS:
+                return row.get("os_source", "")
+            elif col == self.COL_TAGS:
+                return self._tag_map.get(row.get("id"), "") or ""
 
         elif role == Qt.BackgroundRole:
             if row.get("forensic_interest"):
@@ -233,6 +275,9 @@ class AppExecutionModel(QAbstractTableModel):
                 tips.append(f"Last Run: {row['last_run_utc']}")
             if row.get("forensic_category"):
                 tips.append(f"Forensic Category: {row['forensic_category']}")
+            tag_str = self._tag_map.get(row.get("id"), "")
+            if tag_str:
+                tips.append(f"Tags: {tag_str}")
             return "\n".join(tips)
 
         elif role == Qt.UserRole:

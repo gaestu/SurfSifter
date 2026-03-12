@@ -421,3 +421,126 @@ class AppExecutionDetailsDialog(QDialog):
         if path:
             clipboard = QApplication.clipboard()
             clipboard.setText(path)
+
+
+class UserActivityDetailsDialog(QDialog):
+    """Dialog showing full details for a user activity indicator."""
+
+    def __init__(self, row_data: Dict[str, Any], parent=None):
+        """
+        Initialize User Activity details dialog.
+
+        Args:
+            row_data: User activity entry data dictionary
+            parent: Parent widget
+        """
+        super().__init__(parent)
+        self.row_data = row_data
+
+        self.setWindowTitle("User Activity Details")
+        self.setModal(True)
+        self.resize(600, 500)
+
+        self._setup_ui()
+
+    def _setup_ui(self) -> None:
+        """Create UI layout."""
+        layout = QVBoxLayout(self)
+
+        form = QFormLayout()
+
+        # Activity type (bold header)
+        activity_type = self.row_data.get("activity_type") or "Unknown"
+        type_label = QLabel(f"<b>{activity_type}</b>")
+        type_label.setStyleSheet("font-size: 14px;")
+        form.addRow("Activity Type:", type_label)
+
+        # Indicator type (raw)
+        raw_type = self.row_data.get("type") or ""
+        if raw_type:
+            form.addRow("Indicator Type:", QLabel(raw_type))
+
+        form.addRow("", QLabel(""))  # Spacer
+
+        # Name
+        name = self.row_data.get("name") or ""
+        name_label = QLabel(name)
+        name_label.setWordWrap(True)
+        name_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        form.addRow("Name:", name_label)
+
+        # Value
+        value = self.row_data.get("value") or ""
+        value_label = QLabel(value)
+        value_label.setWordWrap(True)
+        value_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        form.addRow("Value:", value_label)
+
+        form.addRow("", QLabel(""))  # Spacer
+
+        # Timestamp
+        timestamp = self.row_data.get("detected_at_utc") or "N/A"
+        if timestamp != "N/A":
+            timestamp = timestamp.replace("T", " ").split("+")[0]
+        form.addRow("Timestamp (UTC):", QLabel(timestamp))
+
+        # OS
+        os_source = self.row_data.get("os_source") or "N/A"
+        form.addRow("Operating System:", QLabel(os_source))
+
+        # Confidence
+        confidence = self.row_data.get("confidence") or "N/A"
+        form.addRow("Confidence:", QLabel(confidence))
+
+        form.addRow("", QLabel(""))  # Spacer
+
+        # Source path
+        source_path = self.row_data.get("path") or ""
+        if source_path:
+            path_label = QLabel(source_path)
+            path_label.setWordWrap(True)
+            path_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
+            form.addRow("Source Path:", path_label)
+
+        # Provenance
+        provenance = self.row_data.get("provenance") or "N/A"
+        form.addRow("Provenance:", QLabel(provenance))
+
+        layout.addLayout(form)
+
+        # Extra JSON section
+        extra = self.row_data.get("extra", {})
+        if extra:
+            layout.addWidget(QLabel("<b>Additional Details</b>"))
+            extra_text = QTextEdit()
+            extra_text.setReadOnly(True)
+            extra_text.setMaximumHeight(150)
+
+            import json
+            extra_text.setPlainText(json.dumps(extra, indent=2, default=str))
+            layout.addWidget(extra_text)
+
+        # Buttons
+        layout.addStretch()
+        button_layout = QHBoxLayout()
+        button_layout.addStretch()
+
+        # Copy value button
+        if value:
+            copy_btn = QPushButton("Copy Value")
+            copy_btn.clicked.connect(self._copy_value)
+            button_layout.addWidget(copy_btn)
+
+        close_btn = QPushButton("Close")
+        close_btn.clicked.connect(self.accept)
+        button_layout.addWidget(close_btn)
+
+        layout.addLayout(button_layout)
+
+    def _copy_value(self) -> None:
+        """Copy value to clipboard."""
+        from PySide6.QtWidgets import QApplication
+        value = self.row_data.get("value", "")
+        if value:
+            clipboard = QApplication.clipboard()
+            clipboard.setText(value)

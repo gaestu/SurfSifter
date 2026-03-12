@@ -67,6 +67,22 @@ class DownloadedImagesModule(BaseReportModule):
         """Return filter fields for domain, tags, and sort."""
         return [
             FilterField(
+                key="section_title",
+                label="Title",
+                filter_type=FilterType.TEXT,
+                default="",
+                help_text="Optional title displayed above the images",
+                required=False,
+            ),
+            FilterField(
+                key="section_description",
+                label="Description",
+                filter_type=FilterType.TEXT,
+                default="",
+                help_text="Optional description displayed below the title",
+                required=False,
+            ),
+            FilterField(
                 key="domain_filter",
                 label="Domain",
                 filter_type=FilterType.DROPDOWN,
@@ -111,6 +127,30 @@ class DownloadedImagesModule(BaseReportModule):
                 filter_type=FilterType.CHECKBOX,
                 default=False,
                 help_text="Display filter criteria below the images",
+                required=False,
+            ),
+            FilterField(
+                key="show_image_count",
+                label="Show Image Count",
+                filter_type=FilterType.CHECKBOX,
+                default=True,
+                help_text="Show 'Showing X of Y images' when a limit is applied",
+                required=False,
+            ),
+            FilterField(
+                key="limit",
+                label="Max Images",
+                filter_type=FilterType.DROPDOWN,
+                default="all",
+                options=[
+                    ("9", "9"),
+                    ("15", "15"),
+                    ("27", "27"),
+                    ("39", "39"),
+                    ("60", "60"),
+                    ("all", "All"),
+                ],
+                help_text="Maximum number of images to display",
                 required=False,
             ),
         ]
@@ -192,10 +232,14 @@ class DownloadedImagesModule(BaseReportModule):
             HTML string with images grid
         """
         # Get filter values
+        section_title = config.get("section_title", "")
+        section_description = config.get("section_description", "")
         domain_filter = config.get("domain_filter", self.ALL)
         tag_filter = config.get("tag_filter", self.ALL)
         sort_by = config.get("sort_by", "date_desc")
         show_filter_info = config.get("show_filter_info", False)
+        show_image_count = config.get("show_image_count", True)
+        limit_str = config.get("limit", "all")
 
         # Get locale and translations
         locale = config.get("_locale", "en")
@@ -230,6 +274,16 @@ class DownloadedImagesModule(BaseReportModule):
             )
             images.append(image_data)
 
+        # Apply limit
+        total_count = len(images)
+        if limit_str != "all":
+            try:
+                limit = int(limit_str)
+                images = images[:limit]
+            except (ValueError, TypeError):
+                pass
+        shown_count = len(images)
+
         # Build filter description
         filter_description = self._build_filter_description(
             domain_filter, tag_filter, translations
@@ -242,15 +296,19 @@ class DownloadedImagesModule(BaseReportModule):
             template = Template(template_content)
             return template.render(
                 images=images,
-                total_count=len(images),
+                section_title=section_title,
+                section_description=section_description,
+                shown_count=shown_count,
+                total_count=total_count,
                 filter_description=filter_description,
                 show_filter_info=show_filter_info,
+                show_image_count=show_image_count,
                 t=translations,
                 locale=locale,
             )
 
         # Fallback if no template
-        return f"<p>Found {len(images)} downloaded images matching filters.</p>"
+        return f"<p>Found {shown_count} downloaded images matching filters.</p>"
 
     def _build_query(
         self,

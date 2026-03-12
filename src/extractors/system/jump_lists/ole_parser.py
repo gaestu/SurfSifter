@@ -52,15 +52,13 @@ def parse_jumplist_ole(filepath: Path) -> List[Dict[str, Any]]:
             if name.lower() == 'destlist':
                 continue
 
-            # LNK streams are typically numbered (1, 2, 3, etc.)
+            # LNK streams are hex-numbered by Windows (0, 1, ..., 9, a, b, ..., f, 10, 11, ...)
+            # Always parse as base-16 to match DestList entry IDs and avoid
+            # collisions (e.g. stream "a"=10 vs stream "10"=16).
             try:
-                stream_id = int(name.replace('/', ''))
+                stream_id = int(name.replace('/', ''), 16)
             except ValueError:
-                # Try hex interpretation
-                try:
-                    stream_id = int(name.replace('/', ''), 16)
-                except ValueError:
-                    continue
+                continue
 
             # Read LNK data
             try:

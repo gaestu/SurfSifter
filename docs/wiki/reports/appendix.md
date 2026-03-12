@@ -12,3 +12,6 @@ Appendix items are data-only modules that appear after the main report sections.
 - [[reports/appendix/file-list|File List]]
 - [[reports/appendix/image-list|Image List]]
 - [[reports/appendix/extracted-analyzed-data|Extracted and Analyzed Data]]
+- [[reports/appendix/download-audit|Download Audit Log]]
+- [[reports/appendix/download-list|Download List]]
+- [[reports/appendix/web-storage|Web Storage List]]

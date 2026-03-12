@@ -231,13 +231,18 @@ class BulkExtractorExtractor(BaseExtractor):
                     stats.complete_run(self.metadata.name, evidence_id, "skipped")
                 return True
 
-        # Prepare output directory
-        if output_dir.exists() and reuse_policy == "overwrite":
-            callbacks.on_log(f"Removing existing output directory", "warning")
+        # Prepare output directory — bulk_extractor creates the leaf directory
+        # itself and refuses to run if it already exists.
+        if output_dir.exists():
+            if reuse_policy == "overwrite":
+                callbacks.on_log("Removing existing output directory", "warning")
+            else:
+                callbacks.on_log("Removing stale output directory (no reusable output found)", "info")
             import shutil
             shutil.rmtree(output_dir)
 
-        output_dir.mkdir(parents=True, exist_ok=True)
+        # Create parent directories only; let bulk_extractor create the leaf
+        output_dir.parent.mkdir(parents=True, exist_ok=True)
 
         # Get tool
         tools = discover_tools()

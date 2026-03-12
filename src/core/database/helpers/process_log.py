@@ -35,6 +35,7 @@ def insert_process_log(
     exit_code: Optional[int] = None,
     output_path: Optional[str] = None,
     run_id: Optional[str] = None,
+    extractor_name: Optional[str] = None,
     extractor_version: Optional[str] = None,
     record_count: Optional[int] = None,
     metadata: Optional[str] = None,
@@ -45,33 +46,39 @@ def insert_process_log(
     Args:
         conn: SQLite connection to evidence database
         evidence_id: Evidence ID
-        tool_name: Name of the tool/extractor
+        tool_name: Name of the tool/extractor (stored in ``task`` column)
         command_line: Full command line or invocation details
         started_at: ISO 8601 start timestamp
         finished_at: ISO 8601 finish timestamp
         exit_code: Process exit code (0=success)
-        output_path: Path to output files
+        output_path: Path to output files (stored in ``log_file_path`` column)
         run_id: Extraction run ID
+        extractor_name: Extractor identifier for ``extractor_name`` column;
+            defaults to *tool_name* when not given
         extractor_version: Extractor version string
         record_count: Number of records processed
-        metadata: JSON-serialized additional metadata
+        metadata: JSON-serialized additional metadata (stored in
+            ``warnings_json`` column for schema compatibility)
 
     Returns:
         Process log row ID
     """
     if started_at is None:
-        started_at = datetime.utcnow().isoformat()
+        started_at = _utc_now()
 
     cursor = conn.execute(
         """
         INSERT INTO process_log (
-            evidence_id, tool_name, command_line, started_at, finished_at,
-            exit_code, output_path, run_id, extractor_version, record_count, metadata
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            evidence_id, task, command, started_at_utc, finished_at_utc,
+            exit_code, log_file_path, run_id, extractor_name, extractor_version,
+            records_extracted, warnings_json
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             evidence_id, tool_name, command_line, started_at, finished_at,
-            exit_code, output_path, run_id, extractor_version, record_count, metadata
+            exit_code, output_path, run_id,
+            extractor_name if extractor_name is not None else tool_name,
+            extractor_version, record_count, metadata,
         )
     )
     conn.commit()
@@ -103,7 +110,7 @@ def get_process_logs(
     params: List[Any] = [evidence_id]
 
     if tool_name:
-        conditions.append("tool_name = ?")
+        conditions.append("task = ?")
         params.append(tool_name)
     if run_id:
         conditions.append("run_id = ?")
@@ -114,7 +121,7 @@ def get_process_logs(
         f"""
         SELECT * FROM process_log
         WHERE {' AND '.join(conditions)}
-        ORDER BY started_at DESC
+        ORDER BY started_at_utc DESC
         LIMIT ?
         """,
         params

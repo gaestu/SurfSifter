@@ -10,7 +10,7 @@ A cross-platform forensic workstation for analyzing browser artifacts, cached me
 
 ## Status
 
-**v0.3.4-beta** — Feature-complete core functionality, actively tested. [Download pre-built releases](https://github.com/gaestu/surfsifter/releases) or build from source.
+**v0.3.5-beta** — Feature-complete core functionality, actively tested. [Download pre-built releases](https://github.com/gaestu/surfsifter/releases) or build from source.
 
 Mostly tested on fedora and ubuntu - running on windows is still abigious :-) I recommend to use wsl on windows for running the app.
 
@@ -224,6 +224,12 @@ Discovered automatically on `PATH`:
 - **firejail** — Browser sandboxing (security feature)
 
 Tool status visible in **Tools tab** (application GUI).
+
+> **Note on bulk_extractor:** This tool is **not** included in the install script or pre-built
+> binaries and is no longer available in standard Linux distribution repositories.
+> You must build and install it manually from source. Follow the official instructions at
+> [Installing bulk_extractor](https://github.com/simsong/bulk_extractor/wiki/Installing-bulk_extractor).
+> Once installed and available on `PATH`, SurfSifter detects it automatically.
 
 ## Development
 

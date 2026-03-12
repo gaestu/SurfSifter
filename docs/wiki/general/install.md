@@ -81,4 +81,46 @@ All artifact-parsing libraries are installed automatically with `poetry install`
 
 ## External Tools (Optional)
 Some features rely on external tools available on your system `PATH`.
-See [[general/external-tools|External Tools]] for details and installation hints.
+See the **External Tools** page for details and installation hints.
+
+For tool path overrides and all application settings, see the **Settings and Preferences** page.
+
+## Installing bulk_extractor Manually
+
+`bulk_extractor` is **not available** in default Ubuntu 24.04 and Fedora 42 repositories. To use bulk extraction features (URL, email, domain, phone number, and cryptocurrency address discovery), you need to build it from source.
+
+### Build from source (Ubuntu/Debian)
+```bash
+# Install build dependencies
+sudo apt-get install -y build-essential autoconf automake libtool \
+  flex libssl-dev zlib1g-dev libexpat1-dev pkg-config
+
+# Clone and build
+git clone --recursive https://github.com/simsong/bulk_extractor.git
+cd bulk_extractor
+./bootstrap.sh      # may require running: autoreconf --install
+./configure
+make -j$(nproc)
+sudo make install
+```
+
+### Build from source (Fedora/RHEL)
+```bash
+# Install build dependencies
+sudo dnf install -y gcc-c++ autoconf automake libtool flex openssl-devel \
+  zlib-devel expat-devel
+
+# Clone and build
+git clone --recursive https://github.com/simsong/bulk_extractor.git
+cd bulk_extractor
+./bootstrap.sh
+./configure
+make -j$(nproc)
+sudo make install
+```
+
+### Custom path
+If you install bulk_extractor to a non-standard location, you can configure the path in **Preferences → Tools** (see the **Settings and Preferences** page).
+
+### Verification
+After installation, restart SurfSifter and check the **Tools** tab to verify bulk_extractor is detected and the version meets the minimum requirement (≥ 1.6.0).

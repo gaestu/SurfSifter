@@ -4,5 +4,12 @@ from .app_execution_model import AppExecutionModel
 from .jump_lists_model import JumpListsTableModel
 from .indicators import IndicatorsTableModel
 from .installed_software_model import InstalledSoftwareModel
+from .user_activity_model import UserActivityModel
 
-__all__ = ["AppExecutionModel", "JumpListsTableModel", "IndicatorsTableModel", "InstalledSoftwareModel"]
+__all__ = [
+    "AppExecutionModel",
+    "JumpListsTableModel",
+    "IndicatorsTableModel",
+    "InstalledSoftwareModel",
+    "UserActivityModel",
+]

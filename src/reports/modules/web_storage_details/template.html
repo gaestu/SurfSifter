@@ -14,12 +14,15 @@
         <h4 class="site-header">{{ stored_site_label }}: <span class="site-origin">{{ site.origin }}</span></h4>
         
         {% if site.entries %}
-        <table class="storage-table">
+        <table class="storage-table{% if show_key_tags %} with-tags{% endif %}">
             <thead>
                 <tr>
                     <th class="col-key">{{ t.web_storage_key | default('Key') }}</th>
                     <th class="col-value">{{ t.web_storage_value | default('Value') }}</th>
                     <th class="col-type">{{ t.web_storage_type | default('Type') }}</th>
+                    {% if show_key_tags %}
+                    <th class="col-tags">{{ t.tags | default('Tags') }}</th>
+                    {% endif %}
                 </tr>
             </thead>
             <tbody>
@@ -28,6 +31,9 @@
                     <td class="col-key">{{ entry.key }}</td>
                     <td class="col-value">{{ entry.value }}</td>
                     <td class="col-type">{{ entry.type }}</td>
+                    {% if show_key_tags %}
+                    <td class="col-tags">{{ entry.tags }}</td>
+                    {% endif %}
                 </tr>
                 {% endfor %}
             </tbody>
@@ -139,6 +145,25 @@
 .storage-table .col-type {
     width: 15%;
     text-align: center;
+}
+
+/* Adjusted widths when tags column is shown */
+.storage-table.with-tags .col-key {
+    width: 25%;
+}
+
+.storage-table.with-tags .col-value {
+    width: 43%;
+}
+
+.storage-table.with-tags .col-type {
+    width: 12%;
+}
+
+.storage-table .col-tags {
+    width: 20%;
+    font-size: 0.85em;
+    color: #555;
 }
 
 .storage-table tbody tr:nth-child(even) {

@@ -509,12 +509,14 @@ class SafariHistoryExtractor(BaseExtractor):
             else:
                 artifact_type = "history_other"
 
-            # Extract user for unique naming (include partition for disambiguation)
+            # Extract user for unique naming (include partition and path hash for disambiguation)
+            # Path hash prevents collisions when same user exists in different locations
             user = extract_user_from_path(path_str) or "unknown"
+            path_hash = hashlib.sha256(path_str.encode()).hexdigest()[:8]
             if partition_index is not None:
-                safe_name = f"safari_{user}_p{partition_index}_{original_name}"
+                safe_name = f"safari_{user}_p{partition_index}_{path_hash}_{original_name}"
             else:
-                safe_name = f"safari_{user}_{original_name}"
+                safe_name = f"safari_{user}_{path_hash}_{original_name}"
 
             dest_path = output_dir / safe_name
             dest_path.write_bytes(content)

@@ -19,4 +19,4 @@ Block List subtab - sites where autofill is disabled.
 - Detail dialog for a blocked site record.
 
 ## Notes
-- This subtab is Edge-specific.
+- This subtab is primarily Edge-specific (Chromium autofill block list from Edge-specific tables).

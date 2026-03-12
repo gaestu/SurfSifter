@@ -9,7 +9,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from PySide6.QtCore import QThread, Signal, Qt, QTimer
+from PySide6.QtCore import QThread, Signal, Qt, QTimer, QUrl
+from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -31,12 +32,16 @@ from PySide6.QtWidgets import (
     QApplication
 )
 
+from PySide6.QtCore import QThreadPool
+
 from core.database import DatabaseManager
 from core.matching import ReferenceListManager, ReferenceListMatcher
 from app.features.file_list.models import FileListModel
 from app.common.dialogs import ReferenceListSelectorDialog, TagArtifactsDialog
 from app.data.case_data import CaseDataAccess
 from app.services.matching_workers import FileListMatchWorker as MatchWorker
+from app.services.evidence_access import evidence_has_source
+from app.services.file_export_worker import FileExportRequest, FileExportTask
 
 logger = logging.getLogger(__name__)
 
@@ -177,7 +182,8 @@ class ModelRefreshWorker(QThread):
                     fl.extension,
                     fl.size_bytes,
                     fl.modified_ts,
-                    fl.deleted
+                    fl.deleted,
+                    fl.partition_index
                 FROM file_list fl
                 WHERE fl.evidence_id = ?
                 {filter_clause}
@@ -196,6 +202,7 @@ class ModelRefreshWorker(QThread):
                     "size_bytes": row[4] or 0,
                     "modified_ts": row[5] or "",
                     "deleted": bool(row[6]),
+                    "partition_index": row[7],
                 })
 
             evidence_conn.close()
@@ -318,6 +325,10 @@ class FileListTab(QWidget):
 
         # Stale data flag for lazy refresh after ingestion
         self._data_stale = False
+
+        # Evidence source availability (set on first context-menu open)
+        self._evidence_has_source: Optional[bool] = None
+        self._export_task: Optional[FileExportTask] = None
 
         self._init_ui()
 
@@ -1048,6 +1059,10 @@ class FileListTab(QWidget):
         if self.model.rowCount() == 0:
             return
 
+        # Lazy check: resolve evidence source availability once
+        if self._evidence_has_source is None:
+            self._check_evidence_source()
+
         menu = QMenu(self)
 
         selected_count = len(self.model.selected_rows)
@@ -1056,9 +1071,18 @@ class FileListTab(QWidget):
             menu.addSeparator()
             tag_action = menu.addAction("Tag selected...")
 
+            # Export action — only when evidence image is accessible
+            export_action = None
+            if self._evidence_has_source:
+                export_action = menu.addAction(
+                    f"Export {selected_count:,} file(s) from evidence…"
+                )
+
             action = menu.exec(self.table_view.mapToGlobal(position))
             if action == tag_action:
                 self._tag_selected()
+            elif export_action is not None and action == export_action:
+                self._export_selected_files()
         else:
             menu.addAction("No files selected").setEnabled(False)
             menu.exec(self.table_view.mapToGlobal(position))
@@ -1078,6 +1102,133 @@ class FileListTab(QWidget):
                 # Refresh data
                 self.model.apply_filters(self.model._filters)
                 self._load_data()
+
+    # ------------------------------------------------------------------
+    # Evidence file export
+    # ------------------------------------------------------------------
+
+    def _check_evidence_source(self) -> None:
+        """Resolve whether the evidence has an accessible source on disk.
+
+        Sets ``self._evidence_has_source`` so the context-menu can decide
+        whether to show the export action.
+        """
+        try:
+            with CaseDataAccess(self.case_folder, db_path=self.case_db_path) as cd:
+                ev = cd.get_evidence(self.evidence_id)
+            self._evidence_has_source = evidence_has_source(ev)
+        except Exception:
+            logger.debug("Could not check evidence source", exc_info=True)
+            self._evidence_has_source = False
+
+    def _export_selected_files(self) -> None:
+        """Export selected file-list entries from the evidence image."""
+        file_info = self.model.get_selected_file_info()
+        if not file_info:
+            return
+
+        # Prompt for destination
+        dest_dir = QFileDialog.getExistingDirectory(
+            self,
+            "Export files to…",
+            str(Path.home()),
+        )
+        if not dest_dir:
+            return
+        dest_path = Path(dest_dir)
+
+        # Build request list
+        requests = [
+            FileExportRequest(
+                file_path=fi["file_path"],
+                partition_index=fi.get("partition_index"),
+            )
+            for fi in file_info
+        ]
+
+        # Get evidence metadata
+        with CaseDataAccess(self.case_folder, db_path=self.case_db_path) as cd:
+            evidence = cd.get_evidence(self.evidence_id)
+        if evidence is None:
+            QMessageBox.critical(self, "Export Error", "Evidence not found.")
+            return
+
+        # Create and run the background task
+        task = FileExportTask(evidence, requests, dest_path)
+        self._export_task = task  # prevent GC
+
+        # Wire up progress dialog
+        total = len(requests)
+        progress = QProgressDialog(
+            f"Exporting 0 / {total} files…",
+            "Cancel",
+            0,
+            100,
+            self,
+        )
+        progress.setWindowTitle("Exporting files from evidence")
+        progress.setMinimumDuration(0)
+        progress.setValue(0)
+
+        def _on_progress(percent: int, message: str) -> None:
+            if progress.wasCanceled():
+                task.cancel()
+                return
+            progress.setValue(percent)
+            progress.setLabelText(message)
+
+        def _on_result(result: object) -> None:
+            progress.close()
+            self._log_export(result, dest_path)
+            # Ask whether to open the destination folder
+            buttons = QMessageBox.Open | QMessageBox.Close
+            answer = QMessageBox.information(
+                self,
+                "Export Complete",
+                result.summary_message(),
+                buttons,
+                QMessageBox.Open,
+            )
+            if answer == QMessageBox.Open:
+                QDesktopServices.openUrl(QUrl.fromLocalFile(str(dest_path)))
+            self._export_task = None
+
+        def _on_error(error: str, _tb: str) -> None:
+            progress.close()
+            QMessageBox.critical(self, "Export Error", f"Export failed:\n{error}")
+            self._export_task = None
+
+        task.signals.progress.connect(_on_progress)
+        task.signals.result.connect(_on_result)
+        task.signals.error.connect(_on_error)
+        task.signals.finished.connect(lambda: progress.close())
+
+        progress.canceled.connect(task.cancel)
+        QThreadPool.globalInstance().start(task)
+
+    def _log_export(self, result: object, dest_path: Path) -> None:
+        """Write a process_log entry for the export action."""
+        try:
+            from core.database import create_process_log, finalize_process_log
+
+            evidence_conn = self.db_manager.get_evidence_conn(
+                self.evidence_id, label=self._get_evidence_label()
+            )
+            log_id = create_process_log(
+                evidence_conn,
+                self.evidence_id,
+                "file_export",
+                f"Exported {result.total} file(s) to {dest_path}",
+            )
+            finalize_process_log(
+                evidence_conn,
+                log_id,
+                exit_code=0 if result.failed == 0 else 1,
+                stdout=f"exported={result.exported}, failed={result.failed}",
+                stderr=("\n".join(result.errors) if result.errors else None),
+            )
+        except Exception:
+            logger.warning("Failed to log export action", exc_info=True)
 
     def _load_tags(self):
         """Load tags into the filter combo box."""

@@ -77,6 +77,23 @@ def _format_note(template: str, context: Dict[str, Any]) -> str:
         return f"{template} | {context}"
 
 
+# Maximum plausible date: 1 year from now. Timestamps beyond this are implausible.
+_MAX_PLAUSIBLE_YEAR_OFFSET = 1
+
+
+def _check_plausibility(ts: datetime) -> str | None:
+    """Check if a timestamp is plausible.
+
+    Returns 'implausible' if the timestamp is more than 1 year in the future,
+    or None if plausible.
+    """
+    now = datetime.now(tz=timezone.utc)
+    max_plausible = now.replace(year=now.year + _MAX_PLAUSIBLE_YEAR_OFFSET)
+    if ts > max_plausible:
+        return "implausible"
+    return None
+
+
 # =============================================================================
 # Source Mappers
 # =============================================================================
@@ -1010,6 +1027,460 @@ def map_jump_list_to_events(
     return events
 
 
+def map_file_list_to_events(
+    conn: sqlite3.Connection,
+    evidence_id: int,
+    config: TimelineConfig
+) -> List[TimelineEvent]:
+    """Map file_list table to timeline events (created, modified, accessed)."""
+    source_config = config.sources.get("file_list", {})
+    confidence = source_config.get("confidence", "high")
+    mappings_list = source_config.get("mappings", [
+        {"timestamp_field": "created_ts", "kind": "file_created", "note_template": "File created: {file_name}"},
+        {"timestamp_field": "modified_ts", "kind": "file_modified", "note_template": "File modified: {file_name}"},
+        {"timestamp_field": "accessed_ts", "kind": "file_accessed", "note_template": "File accessed: {file_name}"},
+    ])
+
+    query = """
+        SELECT id, file_path, file_name, extension, size_bytes,
+               created_ts, modified_ts, accessed_ts, deleted
+        FROM file_list
+        WHERE evidence_id = ?
+        AND (created_ts IS NOT NULL OR modified_ts IS NOT NULL OR accessed_ts IS NOT NULL)
+    """
+    events = []
+
+    try:
+        cursor = conn.execute(query, (evidence_id,))
+    except sqlite3.OperationalError as exc:
+        LOGGER.debug("Table file_list not found, skipping: %s", exc)
+        return events
+
+    for row in cursor:
+        try:
+            row_data = {
+                "file_name": row["file_name"] or row["file_path"],
+                "file_path": row["file_path"] or "",
+                "extension": row["extension"] or "",
+            }
+
+            for mapping in mappings_list:
+                ts_field = mapping.get("timestamp_field")
+                if not ts_field or not row[ts_field]:
+                    continue
+
+                ts = _parse_timestamp(row[ts_field])
+                if ts is None:
+                    continue
+
+                note = _format_note(
+                    mapping.get("note_template", "File: {file_name}"),
+                    row_data
+                )
+
+                events.append(TimelineEvent(
+                    evidence_id=evidence_id,
+                    ts_utc=ts,
+                    kind=mapping.get("kind", "file_event"),
+                    ref_table="file_list",
+                    ref_id=row["id"],
+                    confidence=confidence,
+                    note=note,
+                    provenance="filesystem"
+                ))
+        except Exception as exc:
+            LOGGER.warning("Failed to map file_list row %s: %s", row["id"], exc)
+
+    return events
+
+
+def map_browser_search_terms_to_events(
+    conn: sqlite3.Connection,
+    evidence_id: int,
+    config: TimelineConfig
+) -> List[TimelineEvent]:
+    """Map browser_search_terms table to timeline events."""
+    source_config = config.sources.get("browser_search_terms", {})
+    confidence = source_config.get("confidence", "high")
+    mappings_list = source_config.get("mappings", [
+        {"timestamp_field": "search_time_utc", "kind": "search_performed", "note_template": "Search: {term} ({browser})"}
+    ])
+
+    query = """
+        SELECT id, term, url, browser, profile, search_engine, search_time_utc
+        FROM browser_search_terms
+        WHERE evidence_id = ?
+        AND search_time_utc IS NOT NULL
+    """
+    events = []
+
+    try:
+        cursor = conn.execute(query, (evidence_id,))
+    except sqlite3.OperationalError as exc:
+        LOGGER.debug("Table browser_search_terms not found, skipping: %s", exc)
+        return events
+
+    for row in cursor:
+        try:
+            row_data = {
+                "term": row["term"] or "",
+                "browser": row["browser"] or "unknown",
+                "url": row["url"] or "",
+                "search_engine": row["search_engine"] or "",
+            }
+
+            for mapping in mappings_list:
+                ts_field = mapping.get("timestamp_field")
+                if not ts_field or not row[ts_field]:
+                    continue
+
+                ts = _parse_timestamp(row[ts_field])
+                if ts is None:
+                    continue
+
+                note = _format_note(
+                    mapping.get("note_template", "Search: {term} ({browser})"),
+                    row_data
+                )
+
+                events.append(TimelineEvent(
+                    evidence_id=evidence_id,
+                    ts_utc=ts,
+                    kind=mapping.get("kind", "search_performed"),
+                    ref_table="browser_search_terms",
+                    ref_id=row["id"],
+                    confidence=confidence,
+                    note=note,
+                    provenance=f"browser:{row['browser']}"
+                ))
+        except Exception as exc:
+            LOGGER.warning("Failed to map browser_search_terms row %s: %s", row["id"], exc)
+
+    return events
+
+
+def map_closed_tabs_to_events(
+    conn: sqlite3.Connection,
+    evidence_id: int,
+    config: TimelineConfig
+) -> List[TimelineEvent]:
+    """Map closed_tabs table to timeline events."""
+    source_config = config.sources.get("closed_tabs", {})
+    confidence = source_config.get("confidence", "medium")
+    mappings_list = source_config.get("mappings", [
+        {"timestamp_field": "closed_at_utc", "kind": "tab_closed", "note_template": "Tab closed: {title}"}
+    ])
+
+    query = """
+        SELECT id, browser, profile, url, title, closed_at_utc
+        FROM closed_tabs
+        WHERE evidence_id = ?
+        AND closed_at_utc IS NOT NULL
+    """
+    events = []
+
+    try:
+        cursor = conn.execute(query, (evidence_id,))
+    except sqlite3.OperationalError as exc:
+        LOGGER.debug("Table closed_tabs not found, skipping: %s", exc)
+        return events
+
+    for row in cursor:
+        try:
+            row_data = {
+                "browser": row["browser"] or "unknown",
+                "title": row["title"] or row["url"],
+                "url": row["url"] or "",
+            }
+
+            for mapping in mappings_list:
+                ts_field = mapping.get("timestamp_field")
+                if not ts_field or not row[ts_field]:
+                    continue
+
+                ts = _parse_timestamp(row[ts_field])
+                if ts is None:
+                    continue
+
+                note = _format_note(
+                    mapping.get("note_template", "Tab closed: {title}"),
+                    row_data
+                )
+
+                events.append(TimelineEvent(
+                    evidence_id=evidence_id,
+                    ts_utc=ts,
+                    kind=mapping.get("kind", "tab_closed"),
+                    ref_table="closed_tabs",
+                    ref_id=row["id"],
+                    confidence=confidence,
+                    note=note,
+                    provenance=f"browser:{row['browser']}"
+                ))
+        except Exception as exc:
+            LOGGER.warning("Failed to map closed_tabs row %s: %s", row["id"], exc)
+
+    return events
+
+
+def map_session_tab_history_to_events(
+    conn: sqlite3.Connection,
+    evidence_id: int,
+    config: TimelineConfig
+) -> List[TimelineEvent]:
+    """Map session_tab_history table to timeline events."""
+    source_config = config.sources.get("session_tab_history", {})
+    confidence = source_config.get("confidence", "medium")
+    mappings_list = source_config.get("mappings", [
+        {"timestamp_field": "timestamp_utc", "kind": "tab_navigated", "note_template": "Navigation: {title}"}
+    ])
+
+    query = """
+        SELECT id, browser, profile, url, title, timestamp_utc
+        FROM session_tab_history
+        WHERE evidence_id = ?
+        AND timestamp_utc IS NOT NULL
+    """
+    events = []
+
+    try:
+        cursor = conn.execute(query, (evidence_id,))
+    except sqlite3.OperationalError as exc:
+        LOGGER.debug("Table session_tab_history not found, skipping: %s", exc)
+        return events
+
+    for row in cursor:
+        try:
+            row_data = {
+                "browser": row["browser"] or "unknown",
+                "title": row["title"] or row["url"],
+                "url": row["url"] or "",
+            }
+
+            for mapping in mappings_list:
+                ts_field = mapping.get("timestamp_field")
+                if not ts_field or not row[ts_field]:
+                    continue
+
+                ts = _parse_timestamp(row[ts_field])
+                if ts is None:
+                    continue
+
+                note = _format_note(
+                    mapping.get("note_template", "Navigation: {title}"),
+                    row_data
+                )
+
+                events.append(TimelineEvent(
+                    evidence_id=evidence_id,
+                    ts_utc=ts,
+                    kind=mapping.get("kind", "tab_navigated"),
+                    ref_table="session_tab_history",
+                    ref_id=row["id"],
+                    confidence=confidence,
+                    note=note,
+                    provenance=f"browser:{row['browser']}"
+                ))
+        except Exception as exc:
+            LOGGER.warning("Failed to map session_tab_history row %s: %s", row["id"], exc)
+
+    return events
+
+
+def map_site_engagement_to_events(
+    conn: sqlite3.Connection,
+    evidence_id: int,
+    config: TimelineConfig
+) -> List[TimelineEvent]:
+    """Map site_engagement table to timeline events."""
+    source_config = config.sources.get("site_engagement", {})
+    confidence = source_config.get("confidence", "medium")
+    mappings_list = source_config.get("mappings", [
+        {"timestamp_field": "last_engagement_time_utc", "kind": "site_engaged", "note_template": "Site engagement: {origin} (score: {raw_score})"}
+    ])
+
+    query = """
+        SELECT id, browser, profile, origin, raw_score, last_engagement_time_utc
+        FROM site_engagement
+        WHERE evidence_id = ?
+        AND last_engagement_time_utc IS NOT NULL
+    """
+    events = []
+
+    try:
+        cursor = conn.execute(query, (evidence_id,))
+    except sqlite3.OperationalError as exc:
+        LOGGER.debug("Table site_engagement not found, skipping: %s", exc)
+        return events
+
+    for row in cursor:
+        try:
+            row_data = {
+                "browser": row["browser"] or "unknown",
+                "origin": row["origin"] or "",
+                "raw_score": row["raw_score"] or 0,
+            }
+
+            for mapping in mappings_list:
+                ts_field = mapping.get("timestamp_field")
+                if not ts_field or not row[ts_field]:
+                    continue
+
+                ts = _parse_timestamp(row[ts_field])
+                if ts is None:
+                    continue
+
+                note = _format_note(
+                    mapping.get("note_template", "Site engagement: {origin}"),
+                    row_data
+                )
+
+                events.append(TimelineEvent(
+                    evidence_id=evidence_id,
+                    ts_utc=ts,
+                    kind=mapping.get("kind", "site_engaged"),
+                    ref_table="site_engagement",
+                    ref_id=row["id"],
+                    confidence=confidence,
+                    note=note,
+                    provenance=f"browser:{row['browser']}"
+                ))
+        except Exception as exc:
+            LOGGER.warning("Failed to map site_engagement row %s: %s", row["id"], exc)
+
+    return events
+
+
+def map_deleted_form_history_to_events(
+    conn: sqlite3.Connection,
+    evidence_id: int,
+    config: TimelineConfig
+) -> List[TimelineEvent]:
+    """Map deleted_form_history table to timeline events."""
+    source_config = config.sources.get("deleted_form_history", {})
+    confidence = source_config.get("confidence", "medium")
+    mappings_list = source_config.get("mappings", [
+        {"timestamp_field": "time_deleted_utc", "kind": "form_data_deleted", "note_template": "Form data deleted: {original_fieldname}"}
+    ])
+
+    query = """
+        SELECT id, browser, profile, time_deleted_utc, original_fieldname, original_value
+        FROM deleted_form_history
+        WHERE evidence_id = ?
+        AND time_deleted_utc IS NOT NULL
+    """
+    events = []
+
+    try:
+        cursor = conn.execute(query, (evidence_id,))
+    except sqlite3.OperationalError as exc:
+        LOGGER.debug("Table deleted_form_history not found, skipping: %s", exc)
+        return events
+
+    for row in cursor:
+        try:
+            row_data = {
+                "browser": row["browser"] or "unknown",
+                "original_fieldname": row["original_fieldname"] or "unknown",
+                "original_value": row["original_value"] or "",
+            }
+
+            for mapping in mappings_list:
+                ts_field = mapping.get("timestamp_field")
+                if not ts_field or not row[ts_field]:
+                    continue
+
+                ts = _parse_timestamp(row[ts_field])
+                if ts is None:
+                    continue
+
+                note = _format_note(
+                    mapping.get("note_template", "Form data deleted: {original_fieldname}"),
+                    row_data
+                )
+
+                events.append(TimelineEvent(
+                    evidence_id=evidence_id,
+                    ts_utc=ts,
+                    kind=mapping.get("kind", "form_data_deleted"),
+                    ref_table="deleted_form_history",
+                    ref_id=row["id"],
+                    confidence=confidence,
+                    note=note,
+                    provenance=f"browser:{row['browser']}"
+                ))
+        except Exception as exc:
+            LOGGER.warning("Failed to map deleted_form_history row %s: %s", row["id"], exc)
+
+    return events
+
+
+def map_browser_extensions_to_events(
+    conn: sqlite3.Connection,
+    evidence_id: int,
+    config: TimelineConfig
+) -> List[TimelineEvent]:
+    """Map browser_extensions table to timeline events (install + update)."""
+    source_config = config.sources.get("browser_extensions", {})
+    confidence = source_config.get("confidence", "medium")
+    mappings_list = source_config.get("mappings", [
+        {"timestamp_field": "install_time", "kind": "extension_installed", "note_template": "Extension installed: {name} ({browser})"},
+        {"timestamp_field": "update_time", "kind": "extension_updated", "note_template": "Extension updated: {name} ({browser})"},
+    ])
+
+    query = """
+        SELECT id, browser, profile, extension_id, name, version, install_time, update_time
+        FROM browser_extensions
+        WHERE evidence_id = ?
+        AND (install_time IS NOT NULL OR update_time IS NOT NULL)
+    """
+    events = []
+
+    try:
+        cursor = conn.execute(query, (evidence_id,))
+    except sqlite3.OperationalError as exc:
+        LOGGER.debug("Table browser_extensions not found, skipping: %s", exc)
+        return events
+
+    for row in cursor:
+        try:
+            row_data = {
+                "browser": row["browser"] or "unknown",
+                "name": row["name"] or row["extension_id"],
+                "version": row["version"] or "",
+                "extension_id": row["extension_id"] or "",
+            }
+
+            for mapping in mappings_list:
+                ts_field = mapping.get("timestamp_field")
+                if not ts_field or not row[ts_field]:
+                    continue
+
+                ts = _parse_timestamp(row[ts_field])
+                if ts is None:
+                    continue
+
+                note = _format_note(
+                    mapping.get("note_template", "Extension: {name} ({browser})"),
+                    row_data
+                )
+
+                events.append(TimelineEvent(
+                    evidence_id=evidence_id,
+                    ts_utc=ts,
+                    kind=mapping.get("kind", "extension_event"),
+                    ref_table="browser_extensions",
+                    ref_id=row["id"],
+                    confidence=confidence,
+                    note=note,
+                    provenance=f"browser:{row['browser']}"
+                ))
+        except Exception as exc:
+            LOGGER.warning("Failed to map browser_extensions row %s: %s", row["id"], exc)
+
+    return events
+
+
 # =============================================================================
 # Timeline Mappers Registry
 # =============================================================================
@@ -1029,6 +1500,13 @@ TIMELINE_MAPPERS: Dict[str, Callable[[sqlite3.Connection, int, TimelineConfig], 
     "media_playback": map_media_playback_to_events,
     "hsts_entries": map_hsts_to_events,
     "jump_list_entries": map_jump_list_to_events,
+    "file_list": map_file_list_to_events,
+    "browser_search_terms": map_browser_search_terms_to_events,
+    "closed_tabs": map_closed_tabs_to_events,
+    "session_tab_history": map_session_tab_history_to_events,
+    "site_engagement": map_site_engagement_to_events,
+    "deleted_form_history": map_deleted_form_history_to_events,
+    "browser_extensions": map_browser_extensions_to_events,
 }
 
 
@@ -1075,6 +1553,12 @@ def build_timeline(
         except Exception as exc:
             LOGGER.warning("Failed to map %s: %s", source_name, exc)
             # Continue with other sources
+
+    # Apply plausibility check to all events — preserve original confidence
+    for event in all_events:
+        plausibility = _check_plausibility(event.ts_utc)
+        if plausibility:
+            event.confidence = f"{event.confidence}_{plausibility}"
 
     if progress_cb:
         progress_cb(1.0, "Sorting events...")
