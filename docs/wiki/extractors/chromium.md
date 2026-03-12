@@ -3,7 +3,7 @@
 Source: `src/extractors/browser/chromium/`
 
 ## Overview
-- Scope: Chromium family extractors for Chrome, Chromium, Edge, Brave, and Opera (stable plus beta/dev/canary/nightly/GX where listed in chromium/_patterns).
+- Scope: 16 Chromium family extractors for Chrome, Chromium, Edge, Brave, and Opera (stable plus beta/dev/canary/nightly/GX where listed in chromium/_patterns), plus embedded Chromium/CEF/CefSharp artifact recovery.
 - Extraction: Uses chromium/_patterns path globs to locate profile artifacts; several extractors copy companion WAL/journal/shm files and write per-run manifests.
 - Ingestion: Parses SQLite/JSON/SNSS/LevelDB artifacts, converts WebKit/Chrome timestamps to ISO 8601, and inserts into evidence DB via core.database helpers (plus cross-posts to urls/images where implemented).
 
@@ -49,12 +49,12 @@ Source: `src/extractors/browser/chromium/`
 - Notes: Optional brotli/zstandard dependencies; hash mode can be deferred to ingestion.
 
 ### ChromiumMediaHistoryExtractor (MediaHistoryExtractor alias)
-- Purpose: Extract media playback history from Chromium Media History databases.
-- Extraction (source): Media History SQLite files via chromium/_patterns; copied with hashes.
-- Ingestion (transform + store): Parses playback and playbackSession tables (with origin join when present), converts WebKit timestamps, inserts via insert_media_playback and insert_media_sessions, cross-posts media URLs to urls.
-- Outputs: Copied Media History DBs, manifest.json, and extracted_files audit records.
-- Special behavior: Clears prior run data via delete_media_by_run.
-- Notes: Chromium-only (Firefox noted as no dedicated DB).
+- Purpose: Extract browser media playback history — videos watched, audio played, watch time, session metadata, and album artwork.
+- Extraction (source): Media History SQLite databases from Chrome, Edge, Brave, Opera, and Vivaldi User Data profiles; supports multi-partition discovery via file_list.
+- Extraction (behavior): Copies Media History databases with companions to per-run output directory with manifest.json.
+- Ingestion (transform + store): Parses playback, playbackSession, origin, and mediaImage tables; converts WebKit timestamps (microseconds since 1601-01-01) to UTC ISO; inserts into media_playbacks, media_sessions, and images (album artwork with SHA256 hashing); cross-posts media origins to urls.
+- Outputs: manifest.json plus copied Media History databases; media_playbacks, media_sessions, images, and urls entries.
+- Notes: Album art extracted from mediaImage table and indexed by SHA256; no Firefox support (Firefox stores media state in session storage); WebKit microsecond timestamp precision preserved.
 
 ### ChromiumAutofillExtractor
 - Purpose: Extract autofill entries, profiles, credentials, credit cards, and search engines.
@@ -119,6 +119,22 @@ Source: `src/extractors/browser/chromium/`
 - Outputs: Copied storage directories, manifest.json, optional indexeddb_images directory, and extracted_files audit records.
 - Special behavior: Configurable excerpt_size/include_deleted/extract_images; parses and normalizes origin URLs (including IndexedDB origin format).
 - Notes: Ingestion aborts with error if LevelDB dependency is missing.
+
+### ChromiumEmbeddedArtifactsExtractor
+- Purpose: Extract debug.log and related artifacts from embedded Chromium/CEF/CefSharp applications found outside standard browsers.
+- Extraction (source): debug.log files discovered near embedded Chromium root paths detected via fingerprinting (configuration files, cache structure signals) using file_list table.
+- Extraction (behavior): Uses signal-based detection to identify non-browser CEF/CefSharp instances; copies debug.log files with collision-safe filenames (partition index + MD5 hash prefix).
+- Ingestion (transform + store): Parses Chromium debug.log format, extracting CONSOLE source URLs and navigation events with timestamps; inserts into urls with discovered_by="embedded_debuglog" and provenance="embedded_chromium_debuglog".
+- Outputs: manifest.json plus copied debug.log files; urls and process_log entries.
+- Notes: Requires file_list extractor to have run first; recovers thousands of JavaScript execution origins unique to debug.log; returns status="skipped" if no embedded roots found.
+
+### ChromiumSiteEngagementExtractor
+- Purpose: Extract site engagement metrics (user interaction scores, visit counts) and media engagement data from Chromium Preferences JSON.
+- Extraction (source): Preferences JSON files from Chrome, Edge, Brave, Opera, and Vivaldi profiles; supports multi-partition discovery via file_list.
+- Extraction (behavior): Copies Preferences files with collision-safe filenames (partition + MD5 hash prefix) into per-run output directory with manifest.json.
+- Ingestion (transform + store): Parses profile.content_settings.exceptions.site_engagement and media_engagement JSON keys; extracts rawScore, lastEngagementTime, visits, mediaPlaybacks, and displayName per origin; inserts into site_engagements and media_engagements; cross-posts unique site origins to urls.
+- Outputs: manifest.json plus copied Preferences files; site_engagements, media_engagements, browser_inventory, and urls entries.
+- Notes: High-engagement sites are prioritized by browsers for offline support and notifications; forensically useful for identifying frequently-used sites beyond history.
 
 ## Patterns
 - File/path patterns: CHROMIUM_BROWSERS lists Windows/macOS/Linux profile roots for Chrome/Chromium/Edge/Brave/Opera (including beta/dev/canary/nightly/GX), with PROFILE_PATTERNS of Default/Profile */Guest/System Profile; CHROMIUM_ARTIFACTS includes History, Cookies (+ Network/Cookies), Bookmarks, Web Data/Login Data, Sessions (legacy + Sessions/Session_* and Tabs_*), Media History, Favicons/Top Sites, Sync Data, TransportSecurity, Cache/Cache_Data and Cache, and storage directories.

@@ -9,7 +9,11 @@ Report modules are data blocks you can add inside any custom section. They are c
 ## Browser
 - [[reports/modules/autofill|Autofill]]
 - [[reports/modules/autofill-form-data|Autofill Form Data]]
+- [[reports/modules/bookmarks|Bookmarks]]
+- [[reports/modules/browser-downloads|Browser Downloads]]
+- [[reports/modules/browser-history|Browser History]]
 - [[reports/modules/credentials|Credentials]]
+- [[reports/modules/site-engagement|Site Engagement]]
 - [[reports/modules/web-storage-details|Web Storage Details]]
 
 ## URLs
@@ -26,6 +30,9 @@ Report modules are data blocks you can add inside any custom section. They are c
 
 ## System
 - [[reports/modules/system-summary|System Summary (Windows)]]
+- [[reports/modules/installed-applications|Installed Applications]]
+- [[reports/modules/jump-lists|Jump Lists]]
+- [[reports/modules/application-execution|Application Execution]]
 
 ## Documentation
 - [[reports/modules/screenshots|Screenshots]]

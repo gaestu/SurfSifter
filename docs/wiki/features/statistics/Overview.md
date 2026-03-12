@@ -1,6 +1,6 @@
-# Statistics (Tab)
+# Statistics (Audit Subtab)
 
-Statistics Tab - Summary cards showing extractor run statistics.
+Summary cards showing extractor run statistics.
 
 ## Purpose
 - Summarize extractor run status and counts for the current evidence.
@@ -19,10 +19,8 @@ Statistics Tab - Summary cards showing extractor run statistics.
 - Aggregated totals card across all extractors.
 
 ## Outputs
-- Visual summary only; no exported output from this tab.
-
-## Subtabs
-- None
+- Visual summary only; no exported output from this subtab.
 
 ## Notes
-- This tab is added as a subtab within each evidence's QTabWidget (per-evidence).
+- Statistics is a subtab within the **Audit** tab (moved from a standalone tab).
+- Access via the Audit tab's Statistics subtab within each evidence.

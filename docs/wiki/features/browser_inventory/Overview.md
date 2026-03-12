@@ -27,6 +27,7 @@ Browser/Cache Inventory tab - displays all discovered browser artifacts.
 ## Subtabs
 - [[./inventory|Inventory]] - raw browser artifact files with extraction/ingestion status.
 - [[./history|History]] - parsed browsing history.
+- [[./search-terms|Search Terms]] - extracted search queries from browser history URLs.
 - [[./cookies|Cookies]] - parsed cookies with domain/browser filters.
 - [[./bookmarks|Bookmarks]] - saved bookmarks and folders.
 - [[./downloads|Downloads]] - browser download history entries.
@@ -34,6 +35,7 @@ Browser/Cache Inventory tab - displays all discovered browser artifacts.
 - [[./restored-tabs|Restored Tabs]] - session restore tabs and windows.
 - [[./permissions|Permissions]] - per-site permission settings.
 - [[./media|Media]] - media playback history.
+- [[./site-engagement|Site Engagement]] - Chromium site and media engagement scores.
 - [[./extensions|Extensions]] - installed extensions and risk metadata.
 - [[./web-storage|Web Storage]] - container for storage views and tokens.
 - [[./cache|Cache]] - browser cache entries.

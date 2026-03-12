@@ -1,15 +1,17 @@
-# Browser Extractors
+# Extractors
 
-This section documents browser-family extractors under `src/extractors/browser/`.
+This section documents all extractors under `src/extractors/`.
 
-## Families
-- Chromium (`chromium.md`)
-- Firefox (`firefox.md`)
-- Safari (`safari.md`)
-- IE Legacy (`ie-legacy.md`)
-- Carvers (`carvers.md`)
-- Media (`media.md`)
-- System (`system.md`)
+## Browser Families
+- Chromium (`chromium.md`) — 16 extractors for Chrome, Chromium, Edge, Brave, Opera, Vivaldi, and embedded CEF/CefSharp
+- Firefox (`firefox.md`) — 14 extractors for Firefox, Firefox ESR, and Tor Browser
+- Safari (`safari.md`) — 9 extractors for macOS Safari (experimental)
+- IE Legacy (`ie-legacy.md`) — 12 extractors for Internet Explorer and Legacy Edge
+
+## Other Extractor Groups
+- Carvers (`carvers.md`) — bulk_extractor and browser carver
+- Media (`media.md`) — filesystem image extraction and file carving (Foremost, Scalpel)
+- System (`system.md`) — registry, Jump Lists, file list enumeration, DPAPI decryption, and macOS plist parsing
 
 ## Conventions
 - Each family page starts with a high-level overview.
