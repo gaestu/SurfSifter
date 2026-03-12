@@ -225,6 +225,12 @@ Discovered automatically on `PATH`:
 
 Tool status visible in **Tools tab** (application GUI).
 
+> **Note on bulk_extractor:** This tool is **not** included in the install script or pre-built
+> binaries and is no longer available in standard Linux distribution repositories.
+> You must build and install it manually from source. Follow the official instructions at
+> [Installing bulk_extractor](https://github.com/simsong/bulk_extractor/wiki/Installing-bulk_extractor).
+> Once installed and available on `PATH`, SurfSifter detects it automatically.
+
 ## Development
 
 ### Testing
