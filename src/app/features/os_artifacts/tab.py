@@ -55,6 +55,11 @@ class OSArtifactsTab(QWidget):
         # Stale data flag for lazy refresh after ingestion
         self._data_stale = False
 
+        # DPAPI subtab (created when db_manager is provided)
+        self._dpapi_tab: Optional[QWidget] = None
+        self._db_manager = None
+        self._evidence_label: str = ""
+
         layout = QVBoxLayout()
 
         # Create tab widget for Registry and Platform Detections
@@ -313,6 +318,20 @@ class OSArtifactsTab(QWidget):
             # Deferred loading - just store the ID, load on showEvent
             self._load_pending = True
 
+    def set_db_manager(self, db_manager, evidence_label: str = "") -> None:
+        """Store database manager reference for subtab models."""
+        self._db_manager = db_manager
+        self._evidence_label = evidence_label
+
+    def add_subtab(self, widget: QWidget, label: str) -> None:
+        """Add an externally-created widget as a subtab.
+
+        Used by main.py to embed feature widgets (e.g. DPAPITab) without
+        creating cross-feature imports inside this module.
+        """
+        self._dpapi_tab = widget
+        self.tabs.addTab(widget, label)
+
     def refresh(self) -> None:
         self.model.reload()
         if self.jl_model:
@@ -323,6 +342,8 @@ class OSArtifactsTab(QWidget):
             self.ae_model.reload()
         if self.ua_model:
             self.ua_model.reload()
+        if self._dpapi_tab:
+            self._dpapi_tab.refresh()
         self._update_summary()
         self._update_jump_lists_summary()
         self._update_software_summary()
@@ -336,6 +357,8 @@ class OSArtifactsTab(QWidget):
         Called by main.py when data changes but tab is not visible.
         """
         self._data_stale = True
+        if self._dpapi_tab:
+            self._dpapi_tab.mark_stale()
 
     def showEvent(self, event):
         """Override showEvent to perform lazy loading when tab becomes visible."""

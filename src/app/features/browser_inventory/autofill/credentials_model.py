@@ -28,9 +28,11 @@ class CredentialsTableModel(QAbstractTableModel):
         "origin_url",
         "username_element",
         "username_value",
+        "password_value_decrypted",
         "browser",
         "profile",
         "password_value_encrypted",  # DB stores encrypted as BLOB, not boolean 'encrypted'
+        "decrypt_status",
         "date_created_utc",
         "date_last_used_utc",
         "tags",
@@ -40,9 +42,11 @@ class CredentialsTableModel(QAbstractTableModel):
         "Origin URL",
         "Username Field",
         "Username",
+        "Password",
         "Browser",
         "Profile",
         "Encrypted",
+        "Decrypt",
         "Created",
         "Last Used",
         "Tags",
@@ -52,14 +56,19 @@ class CredentialsTableModel(QAbstractTableModel):
     COL_ORIGIN = 0
     COL_USERNAME_ELEMENT = 1
     COL_USERNAME = 2
-    COL_BROWSER = 3
-    COL_PROFILE = 4
-    COL_ENCRYPTED = 5
-    COL_CREATED = 6
-    COL_LAST_USED = 7
-    COL_TAGS = 8
+    COL_PASSWORD = 3
+    COL_BROWSER = 4
+    COL_PROFILE = 5
+    COL_ENCRYPTED = 6
+    COL_DECRYPT = 7
+    COL_CREATED = 8
+    COL_LAST_USED = 9
+    COL_TAGS = 10
 
     ARTIFACT_TYPE = "credential"
+
+    # Mask shown when secrets are hidden
+    _MASKED = "\u25cf" * 8  # ●●●●●●●●
 
     def __init__(
         self,
@@ -87,6 +96,9 @@ class CredentialsTableModel(QAbstractTableModel):
         # Data storage
         self._rows: List[Dict[str, Any]] = []
         self._tag_map: Dict[int, str] = {}
+
+        # Secrets visibility
+        self._secrets_visible: bool = False
 
         # Filters
         self._browser_filter: str = ""
@@ -170,6 +182,15 @@ class CredentialsTableModel(QAbstractTableModel):
         # DB stores password_value_encrypted as BLOB - check if non-empty
         return sum(1 for row in self._rows if row.get("password_value_encrypted"))
 
+    def toggle_secrets(self) -> None:
+        """Toggle password visibility and refresh the password column."""
+        self._secrets_visible = not self._secrets_visible
+        # Emit dataChanged for the password column only
+        if self._rows:
+            top = self.index(0, self.COL_PASSWORD)
+            bottom = self.index(len(self._rows) - 1, self.COL_PASSWORD)
+            self.dataChanged.emit(top, bottom)
+
     def get_row_data(self, index: QModelIndex) -> Dict[str, Any]:
         """Get full row data for given index."""
         if not index.isValid() or not (0 <= index.row() < len(self._rows)):
@@ -206,6 +227,13 @@ class CredentialsTableModel(QAbstractTableModel):
                 return row_data.get("username_element") or ""
             elif col == self.COL_USERNAME:
                 return row_data.get("username_value") or ""
+            elif col == self.COL_PASSWORD:
+                pw = row_data.get("password_value_decrypted")
+                if not pw:
+                    return ""
+                if self._secrets_visible:
+                    return pw[:47] + "..." if len(pw) > 50 else pw
+                return self._MASKED
             elif col == self.COL_BROWSER:
                 return row_data.get("browser", "").capitalize()
             elif col == self.COL_PROFILE:
@@ -213,6 +241,17 @@ class CredentialsTableModel(QAbstractTableModel):
             elif col == self.COL_ENCRYPTED:
                 # DB stores password_value_encrypted as BLOB - check if non-empty
                 return "Yes" if row_data.get("password_value_encrypted") else "No"
+            elif col == self.COL_DECRYPT:
+                status = row_data.get("decrypt_status") or ""
+                if status == "decrypted":
+                    return "\U0001f513 Decrypted"
+                elif status == "failed":
+                    return "\u274c Failed"
+                elif status == "no_key":
+                    return "\U0001f512 No Key"
+                elif status == "not_encrypted":
+                    return "\u2014"  # em-dash: not applicable
+                return ""  # NULL / not yet attempted
             elif col == self.COL_CREATED:
                 created = row_data.get("date_created_utc")
                 if created:
@@ -229,13 +268,26 @@ class CredentialsTableModel(QAbstractTableModel):
         elif role == Qt.ToolTipRole:
             if col == self.COL_ORIGIN:
                 return row_data.get("origin_url", "")
+            elif col == self.COL_PASSWORD:
+                if self._secrets_visible:
+                    return row_data.get("password_value_decrypted") or ""
+                return ""
             elif col in (self.COL_CREATED, self.COL_LAST_USED):
                 return row_data.get(self.COLUMNS[col], "")
+            elif col == self.COL_DECRYPT:
+                status = row_data.get("decrypt_status") or ""
+                if status == "decrypted":
+                    return "Password successfully decrypted"
+                elif status == "failed":
+                    return "Decryption failed"
+                elif status == "no_key":
+                    return "DPAPI master key not available"
+                return ""
             elif col == self.COL_TAGS:
                 return self._tag_map.get(row_data.get("id"), "") or ""
 
         elif role == Qt.TextAlignmentRole:
-            if col == self.COL_ENCRYPTED:
+            if col in (self.COL_ENCRYPTED, self.COL_DECRYPT):
                 return Qt.AlignCenter
 
         return None

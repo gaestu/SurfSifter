@@ -363,6 +363,8 @@ class DatabaseManager:
             _ensure_browser_history_forensic_columns(conn)
             # Ensure  columns exist (handles pre- upgrade path)
             _ensure_autofill_enhancement_columns(conn)
+            # Ensure DPAPI decrypt columns exist (handles pre-DPAPI upgrade path)
+            _ensure_dpapi_decrypt_columns(conn)
 
         # Cache the connection
         with self._cache_lock:
@@ -813,6 +815,43 @@ def _ensure_cookies_origin_attributes_columns(conn: sqlite3.Connection) -> None:
         conn.execute("CREATE INDEX IF NOT EXISTS idx_cookies_private_browsing ON cookies(evidence_id, private_browsing_id)")
         LOGGER.info("Added idx_cookies_private_browsing index")
         needs_commit = True
+
+    if needs_commit:
+        conn.commit()
+
+
+def _ensure_dpapi_decrypt_columns(conn: sqlite3.Connection) -> None:
+    """Ensure decryption columns exist on credentials, cookies, credit_cards tables."""
+    tables = {row[0] for row in conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='table'"
+    )}
+
+    _add_columns = [
+        ("credentials", [
+            ("password_value_decrypted", "TEXT DEFAULT NULL"),
+            ("decrypt_status", "TEXT DEFAULT NULL"),
+        ]),
+        ("cookies", [
+            ("decrypted_value", "TEXT DEFAULT NULL"),
+            ("decrypt_status", "TEXT DEFAULT NULL"),
+        ]),
+        ("credit_cards", [
+            ("card_number_decrypted", "TEXT DEFAULT NULL"),
+            ("decrypt_status", "TEXT DEFAULT NULL"),
+        ]),
+    ]
+
+    needs_commit = False
+    for table_name, columns_to_add in _add_columns:
+        if table_name not in tables:
+            continue
+        # Safe: table_name comes from hardcoded _add_columns list above
+        existing = {row[1] for row in conn.execute(f"PRAGMA table_info({table_name})")}
+        for col_name, col_def in columns_to_add:
+            if col_name not in existing:
+                conn.execute(f"ALTER TABLE {table_name} ADD COLUMN {col_name} {col_def}")
+                LOGGER.info("Added %s column to %s (DPAPI decrypt upgrade)", col_name, table_name)
+                needs_commit = True
 
     if needs_commit:
         conn.commit()

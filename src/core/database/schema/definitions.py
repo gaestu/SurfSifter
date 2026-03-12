@@ -82,6 +82,10 @@ __all__ = [
     "STORAGE_IDENTIFIERS_SCHEMA",
     "EXTRACTED_FILES_SCHEMA",
     "SCREENSHOTS_SCHEMA",
+    "WINDOWS_USERS_SCHEMA",
+    "DPAPI_MASTER_KEYS_SCHEMA",
+    "CHROMIUM_APP_KEYS_SCHEMA",
+    "DECRYPT_AUDIT_SCHEMA",
 ]
 
 
@@ -189,6 +193,8 @@ COOKIES_SCHEMA = TableSchema(
         Column("private_browsing_id", "INTEGER"),  # 0=normal, 1=private browsing
         Column("first_party_domain", "TEXT"),  # First-Party Isolation domain
         Column("partition_key", "TEXT"),  # State Partitioning key
+        Column("decrypted_value", "TEXT"),
+        Column("decrypt_status", "TEXT"),
         Column("run_id", "TEXT"),
         Column("source_path", "TEXT"),
         Column("discovered_by", "TEXT"),
@@ -818,6 +824,8 @@ CREDENTIALS_SCHEMA = TableSchema(
         Column("is_insecure", "INTEGER", default=0),
         Column("is_breached", "INTEGER", default=0),
         Column("password_notes", "TEXT"),
+        Column("password_value_decrypted", "TEXT"),
+        Column("decrypt_status", "TEXT"),
         Column("run_id", "TEXT", nullable=False),
         Column("source_path", "TEXT", nullable=False),
         Column("discovered_by", "TEXT"),
@@ -860,6 +868,8 @@ CREDIT_CARDS_SCHEMA = TableSchema(
         Column("use_count", "INTEGER"),
         Column("use_date_utc", "TEXT"),
         Column("nickname", "TEXT"),
+        Column("card_number_decrypted", "TEXT"),
+        Column("decrypt_status", "TEXT"),
         Column("run_id", "TEXT", nullable=False),
         Column("source_path", "TEXT", nullable=False),
         Column("discovered_by", "TEXT"),
@@ -1936,6 +1946,124 @@ SCREENSHOTS_SCHEMA = TableSchema(
 )
 
 
+WINDOWS_USERS_SCHEMA = TableSchema(
+    name="windows_users",
+    columns=[
+        Column("id", "INTEGER", nullable=False),
+        Column("evidence_id", "INTEGER", nullable=False),
+        Column("sid", "TEXT", nullable=False),
+        Column("rid", "INTEGER", nullable=False),
+        Column("username", "TEXT", nullable=False),
+        Column("profile_path", "TEXT"),
+        Column("last_logon_utc", "TEXT"),
+        Column("password_last_set_utc", "TEXT"),
+        Column("account_flags", "INTEGER"),
+        Column("ntlm_hash_available", "INTEGER", default=0),
+        Column("master_keys_found", "INTEGER", default=0),
+        Column("master_keys_unlocked", "INTEGER", default=0),
+        Column("run_id", "TEXT", nullable=False),
+        Column("partition_index", "INTEGER"),
+        Column("fs_type", "TEXT"),
+        Column("created_at_utc", "TEXT"),
+    ],
+    conflict_action=ConflictAction.FAIL,
+    sortable_columns=["username", "sid", "rid"],
+    default_order=[OrderColumn("username", "ASC")],
+    filterable_columns=[
+        FilterColumn("sid", [FilterOp.EQ]),
+        FilterColumn("run_id", [FilterOp.EQ]),
+    ],
+    supports_run_delete=True,
+)
+
+
+DPAPI_MASTER_KEYS_SCHEMA = TableSchema(
+    name="dpapi_master_keys",
+    columns=[
+        Column("id", "INTEGER", nullable=False),
+        Column("evidence_id", "INTEGER", nullable=False),
+        Column("sid", "TEXT", nullable=False),
+        Column("username", "TEXT"),
+        Column("guid", "TEXT", nullable=False),
+        Column("source_path", "TEXT", nullable=False),
+        Column("file_hash_sha256", "TEXT"),
+        Column("status", "TEXT", nullable=False, default="locked"),
+        Column("unlock_method", "TEXT"),
+        Column("unlocked_at_utc", "TEXT"),
+        Column("error_message", "TEXT"),
+        Column("run_id", "TEXT", nullable=False),
+        Column("partition_index", "INTEGER"),
+        Column("fs_type", "TEXT"),
+        Column("created_at_utc", "TEXT"),
+    ],
+    conflict_action=ConflictAction.FAIL,
+    sortable_columns=["sid", "guid", "status"],
+    default_order=[OrderColumn("sid", "ASC"), OrderColumn("guid", "ASC")],
+    filterable_columns=[
+        FilterColumn("sid", [FilterOp.EQ]),
+        FilterColumn("status", [FilterOp.EQ]),
+        FilterColumn("run_id", [FilterOp.EQ]),
+    ],
+    supports_run_delete=True,
+)
+
+
+CHROMIUM_APP_KEYS_SCHEMA = TableSchema(
+    name="chromium_app_keys",
+    columns=[
+        Column("id", "INTEGER", nullable=False),
+        Column("evidence_id", "INTEGER", nullable=False),
+        Column("sid", "TEXT", nullable=False),
+        Column("browser", "TEXT", nullable=False),
+        Column("profile_root", "TEXT", nullable=False),
+        Column("local_state_path", "TEXT", nullable=False),
+        Column("local_state_hash_sha256", "TEXT"),
+        Column("master_key_guid", "TEXT"),
+        Column("status", "TEXT", nullable=False, default="pending"),
+        Column("error_message", "TEXT"),
+        Column("run_id", "TEXT", nullable=False),
+        Column("partition_index", "INTEGER"),
+        Column("fs_type", "TEXT"),
+        Column("created_at_utc", "TEXT"),
+    ],
+    conflict_action=ConflictAction.FAIL,
+    sortable_columns=["sid", "browser", "status"],
+    default_order=[OrderColumn("browser", "ASC")],
+    filterable_columns=[
+        FilterColumn("sid", [FilterOp.EQ]),
+        FilterColumn("browser", [FilterOp.EQ]),
+        FilterColumn("run_id", [FilterOp.EQ]),
+    ],
+    supports_run_delete=True,
+)
+
+
+DECRYPT_AUDIT_SCHEMA = TableSchema(
+    name="decrypt_audit",
+    columns=[
+        Column("id", "INTEGER", nullable=False),
+        Column("evidence_id", "INTEGER", nullable=False),
+        Column("target_table", "TEXT", nullable=False),
+        Column("target_id", "INTEGER", nullable=False),
+        Column("chromium_app_key_id", "INTEGER"),
+        Column("status", "TEXT", nullable=False, default="pending"),
+        Column("blob_version", "TEXT"),
+        Column("error_code", "TEXT"),
+        Column("run_id", "TEXT", nullable=False),
+        Column("created_at_utc", "TEXT"),
+    ],
+    conflict_action=ConflictAction.FAIL,
+    sortable_columns=["target_table", "status"],
+    default_order=[OrderColumn("target_table", "ASC"), OrderColumn("target_id", "ASC")],
+    filterable_columns=[
+        FilterColumn("target_table", [FilterOp.EQ]),
+        FilterColumn("status", [FilterOp.EQ]),
+        FilterColumn("run_id", [FilterOp.EQ]),
+    ],
+    supports_run_delete=True,
+)
+
+
 TABLE_SCHEMAS: Dict[str, TableSchema] = {
     "cookies": COOKIES_SCHEMA,
     "bookmarks": BOOKMARKS_SCHEMA,
@@ -1989,4 +2117,8 @@ TABLE_SCHEMAS: Dict[str, TableSchema] = {
     "storage_identifiers": STORAGE_IDENTIFIERS_SCHEMA,
     "extracted_files": EXTRACTED_FILES_SCHEMA,
     "screenshots": SCREENSHOTS_SCHEMA,
+    "windows_users": WINDOWS_USERS_SCHEMA,
+    "dpapi_master_keys": DPAPI_MASTER_KEYS_SCHEMA,
+    "chromium_app_keys": CHROMIUM_APP_KEYS_SCHEMA,
+    "decrypt_audit": DECRYPT_AUDIT_SCHEMA,
 }

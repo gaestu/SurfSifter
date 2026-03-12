@@ -57,6 +57,7 @@ def _apply_ensure_column_functions(conn: sqlite3.Connection) -> None:
         _ensure_jump_list_working_directory_column,
         _ensure_browser_history_forensic_columns,
         _ensure_autofill_enhancement_columns,
+        _ensure_dpapi_decrypt_columns,
     )
 
     _ensure_file_list_partition_columns(conn)
@@ -65,6 +66,7 @@ def _apply_ensure_column_functions(conn: sqlite3.Connection) -> None:
     _ensure_jump_list_working_directory_column(conn)
     _ensure_browser_history_forensic_columns(conn)
     _ensure_autofill_enhancement_columns(conn)
+    _ensure_dpapi_decrypt_columns(conn)
 
 
 def _baseline_connection() -> sqlite3.Connection:

@@ -30,6 +30,7 @@ class CookiesTableModel(QAbstractTableModel):
         "domain",
         "name",
         "value",
+        "decrypted_value",
         "browser",
         "profile",
         "is_secure",
@@ -37,6 +38,7 @@ class CookiesTableModel(QAbstractTableModel):
         "samesite",
         "expires_utc",
         "encrypted",
+        "decrypt_status",
         "tags",
     ]
 
@@ -44,6 +46,7 @@ class CookiesTableModel(QAbstractTableModel):
         "Domain",
         "Name",
         "Value",
+        "Decrypted Value",
         "Browser",
         "Profile",
         "Secure",
@@ -51,6 +54,7 @@ class CookiesTableModel(QAbstractTableModel):
         "SameSite",
         "Expires",
         "Encrypted",
+        "Decrypt",
         "Tags",
     ]
 
@@ -58,16 +62,21 @@ class CookiesTableModel(QAbstractTableModel):
     COL_DOMAIN = 0
     COL_NAME = 1
     COL_VALUE = 2
-    COL_BROWSER = 3
-    COL_PROFILE = 4
-    COL_SECURE = 5
-    COL_HTTPONLY = 6
-    COL_SAMESITE = 7
-    COL_EXPIRES = 8
-    COL_ENCRYPTED = 9
-    COL_TAGS = 10
+    COL_DECRYPTED = 3
+    COL_BROWSER = 4
+    COL_PROFILE = 5
+    COL_SECURE = 6
+    COL_HTTPONLY = 7
+    COL_SAMESITE = 8
+    COL_EXPIRES = 9
+    COL_ENCRYPTED = 10
+    COL_DECRYPT = 11
+    COL_TAGS = 12
 
     ARTIFACT_TYPE = "cookie"
+
+    # Mask shown when secrets are hidden
+    _MASKED = "\u25cf" * 8  # ●●●●●●●●
 
     def __init__(
         self,
@@ -95,6 +104,9 @@ class CookiesTableModel(QAbstractTableModel):
         # Data storage
         self._rows: List[Dict[str, Any]] = []
         self._tag_map: Dict[int, str] = {}
+
+        # Secrets visibility
+        self._secrets_visible: bool = False
 
         # Filters
         self._browser_filter: str = ""
@@ -166,6 +178,14 @@ class CookiesTableModel(QAbstractTableModel):
         """Return count of encrypted cookies in current dataset."""
         return sum(1 for row in self._rows if row.get("encrypted"))
 
+    def toggle_secrets(self) -> None:
+        """Toggle decrypted-value visibility and refresh the column."""
+        self._secrets_visible = not self._secrets_visible
+        if self._rows:
+            top = self.index(0, self.COL_DECRYPTED)
+            bottom = self.index(len(self._rows) - 1, self.COL_DECRYPTED)
+            self.dataChanged.emit(top, bottom)
+
     def get_row_data(self, index: QModelIndex) -> Dict[str, Any]:
         """Get full row data for given index."""
         if not index.isValid() or not (0 <= index.row() < len(self._rows)):
@@ -203,6 +223,13 @@ class CookiesTableModel(QAbstractTableModel):
                 if len(value) > 50:
                     return value[:47] + "..."
                 return value
+            elif col == self.COL_DECRYPTED:
+                dv = row_data.get("decrypted_value")
+                if not dv:
+                    return ""
+                if self._secrets_visible:
+                    return dv[:47] + "..." if len(dv) > 50 else dv
+                return self._MASKED
             elif col == self.COL_BROWSER:
                 return row_data.get("browser", "").capitalize()
             elif col == self.COL_PROFILE:
@@ -221,6 +248,17 @@ class CookiesTableModel(QAbstractTableModel):
                 return "Session"
             elif col == self.COL_ENCRYPTED:
                 return "Yes" if row_data.get("encrypted") else "No"
+            elif col == self.COL_DECRYPT:
+                status = row_data.get("decrypt_status") or ""
+                if status == "decrypted":
+                    return "\U0001f513 Decrypted"
+                elif status == "failed":
+                    return "\u274c Failed"
+                elif status == "no_key":
+                    return "\U0001f512 No Key"
+                elif status == "not_encrypted":
+                    return "\u2014"  # em-dash: not applicable
+                return ""  # NULL / not yet attempted
             elif col == self.COL_TAGS:
                 return self._tag_map.get(row_data.get("id"), "") or ""
 
@@ -228,13 +266,27 @@ class CookiesTableModel(QAbstractTableModel):
             if col == self.COL_VALUE:
                 # Full value in tooltip
                 return row_data.get("value", "")
+            elif col == self.COL_DECRYPTED:
+                dv = row_data.get("decrypted_value")
+                if dv and self._secrets_visible:
+                    return dv
+                return ""
             elif col == self.COL_EXPIRES:
                 return row_data.get("expires_utc") or "Session cookie"
+            elif col == self.COL_DECRYPT:
+                status = row_data.get("decrypt_status") or ""
+                if status == "decrypted":
+                    return "Cookie value successfully decrypted"
+                elif status == "failed":
+                    return "Decryption failed"
+                elif status == "no_key":
+                    return "DPAPI master key not available"
+                return ""
             elif col == self.COL_TAGS:
                 return self._tag_map.get(row_data.get("id"), "") or ""
 
         elif role == Qt.TextAlignmentRole:
-            if col in (self.COL_SECURE, self.COL_HTTPONLY, self.COL_ENCRYPTED):
+            if col in (self.COL_SECURE, self.COL_HTTPONLY, self.COL_ENCRYPTED, self.COL_DECRYPT):
                 return Qt.AlignCenter
 
         return None

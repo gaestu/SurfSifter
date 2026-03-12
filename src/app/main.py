@@ -516,6 +516,15 @@ class MainWindow(QMainWindow):
         if self.case_data:
             os_tab.set_case_data(self.case_data, defer_load=defer_load)
         os_tab.set_evidence(evidence_id, defer_load=defer_load)
+        os_tab.set_db_manager(db_manager, evidence_label)
+        # Embed DPAPI Decrypt as a subtab inside OS Artifacts
+        from app.features.dpapi import DPAPITab
+        dpapi_tab = DPAPITab(parent=os_tab)
+        dpapi_tab.set_db_manager(db_manager)
+        if self.case_data:
+            dpapi_tab.set_case_data(self.case_data, defer_load=True)
+        dpapi_tab.set_evidence(evidence_id, evidence_label, defer_load=True)
+        os_tab.add_subtab(dpapi_tab, "🔐 DPAPI")
         evidence_tabs.addTab(os_tab, "OS Artifacts")
 
         # 8. Timeline - supports lazy loading
@@ -549,13 +558,13 @@ class MainWindow(QMainWindow):
         reports_tab.set_evidence(evidence_id, evidence_label)
         evidence_tabs.addTab(reports_tab, "Reports")
 
-        # 11. Screenshots (NEW)
+        # 11. Screenshots
         from app.features.screenshots import ScreenshotsTab
         screenshots_tab = ScreenshotsTab(self.case_data, case_path, db_manager)
         screenshots_tab.set_evidence(evidence_id, evidence_label)
         evidence_tabs.addTab(screenshots_tab, "Screenshots")
 
-        # 12. Tags (NEW)
+        # 12. Tags
         tags_tab = TagsTab()
         # IMPORTANT: Set case_data BEFORE evidence_id to ensure reload() has data access
         if self.case_data:
@@ -563,7 +572,7 @@ class MainWindow(QMainWindow):
         tags_tab.set_evidence(evidence_id, evidence_label)
         evidence_tabs.addTab(tags_tab, "Tags")
 
-        # 13. Audit (NEW) - includes Statistics, Warnings, and Logs subtabs
+        # 13. Audit - includes Statistics, Warnings, and Logs subtabs
         from app.features.audit import AuditTab
         audit_tab = AuditTab(
             db_manager,
