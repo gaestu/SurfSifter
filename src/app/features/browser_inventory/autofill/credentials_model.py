@@ -28,11 +28,11 @@ class CredentialsTableModel(QAbstractTableModel):
         "origin_url",
         "username_element",
         "username_value",
+        "password_value_encrypted",  # BLOB — displayed as hex
+        "decrypt_status",
         "password_value_decrypted",
         "browser",
         "profile",
-        "password_value_encrypted",  # DB stores encrypted as BLOB, not boolean 'encrypted'
-        "decrypt_status",
         "date_created_utc",
         "date_last_used_utc",
         "tags",
@@ -42,11 +42,11 @@ class CredentialsTableModel(QAbstractTableModel):
         "Origin URL",
         "Username Field",
         "Username",
-        "Password",
-        "Browser",
-        "Profile",
         "Encrypted",
         "Decrypt",
+        "Decrypted",
+        "Browser",
+        "Profile",
         "Created",
         "Last Used",
         "Tags",
@@ -56,19 +56,16 @@ class CredentialsTableModel(QAbstractTableModel):
     COL_ORIGIN = 0
     COL_USERNAME_ELEMENT = 1
     COL_USERNAME = 2
-    COL_PASSWORD = 3
-    COL_BROWSER = 4
-    COL_PROFILE = 5
-    COL_ENCRYPTED = 6
-    COL_DECRYPT = 7
+    COL_ENCRYPTED_PW = 3
+    COL_DECRYPT = 4
+    COL_DECRYPTED_PW = 5
+    COL_BROWSER = 6
+    COL_PROFILE = 7
     COL_CREATED = 8
     COL_LAST_USED = 9
     COL_TAGS = 10
 
     ARTIFACT_TYPE = "credential"
-
-    # Mask shown when secrets are hidden
-    _MASKED = "\u25cf" * 8  # ●●●●●●●●
 
     def __init__(
         self,
@@ -96,9 +93,6 @@ class CredentialsTableModel(QAbstractTableModel):
         # Data storage
         self._rows: List[Dict[str, Any]] = []
         self._tag_map: Dict[int, str] = {}
-
-        # Secrets visibility
-        self._secrets_visible: bool = False
 
         # Filters
         self._browser_filter: str = ""
@@ -182,15 +176,6 @@ class CredentialsTableModel(QAbstractTableModel):
         # DB stores password_value_encrypted as BLOB - check if non-empty
         return sum(1 for row in self._rows if row.get("password_value_encrypted"))
 
-    def toggle_secrets(self) -> None:
-        """Toggle password visibility and refresh the password column."""
-        self._secrets_visible = not self._secrets_visible
-        # Emit dataChanged for the password column only
-        if self._rows:
-            top = self.index(0, self.COL_PASSWORD)
-            bottom = self.index(len(self._rows) - 1, self.COL_PASSWORD)
-            self.dataChanged.emit(top, bottom)
-
     def get_row_data(self, index: QModelIndex) -> Dict[str, Any]:
         """Get full row data for given index."""
         if not index.isValid() or not (0 <= index.row() < len(self._rows)):
@@ -227,20 +212,23 @@ class CredentialsTableModel(QAbstractTableModel):
                 return row_data.get("username_element") or ""
             elif col == self.COL_USERNAME:
                 return row_data.get("username_value") or ""
-            elif col == self.COL_PASSWORD:
-                pw = row_data.get("password_value_decrypted")
-                if not pw:
-                    return ""
-                if self._secrets_visible:
-                    return pw[:47] + "..." if len(pw) > 50 else pw
-                return self._MASKED
+            elif col == self.COL_ENCRYPTED_PW:
+                blob = row_data.get("password_value_encrypted")
+                if blob and isinstance(blob, (bytes, bytearray)):
+                    hex_str = blob.hex()
+                    if len(hex_str) > 47:
+                        return hex_str[:44] + "..."
+                    return hex_str
+                return ""
             elif col == self.COL_BROWSER:
                 return row_data.get("browser", "").capitalize()
             elif col == self.COL_PROFILE:
                 return row_data.get("profile") or ""
-            elif col == self.COL_ENCRYPTED:
-                # DB stores password_value_encrypted as BLOB - check if non-empty
-                return "Yes" if row_data.get("password_value_encrypted") else "No"
+            elif col == self.COL_DECRYPTED_PW:
+                pw = row_data.get("password_value_decrypted")
+                if not pw:
+                    return ""
+                return pw[:47] + "..." if len(pw) > 50 else pw
             elif col == self.COL_DECRYPT:
                 status = row_data.get("decrypt_status") or ""
                 if status == "decrypted":
@@ -268,10 +256,13 @@ class CredentialsTableModel(QAbstractTableModel):
         elif role == Qt.ToolTipRole:
             if col == self.COL_ORIGIN:
                 return row_data.get("origin_url", "")
-            elif col == self.COL_PASSWORD:
-                if self._secrets_visible:
-                    return row_data.get("password_value_decrypted") or ""
+            elif col == self.COL_ENCRYPTED_PW:
+                blob = row_data.get("password_value_encrypted")
+                if blob and isinstance(blob, (bytes, bytearray)):
+                    return blob.hex()
                 return ""
+            elif col == self.COL_DECRYPTED_PW:
+                return row_data.get("password_value_decrypted") or ""
             elif col in (self.COL_CREATED, self.COL_LAST_USED):
                 return row_data.get(self.COLUMNS[col], "")
             elif col == self.COL_DECRYPT:
@@ -287,7 +278,7 @@ class CredentialsTableModel(QAbstractTableModel):
                 return self._tag_map.get(row_data.get("id"), "") or ""
 
         elif role == Qt.TextAlignmentRole:
-            if col in (self.COL_ENCRYPTED, self.COL_DECRYPT):
+            if col == self.COL_DECRYPT:
                 return Qt.AlignCenter
 
         return None

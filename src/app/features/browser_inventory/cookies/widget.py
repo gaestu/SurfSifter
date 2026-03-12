@@ -4,7 +4,7 @@ from __future__ import annotations
 import logging
 import sqlite3
 
-from PySide6.QtWidgets import QComboBox, QHBoxLayout, QLabel, QLineEdit, QMenu, QPushButton
+from PySide6.QtWidgets import QComboBox, QHBoxLayout, QLabel, QLineEdit, QMenu
 
 from app.common import add_sandbox_url_actions
 from app.features.browser_inventory._base import BaseArtifactSubtab, SubtabContext
@@ -29,13 +29,6 @@ class CookiesSubtab(BaseArtifactSubtab):
         self.domain_filter.setPlaceholderText("Filter by domain...")
         self.domain_filter.setMaximumWidth(200)
         fl.addWidget(self.domain_filter)
-
-        # Reveal/hide decrypted cookie values toggle
-        self._reveal_btn = QPushButton("👁 Reveal Decrypted")
-        self._reveal_btn.setCheckable(True)
-        self._reveal_btn.setToolTip("Show or hide decrypted cookie values")
-        self._reveal_btn.toggled.connect(self._on_reveal_toggled)
-        fl.addWidget(self._reveal_btn)
 
     def _create_model(self):
         return CookiesTableModel(
@@ -83,15 +76,6 @@ class CookiesSubtab(BaseArtifactSubtab):
             self.status_label.setText(f"{count} cookies ({encrypted} encrypted)")
         else:
             self.status_label.setText(f"{count} cookies")
-
-    def _on_reveal_toggled(self, checked: bool) -> None:
-        """Toggle decrypted cookie value visibility in the model."""
-        if self._model is None:
-            return
-        self._model.toggle_secrets()
-        self._reveal_btn.setText(
-            "👁 Hide Decrypted" if checked else "👁 Reveal Decrypted"
-        )
 
     def _artifact_type_for_tagging(self):
         return "cookie"

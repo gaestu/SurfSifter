@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import logging
 
-from PySide6.QtWidgets import QHBoxLayout, QLabel, QLineEdit, QMenu, QPushButton
+from PySide6.QtWidgets import QHBoxLayout, QLabel, QLineEdit, QMenu
 
 from app.features.browser_inventory._base import BaseArtifactSubtab, SubtabContext
 from .credentials_model import CredentialsTableModel
@@ -27,13 +27,6 @@ class SavedLoginsSubtab(BaseArtifactSubtab):
         self.origin_filter.setMaximumWidth(200)
         fl.addWidget(self.origin_filter)
 
-        # Reveal/hide decrypted passwords toggle
-        self._reveal_btn = QPushButton("👁 Reveal Passwords")
-        self._reveal_btn.setCheckable(True)
-        self._reveal_btn.setToolTip("Show or hide decrypted password values")
-        self._reveal_btn.toggled.connect(self._on_reveal_toggled)
-        fl.addWidget(self._reveal_btn)
-
     def _create_model(self):
         return CredentialsTableModel(
             self.ctx.db_manager,
@@ -48,11 +41,11 @@ class SavedLoginsSubtab(BaseArtifactSubtab):
         t.setColumnWidth(0, 200)   # Origin URL
         t.setColumnWidth(1, 100)   # Username Element
         t.setColumnWidth(2, 120)   # Username
-        t.setColumnWidth(3, 100)   # Password
-        t.setColumnWidth(4, 80)    # Browser
-        t.setColumnWidth(5, 80)    # Profile
-        t.setColumnWidth(6, 70)    # Encrypted
-        t.setColumnWidth(7, 100)   # Decrypt
+        t.setColumnWidth(3, 150)   # Encrypted
+        t.setColumnWidth(4, 100)   # Decrypt
+        t.setColumnWidth(5, 120)   # Decrypted
+        t.setColumnWidth(6, 80)    # Browser
+        t.setColumnWidth(7, 80)    # Profile
         t.setColumnWidth(8, 100)   # Created
         t.setColumnWidth(9, 100)   # Last Used
         t.setColumnWidth(10, 140)  # Tags
@@ -78,15 +71,6 @@ class SavedLoginsSubtab(BaseArtifactSubtab):
             self.status_label.setText(f"{count} saved logins ({encrypted} encrypted)")
         else:
             self.status_label.setText(f"{count} saved logins")
-
-    def _on_reveal_toggled(self, checked: bool) -> None:
-        """Toggle password visibility in the model."""
-        if self._model is None:
-            return
-        self._model.toggle_secrets()
-        self._reveal_btn.setText(
-            "👁 Hide Passwords" if checked else "👁 Reveal Passwords"
-        )
 
     def _artifact_type_for_tagging(self):
         return "credential"

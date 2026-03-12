@@ -75,9 +75,6 @@ class CookiesTableModel(QAbstractTableModel):
 
     ARTIFACT_TYPE = "cookie"
 
-    # Mask shown when secrets are hidden
-    _MASKED = "\u25cf" * 8  # ●●●●●●●●
-
     def __init__(
         self,
         db_manager: DatabaseManager,
@@ -104,9 +101,6 @@ class CookiesTableModel(QAbstractTableModel):
         # Data storage
         self._rows: List[Dict[str, Any]] = []
         self._tag_map: Dict[int, str] = {}
-
-        # Secrets visibility
-        self._secrets_visible: bool = False
 
         # Filters
         self._browser_filter: str = ""
@@ -178,14 +172,6 @@ class CookiesTableModel(QAbstractTableModel):
         """Return count of encrypted cookies in current dataset."""
         return sum(1 for row in self._rows if row.get("encrypted"))
 
-    def toggle_secrets(self) -> None:
-        """Toggle decrypted-value visibility and refresh the column."""
-        self._secrets_visible = not self._secrets_visible
-        if self._rows:
-            top = self.index(0, self.COL_DECRYPTED)
-            bottom = self.index(len(self._rows) - 1, self.COL_DECRYPTED)
-            self.dataChanged.emit(top, bottom)
-
     def get_row_data(self, index: QModelIndex) -> Dict[str, Any]:
         """Get full row data for given index."""
         if not index.isValid() or not (0 <= index.row() < len(self._rows)):
@@ -219,7 +205,14 @@ class CookiesTableModel(QAbstractTableModel):
                 return row_data.get("name") or ""
             elif col == self.COL_VALUE:
                 value = row_data.get("value") or ""
-                # Truncate long values
+                if not value and row_data.get("encrypted"):
+                    blob = row_data.get("encrypted_value")
+                    if blob and isinstance(blob, (bytes, bytearray)):
+                        hex_str = blob.hex()
+                        if len(hex_str) > 47:
+                            return hex_str[:44] + "..."
+                        return hex_str
+                    return ""
                 if len(value) > 50:
                     return value[:47] + "..."
                 return value
@@ -227,9 +220,7 @@ class CookiesTableModel(QAbstractTableModel):
                 dv = row_data.get("decrypted_value")
                 if not dv:
                     return ""
-                if self._secrets_visible:
-                    return dv[:47] + "..." if len(dv) > 50 else dv
-                return self._MASKED
+                return dv[:47] + "..." if len(dv) > 50 else dv
             elif col == self.COL_BROWSER:
                 return row_data.get("browser", "").capitalize()
             elif col == self.COL_PROFILE:
@@ -264,13 +255,14 @@ class CookiesTableModel(QAbstractTableModel):
 
         elif role == Qt.ToolTipRole:
             if col == self.COL_VALUE:
-                # Full value in tooltip
-                return row_data.get("value", "")
+                value = row_data.get("value", "")
+                if not value and row_data.get("encrypted"):
+                    blob = row_data.get("encrypted_value")
+                    if blob and isinstance(blob, (bytes, bytearray)):
+                        return blob.hex()
+                return value
             elif col == self.COL_DECRYPTED:
-                dv = row_data.get("decrypted_value")
-                if dv and self._secrets_visible:
-                    return dv
-                return ""
+                return row_data.get("decrypted_value") or ""
             elif col == self.COL_EXPIRES:
                 return row_data.get("expires_utc") or "Session cookie"
             elif col == self.COL_DECRYPT:

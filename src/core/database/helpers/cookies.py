@@ -177,6 +177,7 @@ def get_cookies(
         evidence_id,
         filters=filters or None,
         limit=limit,
+        include_excluded=True,  # encrypted_value BLOBs needed for hex display in UI
     )
 
 
