@@ -87,6 +87,20 @@ class CredentialsDetailsDialog(QDialog):
             notes_text.setPlainText(password_notes)
             layout.addWidget(notes_text)
 
+        # Decrypted password
+        decrypted_pw = self.row_data.get("password_value_decrypted")
+        decrypt_status = self.row_data.get("decrypt_status") or ""
+        if decrypt_status:
+            layout.addWidget(QLabel(f"Decrypt Status: {decrypt_status}"))
+        if decrypted_pw:
+            layout.addWidget(QLabel("Decrypted Password:"))
+            pw_text = QTextEdit()
+            pw_text.setReadOnly(True)
+            pw_text.setMaximumHeight(60)
+            pw_text.setPlainText(decrypted_pw)
+            pw_text.setStyleSheet("QTextEdit { font-family: monospace; font-size: 10pt; }")
+            layout.addWidget(pw_text)
+
         # Encrypted password hex - show full hex in scrollable area
         if has_encrypted and isinstance(encrypted_blob, (bytes, bytearray)):
             layout.addWidget(QLabel("Encrypted Password (Hex):"))
@@ -103,6 +117,10 @@ class CredentialsDetailsDialog(QDialog):
         copy_btn.setEnabled(bool(url))
         copy_btn.clicked.connect(lambda: QApplication.clipboard().setText(url))
         button_layout.addWidget(copy_btn)
+        if decrypted_pw:
+            copy_pw_btn = QPushButton("Copy Password")
+            copy_pw_btn.clicked.connect(lambda: QApplication.clipboard().setText(decrypted_pw))
+            button_layout.addWidget(copy_pw_btn)
         button_layout.addStretch()
         close_btn = QPushButton("Close")
         close_btn.clicked.connect(self.reject)

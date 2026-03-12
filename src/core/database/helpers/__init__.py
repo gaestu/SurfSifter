@@ -640,6 +640,11 @@ from .dpapi import (
     update_credit_card_decrypted,
     batch_update_credentials_decrypted,
     batch_update_cookies_decrypted,
+    delete_windows_users_by_evidence,
+    delete_dpapi_master_keys_by_evidence,
+    delete_chromium_app_keys_by_evidence,
+    delete_decrypt_audit_by_evidence,
+    reset_decrypt_status_by_evidence,
 )
 
 __all__ = [
@@ -1120,4 +1125,9 @@ __all__ = [
     "update_credit_card_decrypted",
     "batch_update_credentials_decrypted",
     "batch_update_cookies_decrypted",
+    "delete_windows_users_by_evidence",
+    "delete_dpapi_master_keys_by_evidence",
+    "delete_chromium_app_keys_by_evidence",
+    "delete_decrypt_audit_by_evidence",
+    "reset_decrypt_status_by_evidence",
 ]

@@ -30,6 +30,11 @@ from core.database.helpers.dpapi import (
     update_credit_card_decrypted,
     batch_update_credentials_decrypted,
     batch_update_cookies_decrypted,
+    delete_decrypt_audit_by_evidence,
+    delete_chromium_app_keys_by_evidence,
+    delete_dpapi_master_keys_by_evidence,
+    delete_windows_users_by_evidence,
+    reset_decrypt_status_by_evidence,
 )
 from core.database.helpers.process_log import insert_process_log
 from core.dpapi import (
@@ -161,6 +166,24 @@ def run_dpapi_pipeline(
         callbacks.on_log("Skipping SECURITY extraction — no boot key available", "warning")
     else:
         callbacks.on_log("SECURITY hive not collected", "warning")
+
+    # ------------------------------------------------------------------
+    # Clean up ALL previous DPAPI entries for this evidence
+    # ------------------------------------------------------------------
+    # The pipeline fully re-derives everything from source evidence on each
+    # run, so old entries from prior runs are stale noise.  The process_log
+    # table already keeps a historical summary of every run.
+    try:
+        delete_decrypt_audit_by_evidence(evidence_conn, evidence_id)
+        delete_chromium_app_keys_by_evidence(evidence_conn, evidence_id)
+        delete_dpapi_master_keys_by_evidence(evidence_conn, evidence_id)
+        delete_windows_users_by_evidence(evidence_conn, evidence_id)
+        reset_decrypt_status_by_evidence(evidence_conn, evidence_id)
+        evidence_conn.commit()
+    except Exception as e:
+        LOGGER.warning("DPAPI cleanup failed, rolling back: %s", e)
+        evidence_conn.rollback()
+        raise
 
     # ------------------------------------------------------------------
     # Phase 3: Insert users and decrypt master keys
@@ -553,6 +576,35 @@ def _find_aes_key(
     return None
 
 
+def _try_decrypt_with_fallback(
+    encrypted_blob: bytes,
+    primary_key: bytes,
+    all_keys: Dict[Tuple[str, str], bytes],
+) -> Any:
+    """Attempt v10 decryption with primary key, falling back to all other keys.
+
+    Handles forensic cases where credentials were encrypted by a different
+    Windows user's Chromium instance (e.g., profile copying, shared installs).
+
+    Raises the original error if no key succeeds.
+    """
+    try:
+        return decrypt_v10_blob(encrypted_blob, primary_key)
+    except IntegrityError:
+        # Primary key failed GCM tag verification — try other available keys
+        tried = {primary_key}
+        for other_key in all_keys.values():
+            if other_key in tried:
+                continue
+            tried.add(other_key)
+            try:
+                return decrypt_v10_blob(encrypted_blob, other_key)
+            except (ChromiumKeyError, IntegrityError):
+                continue
+        # All keys failed — re-raise as IntegrityError
+        raise
+
+
 def _decrypt_credentials(
     evidence_conn,
     evidence_id: int,
@@ -601,7 +653,7 @@ def _decrypt_credentials(
             continue
 
         try:
-            result = decrypt_v10_blob(encrypted_blob, aes_key)
+            result = _try_decrypt_with_fallback(encrypted_blob, aes_key, chromium_aes_keys)
             try:
                 decrypted_text = result.plaintext.decode("utf-8")
             except UnicodeDecodeError:
@@ -660,6 +712,16 @@ def _decrypt_credentials(
                     )
                 except Exception:
                     pass
+
+    # Update decrypt_status for failed/no_key credentials
+    for audit in audit_batch:
+        if audit["status"] in ("failed", "no_key", "invalid_plaintext"):
+            try:
+                update_credential_decrypted(
+                    evidence_conn, audit["target_id"], None, audit["status"]
+                )
+            except Exception:
+                pass
 
     # Insert audit records
     for audit in audit_batch:
@@ -730,7 +792,7 @@ def _decrypt_cookies(
             continue
 
         try:
-            result = decrypt_v10_blob(encrypted_blob, aes_key)
+            result = _try_decrypt_with_fallback(encrypted_blob, aes_key, chromium_aes_keys)
             try:
                 decrypted_text = result.plaintext.decode("utf-8")
             except UnicodeDecodeError:
@@ -786,6 +848,16 @@ def _decrypt_cookies(
                     )
                 except Exception:
                     pass
+
+    # Update decrypt_status for failed/no_key cookies
+    for audit in audit_batch:
+        if audit["status"] in ("failed", "no_key", "invalid_plaintext"):
+            try:
+                update_cookie_decrypted(
+                    evidence_conn, audit["target_id"], None, audit["status"]
+                )
+            except Exception:
+                pass
 
     # Insert audit records
     for audit in audit_batch:
@@ -844,6 +916,9 @@ def _decrypt_credit_cards(
         aes_key = _find_aes_key(browser or "", source_path or "", chromium_aes_keys, sid_username_map)
         if aes_key is None:
             summary["no_key"] += 1
+            update_credit_card_decrypted(
+                evidence_conn, card_id, None, "no_key"
+            )
             try:
                 insert_decrypt_audit(
                     evidence_conn, evidence_id,
@@ -857,11 +932,14 @@ def _decrypt_credit_cards(
             continue
 
         try:
-            result = decrypt_v10_blob(encrypted_blob, aes_key)
+            result = _try_decrypt_with_fallback(encrypted_blob, aes_key, chromium_aes_keys)
             try:
                 decrypted_text = result.plaintext.decode("utf-8")
             except UnicodeDecodeError:
                 summary["failed"] += 1
+                update_credit_card_decrypted(
+                    evidence_conn, card_id, None, "invalid_plaintext"
+                )
                 try:
                     insert_decrypt_audit(
                         evidence_conn, evidence_id,
@@ -888,6 +966,9 @@ def _decrypt_credit_cards(
             )
         except (ChromiumKeyError, IntegrityError) as e:
             summary["failed"] += 1
+            update_credit_card_decrypted(
+                evidence_conn, card_id, None, "failed"
+            )
             try:
                 insert_decrypt_audit(
                     evidence_conn, evidence_id,
@@ -901,6 +982,9 @@ def _decrypt_credit_cards(
                 pass
         except Exception as e:
             summary["failed"] += 1
+            update_credit_card_decrypted(
+                evidence_conn, card_id, None, "failed"
+            )
 
     callbacks.on_log(f"Credit cards: processed {len(rows)} total", "info")
 

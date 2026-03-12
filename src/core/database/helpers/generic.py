@@ -235,6 +235,20 @@ def delete_by_run(
     return conn.total_changes - before
 
 
+def delete_by_evidence(
+    conn: sqlite3.Connection,
+    schema: TableSchema,
+    evidence_id: int,
+) -> int:
+    """Delete all rows for an evidence_id (full re-run support)."""
+    before = conn.total_changes
+    conn.execute(
+        f"DELETE FROM {schema.name} WHERE evidence_id = ?",
+        (evidence_id,),
+    )
+    return conn.total_changes - before
+
+
 def get_distinct_values(
     conn: sqlite3.Connection,
     schema: TableSchema,

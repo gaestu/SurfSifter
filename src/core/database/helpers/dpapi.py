@@ -10,7 +10,7 @@ import sqlite3
 from typing import Any, Dict, Iterable, List, Optional
 
 from ..schema import FilterOp, TABLE_SCHEMAS
-from .generic import delete_by_run, get_rows, insert_row, insert_rows
+from .generic import delete_by_evidence, delete_by_run, get_rows, insert_row, insert_rows
 
 __all__ = [
     # Windows users
@@ -43,6 +43,12 @@ __all__ = [
     "update_credit_card_decrypted",
     "batch_update_credentials_decrypted",
     "batch_update_cookies_decrypted",
+    # Evidence-wide cleanup
+    "delete_windows_users_by_evidence",
+    "delete_dpapi_master_keys_by_evidence",
+    "delete_chromium_app_keys_by_evidence",
+    "delete_decrypt_audit_by_evidence",
+    "reset_decrypt_status_by_evidence",
 ]
 
 
@@ -485,3 +491,62 @@ def batch_update_cookies_decrypted(
     )
     conn.commit()
     return len(params)
+
+
+# =============================================================================
+# Evidence-wide Cleanup (full re-run support)
+# =============================================================================
+
+
+def delete_windows_users_by_evidence(
+    conn: sqlite3.Connection,
+    evidence_id: int,
+) -> int:
+    """Delete all Windows users for an evidence. Returns count deleted."""
+    return delete_by_evidence(conn, TABLE_SCHEMAS["windows_users"], evidence_id)
+
+
+def delete_dpapi_master_keys_by_evidence(
+    conn: sqlite3.Connection,
+    evidence_id: int,
+) -> int:
+    """Delete all DPAPI master keys for an evidence. Returns count deleted."""
+    return delete_by_evidence(conn, TABLE_SCHEMAS["dpapi_master_keys"], evidence_id)
+
+
+def delete_chromium_app_keys_by_evidence(
+    conn: sqlite3.Connection,
+    evidence_id: int,
+) -> int:
+    """Delete all Chromium app keys for an evidence. Returns count deleted."""
+    return delete_by_evidence(conn, TABLE_SCHEMAS["chromium_app_keys"], evidence_id)
+
+
+def delete_decrypt_audit_by_evidence(
+    conn: sqlite3.Connection,
+    evidence_id: int,
+) -> int:
+    """Delete all decrypt audit records for an evidence. Returns count deleted."""
+    return delete_by_evidence(conn, TABLE_SCHEMAS["decrypt_audit"], evidence_id)
+
+
+def reset_decrypt_status_by_evidence(
+    conn: sqlite3.Connection,
+    evidence_id: int,
+) -> None:
+    """Reset decrypt_status and decrypted values on all credential/cookie/credit_card rows."""
+    conn.execute(
+        "UPDATE credentials SET password_value_decrypted = NULL, decrypt_status = NULL "
+        "WHERE evidence_id = ?",
+        (evidence_id,),
+    )
+    conn.execute(
+        "UPDATE cookies SET decrypted_value = NULL, decrypt_status = NULL "
+        "WHERE evidence_id = ?",
+        (evidence_id,),
+    )
+    conn.execute(
+        "UPDATE credit_cards SET card_number_decrypted = NULL, decrypt_status = NULL "
+        "WHERE evidence_id = ?",
+        (evidence_id,),
+    )
