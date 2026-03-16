@@ -18,6 +18,7 @@ Exported Extractors:
 - SafariTopSitesExtractor: Frequently visited sites from TopSites.plist
 - SafariSessionsExtractor: Open windows/tabs and recently closed tabs
 - SafariStorageExtractor: LocalStorage and IndexedDB web storage
+- SafariExtensionsExtractor: Extension metadata (Legacy, App Extension, Web Extension)
 """
 
 from .history import SafariHistoryExtractor
@@ -29,6 +30,7 @@ from .top_sites import SafariTopSitesExtractor
 from .sessions import SafariSessionsExtractor
 from .cache import SafariCacheExtractor
 from .storage import SafariStorageExtractor
+from .extensions import SafariExtensionsExtractor
 
 __all__ = [
     "SafariHistoryExtractor",
@@ -40,4 +42,5 @@ __all__ = [
     "SafariSessionsExtractor",
     "SafariCacheExtractor",
     "SafariStorageExtractor",
+    "SafariExtensionsExtractor",
 ]
