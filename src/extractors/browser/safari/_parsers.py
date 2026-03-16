@@ -971,19 +971,14 @@ def _parse_session_state_archive(blob: bytes) -> List[Dict[str, Any]]:
     seen: Set[int] = set()
     _collect_archive_entries(archive, object_list, collected, seen)
 
-    # Normalize nav_index and remove duplicates while preserving order.
+    # Normalize nav_index while preserving order.
     normalized: List[Dict[str, Any]] = []
-    seen_keys: Set[tuple[str, str]] = set()
     for item in collected:
         url = str(item.get("url") or "").strip()
         if not _is_non_blank_url(url):
             continue
 
         title = str(item.get("title") or "").strip()
-        key = (url, title)
-        if key in seen_keys:
-            continue
-        seen_keys.add(key)
         normalized.append(
             {
                 "url": url,

@@ -382,7 +382,6 @@ class IEFavoritesExtractor(BaseExtractor):
         total_bookmarks = 0
         failed_files = 0
         url_records = []  # Collect URLs for unified urls table
-        seen_urls = set()  # Deduplicate URLs
 
         callbacks.on_progress(0, len(files), "Parsing favorites")
 
@@ -433,8 +432,7 @@ class IEFavoritesExtractor(BaseExtractor):
 
                     # Collect URL for unified urls table (dual-write)
                     url = bookmark["url"]
-                    if url not in seen_urls and not url.startswith(("javascript:", "data:")):
-                        seen_urls.add(url)
+                    if not url.startswith(("javascript:", "data:")):
                         try:
                             parsed = urlparse(url)
                             browser = file_entry.get("browser", "ie")
