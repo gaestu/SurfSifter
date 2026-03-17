@@ -1287,7 +1287,8 @@ class UrlsTab(QWidget):
             message,
         )
 
-        # Refresh data
+        # Refresh filters to reflect new match lists, then refresh data
+        self._populate_filters()
         self.refresh()
 
     def _match_error(self, error_msg: str, generation: int = 0) -> None:
