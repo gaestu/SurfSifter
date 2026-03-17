@@ -483,6 +483,7 @@ class MainWindow(QMainWindow):
             evidence_id,
             case_db_path,
             case_data=self.case_data,
+            defer_load=defer_load,
         )
         # Re-Ingest feature retired - extraction is the supported workflow
         # browser_inventory_tab.reingest_requested.connect(self._on_reingest_requested)
@@ -2543,11 +2544,19 @@ class MainWindow(QMainWindow):
         if widget is None:
             return
 
-        # Check if the widget has a _perform_deferred_load method (lazy loading support)
+        # Primary: deferred loading for first visit
         if hasattr(widget, '_perform_deferred_load') and hasattr(widget, '_load_pending'):
             if widget._load_pending and not getattr(widget, '_data_loaded', False):
                 self.logger.debug("Triggering deferred load for tab index %d", index)
                 QTimer.singleShot(10, widget._perform_deferred_load)
+                return
+
+        # Secondary: stale data refresh (backup for showEvent)
+        if getattr(widget, '_data_stale', False):
+            if hasattr(widget, 'refresh'):
+                widget._data_stale = False
+                self.logger.debug("Triggering stale refresh for tab index %d", index)
+                QTimer.singleShot(10, widget.refresh)
 
     def _on_close_evidence_tab(self, index: int) -> None:
         """Handle closing an evidence tab."""

@@ -10,6 +10,7 @@ import logging
 from pathlib import Path
 from typing import Optional
 
+from PySide6.QtCore import QTimer
 from PySide6.QtWidgets import QTabWidget, QVBoxLayout, QWidget
 
 from app.features.browser_inventory._base import SubtabContext
@@ -68,6 +69,7 @@ class BrowserInventoryTab(QWidget):
         evidence_id: int,
         case_db_path: Path,
         case_data=None,
+        defer_load: bool = False,
         parent=None,
     ):
         super().__init__(parent)
@@ -76,7 +78,9 @@ class BrowserInventoryTab(QWidget):
         self.case_db_path = case_db_path
         self.case_data = case_data
 
-        # Stale data flag for lazy refresh after ingestion
+        # Lazy-load / deferred-load infrastructure
+        self._data_loaded = False
+        self._load_pending = defer_load
         self._data_stale = False
 
         # Build UI
@@ -195,6 +199,8 @@ class BrowserInventoryTab(QWidget):
         Resets lazy loading flags so subtabs refresh on next visit,
         then refreshes the currently visible subtab.
         """
+        self._data_loaded = True
+
         # Mark all subtabs as needing reload
         for subtab in self._all_subtabs:
             subtab.mark_needs_reload()
@@ -204,6 +210,20 @@ class BrowserInventoryTab(QWidget):
         if 0 <= current_index < len(self._all_subtabs):
             self._all_subtabs[current_index].load()
 
+    def refresh(self) -> None:
+        """Refresh all data — called after extraction completes."""
+        self.load_inventory()
+
+    def _perform_deferred_load(self) -> None:
+        """Execute deferred first load when tab becomes visible."""
+        if self._data_loaded:
+            return
+        self._data_loaded = True
+        self._load_pending = False
+        # Load the default (first) subtab
+        if self._all_subtabs and not self._all_subtabs[0].is_loaded:
+            self._all_subtabs[0].load()
+
     def mark_stale(self) -> None:
         """Mark data as stale — will refresh on next showEvent."""
         self._data_stale = True
@@ -211,6 +231,8 @@ class BrowserInventoryTab(QWidget):
     def showEvent(self, event):
         """Override showEvent to refresh data when tab becomes visible."""
         super().showEvent(event)
-        if self._data_stale:
+        if self._load_pending and not self._data_loaded:
+            QTimer.singleShot(10, self._perform_deferred_load)
+        elif self._data_stale and self._data_loaded:
             self._data_stale = False
-            self.load_inventory()
+            QTimer.singleShot(10, self.refresh)
