@@ -1256,6 +1256,14 @@ class UrlsTab(QWidget):
             self.progress_dialog.setLabelText(
                 f"Matching... {progress}%"
             )
+            # Disconnect canceled before hitting 100%: autoClose emits
+            # canceled which would bump _match_worker_generation and
+            # cause _match_finished to silently discard results (#35).
+            if progress >= 100:
+                try:
+                    self.progress_dialog.canceled.disconnect(self._cancel_match_worker)
+                except (RuntimeError, TypeError):
+                    pass
             self.progress_dialog.setValue(progress)
 
     def _match_finished(self, results: Dict[str, int], generation: int = 0) -> None:
