@@ -443,6 +443,169 @@ def get_bookmark_stats(bookmarks: List[SafariBookmark]) -> Dict[str, Any]:
 
 
 # =============================================================================
+# Reading List Parsing
+# =============================================================================
+
+@dataclass
+class SafariReadingListItem:
+    """Safari Reading List entry from Bookmarks.plist."""
+    url: str
+    title: str
+    date_added: Optional[datetime]
+    date_added_utc: Optional[str]
+    date_last_fetched: Optional[datetime]
+    date_last_fetched_utc: Optional[str]
+    date_last_viewed: Optional[datetime]
+    date_last_viewed_utc: Optional[str]
+    preview_text: Optional[str]
+    fetch_result: Optional[int]
+
+
+def _datetime_to_utc_iso(dt: Optional[datetime]) -> Optional[str]:
+    """Convert a datetime (possibly from plistlib) to UTC ISO 8601 string."""
+    if dt is None:
+        return None
+    try:
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt.astimezone(timezone.utc).isoformat()
+    except (ValueError, OverflowError):
+        return None
+
+
+def parse_reading_list(file_path: Path) -> List[SafariReadingListItem]:
+    """
+    Parse Safari Reading List entries from Bookmarks.plist.
+
+    The Reading List is stored within Bookmarks.plist as a folder node
+    with Title == "com.apple.ReadingList". Each child is a
+    WebBookmarkTypeLeaf with additional metadata in a "ReadingList"
+    sub-dictionary.
+
+    Args:
+        file_path: Path to Bookmarks.plist
+
+    Returns:
+        List of SafariReadingListItem objects
+    """
+    items: List[SafariReadingListItem] = []
+
+    try:
+        with open(file_path, "rb") as f:
+            plist_data = plistlib.load(f)
+    except Exception:
+        return items
+
+    # Find the Reading List folder node
+    reading_list_children = _find_reading_list_children(plist_data)
+
+    for child in reading_list_children:
+        if not isinstance(child, dict):
+            continue
+        if child.get("WebBookmarkType") != "WebBookmarkTypeLeaf":
+            continue
+
+        url = child.get("URLString", "") or ""
+        if not url:
+            continue
+
+        uri_dict = child.get("URIDictionary", {})
+        title = uri_dict.get("title", "") if isinstance(uri_dict, dict) else ""
+
+        rl_meta = child.get("ReadingList", {})
+        if not isinstance(rl_meta, dict):
+            rl_meta = {}
+
+        date_added = rl_meta.get("DateAdded")
+        date_added = date_added if isinstance(date_added, datetime) else None
+        date_last_fetched = rl_meta.get("DateLastFetched")
+        date_last_fetched = date_last_fetched if isinstance(date_last_fetched, datetime) else None
+        date_last_viewed = rl_meta.get("DateLastViewed")
+        date_last_viewed = date_last_viewed if isinstance(date_last_viewed, datetime) else None
+        preview_text = rl_meta.get("PreviewText")
+        fetch_result = rl_meta.get("FetchResult")
+
+        items.append(SafariReadingListItem(
+            url=url,
+            title=title or "",
+            date_added=date_added,
+            date_added_utc=_datetime_to_utc_iso(date_added),
+            date_last_fetched=date_last_fetched,
+            date_last_fetched_utc=_datetime_to_utc_iso(date_last_fetched),
+            date_last_viewed=date_last_viewed,
+            date_last_viewed_utc=_datetime_to_utc_iso(date_last_viewed),
+            preview_text=preview_text if isinstance(preview_text, str) else None,
+            fetch_result=fetch_result if isinstance(fetch_result, int) else None,
+        ))
+
+    return items
+
+
+def _find_reading_list_children(node: Any) -> List[Any]:
+    """
+    Walk the plist tree to find the Reading List folder's children.
+
+    The Reading List folder has Title == "com.apple.ReadingList"
+    and WebBookmarkType == "WebBookmarkTypeList".
+    """
+    if not isinstance(node, dict):
+        return []
+
+    # Check if this node IS the Reading List folder
+    if (
+        node.get("WebBookmarkType") == "WebBookmarkTypeList"
+        and node.get("Title") == "com.apple.ReadingList"
+    ):
+        children = node.get("Children", [])
+        return children if isinstance(children, list) else []
+
+    # Recurse into children
+    children = node.get("Children", [])
+    if isinstance(children, list):
+        for child in children:
+            result = _find_reading_list_children(child)
+            if result:
+                return result
+
+    return []
+
+
+def get_reading_list_stats(items: List[SafariReadingListItem]) -> Dict[str, Any]:
+    """
+    Get statistics about parsed Safari Reading List items.
+
+    Args:
+        items: List of SafariReadingListItem objects
+
+    Returns:
+        Statistics dictionary
+    """
+    if not items:
+        return {
+            "total_items": 0,
+            "unique_urls": 0,
+            "fetched_count": 0,
+            "unfetched_count": 0,
+            "failed_count": 0,
+        }
+
+    unique_urls = {item.url for item in items}
+    # Apple FetchResult values: None/0 = not yet fetched, 1 = success, >1 = error.
+    # Negative values are not expected but would fall into "failed" for safety.
+    fetched = sum(1 for item in items if item.fetch_result == 1)
+    unfetched = sum(1 for item in items if item.fetch_result is None or item.fetch_result == 0)
+    failed = sum(1 for item in items if item.fetch_result is not None and item.fetch_result != 0 and item.fetch_result != 1)
+
+    return {
+        "total_items": len(items),
+        "unique_urls": len(unique_urls),
+        "fetched_count": fetched,
+        "unfetched_count": unfetched,
+        "failed_count": failed,
+    }
+
+
+# =============================================================================
 # Downloads Parsing
 # =============================================================================
 

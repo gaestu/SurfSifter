@@ -247,6 +247,14 @@ SAFARI_ARTIFACTS: Dict[str, SafariArtifactInfo] = {
         ],
         "root_type": "profile",
     },
+    "reading_list": {
+        # Reading List is stored inside Bookmarks.plist
+        # Same source file as bookmarks, but separate artifact for independent extraction
+        "patterns": [
+            "Bookmarks.plist",
+        ],
+        "root_type": "profile",
+    },
     "recently_closed_tabs": {
         # Recently closed tabs — direct evidence of browsing activity
         "patterns": [
