@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import sqlite3
 from collections import defaultdict
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import urlparse
@@ -49,6 +50,22 @@ class UrlActivityTimelineModule(BaseReportModule):
     def get_filter_fields(self) -> List[FilterField]:
         """Return filter fields for URL activity timeline configuration."""
         return [
+            FilterField(
+                key="date_from",
+                label="From Date",
+                filter_type=FilterType.TEXT,
+                default="",
+                help_text="Start date filter (YYYY-MM-DD). Leave empty for no limit.",
+                required=False,
+            ),
+            FilterField(
+                key="date_to",
+                label="To Date",
+                filter_type=FilterType.TEXT,
+                default="",
+                help_text="End date filter (YYYY-MM-DD). Leave empty for no limit.",
+                required=False,
+            ),
             FilterField(
                 key="tag_filter",
                 label="Filter by Tag",
@@ -215,10 +232,13 @@ class UrlActivityTimelineModule(BaseReportModule):
         urls_per_domain = config.get("urls_per_domain", "5")
         sort_by = config.get("sort_by", "count_desc")
         max_domains = config.get("max_domains", "50")
+        date_from = config.get("date_from", "")
+        date_to = config.get("date_to", "")
 
         # Query URL events from timeline (browser_visit events)
         events = self._query_url_events(
-            db_conn, evidence_id, tag_filter, match_filter, domain_filter
+            db_conn, evidence_id, tag_filter, match_filter, domain_filter,
+            date_from, date_to,
         )
 
         # Aggregate by domain
@@ -241,7 +261,8 @@ class UrlActivityTimelineModule(BaseReportModule):
 
         # Build filter description
         filter_desc = self._build_filter_description(
-            tag_filter, match_filter, domain_filter, min_occurrences, translations
+            tag_filter, match_filter, domain_filter, min_occurrences, translations,
+            date_from, date_to,
         )
 
         # Load and render template
@@ -270,11 +291,36 @@ class UrlActivityTimelineModule(BaseReportModule):
         tag_filter: str,
         match_filter: str,
         domain_filter: str,
+        date_from: str = "",
+        date_to: str = "",
     ) -> List[Dict[str, Any]]:
         """Query URL-related timeline events."""
         # Start with browser_history events (they have URLs)
         # Also include url_discovered events
-        query = """
+        conditions = [
+            "t.evidence_id = ?",
+            "t.kind IN ('browser_visit', 'url_discovered')",
+            "t.ts_utc IS NOT NULL",
+        ]
+        params: List[Any] = [evidence_id]
+
+        # Date range filtering (validate YYYY-MM-DD format)
+        if date_from:
+            try:
+                datetime.strptime(date_from[:10], "%Y-%m-%d")
+                conditions.append("t.ts_utc >= ?")
+                params.append(date_from[:10])
+            except ValueError:
+                pass  # Skip invalid date
+        if date_to:
+            try:
+                datetime.strptime(date_to[:10], "%Y-%m-%d")
+                conditions.append("t.ts_utc <= ?")
+                params.append(date_to[:10] + "T23:59:59")
+            except ValueError:
+                pass  # Skip invalid date
+
+        query = f"""
             SELECT
                 t.ts_utc,
                 t.kind,
@@ -293,14 +339,12 @@ class UrlActivityTimelineModule(BaseReportModule):
             LEFT JOIN urls u ON t.ref_table = 'urls'
                 AND t.ref_id = u.id
                 AND u.evidence_id = ?
-            WHERE t.evidence_id = ?
-            AND t.kind IN ('browser_visit', 'url_discovered')
-            AND t.ts_utc IS NOT NULL
+            WHERE {' AND '.join(conditions)}
             ORDER BY t.ts_utc ASC
         """
 
         rows = db_conn.execute(
-            query, (evidence_id, evidence_id, evidence_id)
+            query, (evidence_id, evidence_id, *params)
         ).fetchall()
 
         events = []
@@ -545,10 +589,23 @@ class UrlActivityTimelineModule(BaseReportModule):
         domain_filter: str,
         min_occurrences: int,
         t: Dict[str, str] | None = None,
+        date_from: str = "",
+        date_to: str = "",
     ) -> str:
         """Build human-readable filter description."""
         t = t or {}
         parts = []
+
+        if date_from and date_to:
+            parts.append(f"{date_from[:10]} \u2192 {date_to[:10]}")
+        elif date_from:
+            parts.append(
+                t.get("filter_from_date", "from {date}").format(date=date_from[:10])
+            )
+        elif date_to:
+            parts.append(
+                t.get("filter_to_date", "until {date}").format(date=date_to[:10])
+            )
 
         if tag_filter == self.ANY_TAG:
             parts.append(t.get("filter_tagged_urls", "tagged URLs"))
