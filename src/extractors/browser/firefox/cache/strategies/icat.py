@@ -15,6 +15,7 @@ from typing import List, Optional, Tuple, Any
 
 from core.logging import get_logger
 from extractors.system.file_list.sleuthkit_utils import get_sleuthkit_bin
+from core.subprocess_env import clean_subprocess_env
 from .base import (
     ExtractionStrategy,
     ExtractionContext,
@@ -251,6 +252,7 @@ class IcatExtractionStrategy(ExtractionStrategy):
                     stdout=f,
                     stderr=subprocess.PIPE,
                     timeout=60,  # 1 minute timeout per file
+                    env=clean_subprocess_env(),
                 )
 
             if result.returncode != 0:

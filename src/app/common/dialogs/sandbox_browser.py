@@ -28,6 +28,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional, List
 
+from core.subprocess_env import clean_subprocess_env
 from PySide6.QtCore import Qt, QUrl, Signal
 from PySide6.QtWidgets import (
     QDialog,
@@ -278,7 +279,7 @@ def open_url_external_sandboxed(
             method = "disposable-profile"
 
         logger.info("Opening URL in sandbox: %s (method=%s, browser=%s)", url[:100], method, browser)
-        subprocess.Popen(cmd, start_new_session=True)
+        subprocess.Popen(cmd, start_new_session=True, env=clean_subprocess_env())
 
         if audit_callback and settings.log_opens:
             audit_callback(url, method, browser)

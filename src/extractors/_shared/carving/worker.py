@@ -17,6 +17,7 @@ from typing import Dict, List, Optional, Any, Generator, Tuple
 
 from extractors.callbacks import ExtractorCallbacks
 from core.logging import get_logger
+from core.subprocess_env import clean_subprocess_env
 
 LOGGER = get_logger("extractors._shared.carving.worker")
 
@@ -69,7 +70,8 @@ def _resolve_input_source(evidence_fs) -> Generator[Tuple[str, str], None, None]
                 subprocess.run(
                     [ewfmount_path, str(ewf_paths[0]), str(temp_mount)],
                     check=True,
-                    capture_output=True
+                    capture_output=True,
+                    env=clean_subprocess_env(),
                 )
 
                 # Find raw image (usually 'ewf1')
@@ -88,7 +90,8 @@ def _resolve_input_source(evidence_fs) -> Generator[Tuple[str, str], None, None]
                 yield str(ewf_paths[0]), "ewf"
             finally:
                 # Unmount
-                subprocess.run(["fusermount", "-u", str(temp_mount)], check=False)
+                subprocess.run(["fusermount", "-u", str(temp_mount)], check=False,
+                               env=clean_subprocess_env())
                 try:
                     temp_mount.rmdir()
                 except OSError:
@@ -221,6 +224,7 @@ def run_carving_extraction(
                 errors="replace",  # Handle non-utf8 output from tools
                 check=False,
                 timeout=timeout,
+                env=clean_subprocess_env(),
             )
 
             if completed.returncode != 0:
