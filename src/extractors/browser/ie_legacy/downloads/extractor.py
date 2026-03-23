@@ -365,7 +365,6 @@ class IEDownloadsExtractor(BaseExtractor):
 
         total_downloads = 0
         url_records = []  # Collect URLs for unified urls table
-        seen_urls = set()  # Deduplicate URLs
 
         try:
             with WebCacheReader(db_path) as reader:
@@ -456,22 +455,20 @@ class IEDownloadsExtractor(BaseExtractor):
                     total_downloads += 1
 
                     # Collect URL for unified urls table (dual-write)
-                    if url not in seen_urls:
-                        seen_urls.add(url)
-                        try:
-                            parsed = urlparse(url)
-                            url_records.append({
-                                "url": url,
-                                "domain": parsed.netloc or None,
-                                "scheme": parsed.scheme or None,
-                                "discovered_by": discovered_by,
-                                "run_id": run_id,
-                                "source_path": source_path,
-                                "context": f"download:{browser}:{user}",
-                                "first_seen_utc": start_time_iso,
-                            })
-                        except Exception:
-                            pass
+                    try:
+                        parsed = urlparse(url)
+                        url_records.append({
+                            "url": url,
+                            "domain": parsed.netloc or None,
+                            "scheme": parsed.scheme or None,
+                            "discovered_by": discovered_by,
+                            "run_id": run_id,
+                            "source_path": source_path,
+                            "context": f"download:{browser}:{user}",
+                            "first_seen_utc": start_time_iso,
+                        })
+                    except Exception:
+                        pass
 
         except Exception as e:
             LOGGER.error("Failed to read WebCache %s: %s", db_path, e, exc_info=True)

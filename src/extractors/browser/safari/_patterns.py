@@ -177,6 +177,15 @@ SAFARI_ARTIFACTS: Dict[str, SafariArtifactInfo] = {
         ],
         "root_type": "profile",
     },
+    "app_extensions": {
+        # App Extension and Web Extension bundles (macOS 10.12+)
+        # These live outside Safari profile tree, discovered via file_list
+        "patterns": [
+            "*.appex/Contents/Info.plist",
+            "*.appex/Contents/Resources/manifest.json",
+        ],
+        "root_type": "profile",  # Not used for discovery (uses file_list), but needed for type
+    },
     "local_storage": {
         # Safari Local Storage — per-origin SQLite files
         # Legacy: ~/Library/Safari/LocalStorage/{scheme}_{host}_{port}.localstorage
@@ -235,6 +244,14 @@ SAFARI_ARTIFACTS: Dict[str, SafariArtifactInfo] = {
         # Frequently visited sites
         "patterns": [
             "TopSites.plist",
+        ],
+        "root_type": "profile",
+    },
+    "reading_list": {
+        # Reading List is stored inside Bookmarks.plist
+        # Same source file as bookmarks, but separate artifact for independent extraction
+        "patterns": [
+            "Bookmarks.plist",
         ],
         "root_type": "profile",
     },

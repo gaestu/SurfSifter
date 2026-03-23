@@ -30,6 +30,7 @@ from PySide6.QtWidgets import (
 
 from app.config.settings import AppSettings, GeneralSettings, HashSettings, NetworkSettings, ToolPaths, ReportSettings
 from core.tool_discovery import get_tool_version
+from core.subprocess_env import clean_subprocess_env
 import json
 import shutil
 import subprocess
@@ -509,11 +510,11 @@ class PreferencesDialog(QDialog):
             # Use xdg-open on Linux, open on macOS, start on Windows
             import sys
             if sys.platform.startswith('linux'):
-                subprocess.Popen(['xdg-open', str(rule_file)])
+                subprocess.Popen(['xdg-open', str(rule_file)], env=clean_subprocess_env())
             elif sys.platform == 'darwin':
-                subprocess.Popen(['open', str(rule_file)])
+                subprocess.Popen(['open', str(rule_file)], env=clean_subprocess_env())
             elif sys.platform == 'win32':
-                subprocess.Popen(['start', '', str(rule_file)], shell=True)
+                subprocess.Popen(['start', '', str(rule_file)], shell=True, env=clean_subprocess_env())
             else:
                 # Fallback: use Qt's openUrl
                 QDesktopServices.openUrl(QUrl.fromLocalFile(str(rule_file)))

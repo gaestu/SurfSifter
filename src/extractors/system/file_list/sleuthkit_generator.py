@@ -31,6 +31,7 @@ from typing import Callable, List, Optional
 
 from .bodyfile_parser import BodyfileEntry, BodyfileParser
 from .sleuthkit_utils import get_sleuthkit_bin
+from core.subprocess_env import clean_subprocess_env
 
 try:
     from core.logging import get_logger
@@ -38,7 +39,11 @@ try:
 except Exception:
     logger = logging.getLogger(__name__)
 
-__all__ = ["SleuthKitFileListGenerator", "GenerationResult"]
+try:
+    from core.logging import get_logger
+    logger = get_logger("extractors.system.file_list.sleuthkit_generator")
+except Exception:
+    logger = logging.getLogger(__name__)
 
 
 # Indexes to drop before bulk insert and recreate after
@@ -169,6 +174,7 @@ class SleuthKitFileListGenerator:
                 capture_output=True,
                 text=True,
                 timeout=30,
+                env=clean_subprocess_env(),
             )
         except subprocess.TimeoutExpired:
             logger.warning("mmls timed out, falling back to direct fls")
@@ -730,6 +736,7 @@ class SleuthKitFileListGenerator:
                 stderr=subprocess.PIPE,
                 text=True,
                 bufsize=1,  # Line buffered
+                env=clean_subprocess_env(),
             )
         except FileNotFoundError:
             raise RuntimeError(f"fls command not found at {self._fls_path}")

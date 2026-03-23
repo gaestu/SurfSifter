@@ -483,59 +483,27 @@ class IEHistoryExtractor(BaseExtractor):
                 "info"
             )
 
-            # Build URL records with proper first_seen/last_seen aggregation
-            url_timestamps: Dict[str, Dict[str, Any]] = {}
-            for r in records:
-                url = r["url"]
-                visit_time = r.get("visit_time_utc")
-
-                if url not in url_timestamps:
-                    url_timestamps[url] = {
-                        "first_seen": visit_time,
-                        "last_seen": visit_time,
-                        "visit_count": r.get("visit_count", 1),
-                    }
-                else:
-                    existing = url_timestamps[url]
-                    # Update first_seen if earlier
-                    if visit_time and existing["first_seen"]:
-                        if visit_time < existing["first_seen"]:
-                            existing["first_seen"] = visit_time
-                    elif visit_time and not existing["first_seen"]:
-                        existing["first_seen"] = visit_time
-
-                    # Update last_seen if later
-                    if visit_time and existing["last_seen"]:
-                        if visit_time > existing["last_seen"]:
-                            existing["last_seen"] = visit_time
-                    elif visit_time and not existing["last_seen"]:
-                        existing["last_seen"] = visit_time
-
-                    # Accumulate visit count
-                    existing["visit_count"] += r.get("visit_count", 1)
-
-            # Insert unique URLs to urls table
+            # Build URL records — one per history record (no aggregation)
             url_records = []
-            for url, timestamps in url_timestamps.items():
-                # Extract domain and scheme from URL
+            for r in records:
                 domain = None
                 scheme = None
                 try:
-                    parsed = urlparse(url)
+                    parsed = urlparse(r["url"])
                     scheme = parsed.scheme or None
                     domain = parsed.netloc or None
                 except Exception:
                     pass
 
                 url_records.append({
-                    "url": url,
+                    "url": r["url"],
                     "domain": domain,
                     "scheme": scheme,
                     "discovered_by": discovered_by,
                     "source_path": source_path,
                     "run_id": run_id,
-                    "first_seen_utc": timestamps["first_seen"],
-                    "last_seen_utc": timestamps["last_seen"],
+                    "first_seen_utc": r.get("visit_time_utc"),
+                    "last_seen_utc": r.get("visit_time_utc"),
                 })
 
             if url_records:

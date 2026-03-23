@@ -14,6 +14,7 @@ from PySide6.QtWidgets import QWidget
 from ...base import BaseExtractor, ExtractorMetadata, ExtractorCallbacks
 from core.tool_discovery import discover_tools
 from core.logging import get_logger
+from core.subprocess_env import clean_subprocess_env
 from core.database import (
     insert_urls,
     insert_emails,
@@ -289,6 +290,7 @@ class BulkExtractorExtractor(BaseExtractor):
                 stderr=subprocess.PIPE,
                 text=True,
                 bufsize=1,
+                env=clean_subprocess_env(),
             )
             stdout_lines: list[str] = []
             for line in process.stdout:

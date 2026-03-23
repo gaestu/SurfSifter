@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import sqlite3
 import plistlib
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import List, Optional, Dict, Any, Iterator, Set
@@ -439,6 +439,169 @@ def get_bookmark_stats(bookmarks: List[SafariBookmark]) -> Dict[str, Any]:
     return {
         "total_bookmarks": len(actual_bookmarks),
         "unique_folders": len(folders),
+    }
+
+
+# =============================================================================
+# Reading List Parsing
+# =============================================================================
+
+@dataclass
+class SafariReadingListItem:
+    """Safari Reading List entry from Bookmarks.plist."""
+    url: str
+    title: str
+    date_added: Optional[datetime]
+    date_added_utc: Optional[str]
+    date_last_fetched: Optional[datetime]
+    date_last_fetched_utc: Optional[str]
+    date_last_viewed: Optional[datetime]
+    date_last_viewed_utc: Optional[str]
+    preview_text: Optional[str]
+    fetch_result: Optional[int]
+
+
+def _datetime_to_utc_iso(dt: Optional[datetime]) -> Optional[str]:
+    """Convert a datetime (possibly from plistlib) to UTC ISO 8601 string."""
+    if dt is None:
+        return None
+    try:
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt.astimezone(timezone.utc).isoformat()
+    except (ValueError, OverflowError):
+        return None
+
+
+def parse_reading_list(file_path: Path) -> List[SafariReadingListItem]:
+    """
+    Parse Safari Reading List entries from Bookmarks.plist.
+
+    The Reading List is stored within Bookmarks.plist as a folder node
+    with Title == "com.apple.ReadingList". Each child is a
+    WebBookmarkTypeLeaf with additional metadata in a "ReadingList"
+    sub-dictionary.
+
+    Args:
+        file_path: Path to Bookmarks.plist
+
+    Returns:
+        List of SafariReadingListItem objects
+    """
+    items: List[SafariReadingListItem] = []
+
+    try:
+        with open(file_path, "rb") as f:
+            plist_data = plistlib.load(f)
+    except Exception:
+        return items
+
+    # Find the Reading List folder node
+    reading_list_children = _find_reading_list_children(plist_data)
+
+    for child in reading_list_children:
+        if not isinstance(child, dict):
+            continue
+        if child.get("WebBookmarkType") != "WebBookmarkTypeLeaf":
+            continue
+
+        url = child.get("URLString", "") or ""
+        if not url:
+            continue
+
+        uri_dict = child.get("URIDictionary", {})
+        title = uri_dict.get("title", "") if isinstance(uri_dict, dict) else ""
+
+        rl_meta = child.get("ReadingList", {})
+        if not isinstance(rl_meta, dict):
+            rl_meta = {}
+
+        date_added = rl_meta.get("DateAdded")
+        date_added = date_added if isinstance(date_added, datetime) else None
+        date_last_fetched = rl_meta.get("DateLastFetched")
+        date_last_fetched = date_last_fetched if isinstance(date_last_fetched, datetime) else None
+        date_last_viewed = rl_meta.get("DateLastViewed")
+        date_last_viewed = date_last_viewed if isinstance(date_last_viewed, datetime) else None
+        preview_text = rl_meta.get("PreviewText")
+        fetch_result = rl_meta.get("FetchResult")
+
+        items.append(SafariReadingListItem(
+            url=url,
+            title=title or "",
+            date_added=date_added,
+            date_added_utc=_datetime_to_utc_iso(date_added),
+            date_last_fetched=date_last_fetched,
+            date_last_fetched_utc=_datetime_to_utc_iso(date_last_fetched),
+            date_last_viewed=date_last_viewed,
+            date_last_viewed_utc=_datetime_to_utc_iso(date_last_viewed),
+            preview_text=preview_text if isinstance(preview_text, str) else None,
+            fetch_result=fetch_result if isinstance(fetch_result, int) else None,
+        ))
+
+    return items
+
+
+def _find_reading_list_children(node: Any) -> List[Any]:
+    """
+    Walk the plist tree to find the Reading List folder's children.
+
+    The Reading List folder has Title == "com.apple.ReadingList"
+    and WebBookmarkType == "WebBookmarkTypeList".
+    """
+    if not isinstance(node, dict):
+        return []
+
+    # Check if this node IS the Reading List folder
+    if (
+        node.get("WebBookmarkType") == "WebBookmarkTypeList"
+        and node.get("Title") == "com.apple.ReadingList"
+    ):
+        children = node.get("Children", [])
+        return children if isinstance(children, list) else []
+
+    # Recurse into children
+    children = node.get("Children", [])
+    if isinstance(children, list):
+        for child in children:
+            result = _find_reading_list_children(child)
+            if result:
+                return result
+
+    return []
+
+
+def get_reading_list_stats(items: List[SafariReadingListItem]) -> Dict[str, Any]:
+    """
+    Get statistics about parsed Safari Reading List items.
+
+    Args:
+        items: List of SafariReadingListItem objects
+
+    Returns:
+        Statistics dictionary
+    """
+    if not items:
+        return {
+            "total_items": 0,
+            "unique_urls": 0,
+            "fetched_count": 0,
+            "unfetched_count": 0,
+            "failed_count": 0,
+        }
+
+    unique_urls = {item.url for item in items}
+    # Apple FetchResult values: None/0 = not yet fetched, 1 = success, >1 = error.
+    # Negative values are not expected but would fall into "failed" for safety.
+    fetched = sum(1 for item in items if item.fetch_result == 1)
+    unfetched = sum(1 for item in items if item.fetch_result is None or item.fetch_result == 0)
+    failed = sum(1 for item in items if item.fetch_result is not None and item.fetch_result != 0 and item.fetch_result != 1)
+
+    return {
+        "total_items": len(items),
+        "unique_urls": len(unique_urls),
+        "fetched_count": fetched,
+        "unfetched_count": unfetched,
+        "failed_count": failed,
     }
 
 
@@ -971,19 +1134,14 @@ def _parse_session_state_archive(blob: bytes) -> List[Dict[str, Any]]:
     seen: Set[int] = set()
     _collect_archive_entries(archive, object_list, collected, seen)
 
-    # Normalize nav_index and remove duplicates while preserving order.
+    # Normalize nav_index while preserving order.
     normalized: List[Dict[str, Any]] = []
-    seen_keys: Set[tuple[str, str]] = set()
     for item in collected:
         url = str(item.get("url") or "").strip()
         if not _is_non_blank_url(url):
             continue
 
         title = str(item.get("title") or "").strip()
-        key = (url, title)
-        if key in seen_keys:
-            continue
-        seen_keys.add(key)
         normalized.append(
             {
                 "url": url,
@@ -1190,3 +1348,301 @@ def _is_non_blank_url(url: str) -> bool:
     if candidate.lower() == "about:blank":
         return False
     return True
+
+
+# =============================================================================
+# Extension Parsing
+# =============================================================================
+
+@dataclass
+class SafariExtension:
+    """Safari extension metadata — unified across all 3 eras."""
+    bundle_identifier: str       # → extension_id
+    name: str                    # display name
+    version: Optional[str] = None
+    description: Optional[str] = None
+    author: Optional[str] = None
+    website: Optional[str] = None
+    enabled: Optional[bool] = None         # Legacy only
+    added_date: Optional[datetime] = None  # Legacy only (Cocoa NSDate)
+    added_date_utc: Optional[str] = None
+    apple_signed: Optional[bool] = None    # Legacy only
+    developer_identifier: Optional[str] = None
+    archive_file_name: Optional[str] = None  # Legacy .safariextz filename
+    bundle_directory_name: Optional[str] = None
+    permissions: Optional[str] = None       # JSON: domains/permissions
+    host_permissions: Optional[str] = None  # Web Extension host_permissions
+    manifest_version: Optional[int] = None  # Web Extension
+    content_scripts: Optional[str] = None   # Web Extension content_scripts JSON
+    extension_era: str = "legacy"           # "legacy" | "app_extension" | "web_extension"
+    extension_point: Optional[str] = None   # NSExtensionPointIdentifier
+    unknown_keys: list = field(default_factory=list)  # keys not in known sets
+
+
+def parse_extensions_plist(file_path: Path) -> List[SafariExtension]:
+    """Parse Safari Extensions.plist for installed extension entries.
+
+    Args:
+        file_path: Path to Extensions.plist (binary or XML plist)
+
+    Returns:
+        List of SafariExtension objects (may be empty on error/no extensions)
+    """
+    from .extensions._schemas import KNOWN_EXTENSION_ENTRY_KEYS
+
+    try:
+        with open(file_path, "rb") as f:
+            data = plistlib.load(f)
+    except Exception:
+        return []
+
+    if not isinstance(data, dict):
+        return []
+
+    extensions_list = data.get("Installed Extensions", [])
+    if not isinstance(extensions_list, list):
+        return []
+
+    results = []
+    for entry in extensions_list:
+        if not isinstance(entry, dict):
+            continue
+
+        bundle_id = entry.get("Bundle Identifier", "")
+        if not bundle_id:
+            continue
+
+        # Collect unknown keys
+        unknown = [k for k in entry if k not in KNOWN_EXTENSION_ENTRY_KEYS]
+
+        # Parse Added Date (Cocoa NSDate)
+        added_date_raw = entry.get("Added Date")
+        added_dt = None
+        added_utc = None
+        if isinstance(added_date_raw, datetime):
+            added_dt = added_date_raw.replace(tzinfo=timezone.utc) if added_date_raw.tzinfo is None else added_date_raw
+            added_utc = added_dt.isoformat()
+        elif isinstance(added_date_raw, (int, float)):
+            added_dt = cocoa_to_datetime(added_date_raw)
+            added_utc = cocoa_to_iso(added_date_raw)
+
+        name = entry.get("Archive File Name", "")
+        if name and name.endswith(".safariextz"):
+            name = name[:-len(".safariextz")]
+        if not name:
+            name = entry.get("Bundle Directory Name", bundle_id)
+
+        results.append(SafariExtension(
+            bundle_identifier=bundle_id,
+            name=name,
+            version=entry.get("Bundle Version"),
+            enabled=entry.get("Enabled"),
+            added_date=added_dt,
+            added_date_utc=added_utc,
+            apple_signed=entry.get("Apple-signed"),
+            developer_identifier=entry.get("Developer Identifier"),
+            archive_file_name=entry.get("Archive File Name"),
+            bundle_directory_name=entry.get("Bundle Directory Name"),
+            extension_era="legacy",
+            unknown_keys=unknown,
+        ))
+
+    return results
+
+
+def parse_safariextz_info(info_plist_path: Path) -> Optional[SafariExtension]:
+    """Parse Info.plist from inside a .safariextz bundle for metadata enrichment.
+
+    Args:
+        info_plist_path: Path to the extracted Info.plist from .safariextz
+
+    Returns:
+        SafariExtension with metadata or None if unreadable
+    """
+    from .extensions._schemas import KNOWN_SAFARIEXTZ_INFO_KEYS
+
+    try:
+        with open(info_plist_path, "rb") as f:
+            data = plistlib.load(f)
+    except Exception:
+        return None
+
+    if not isinstance(data, dict):
+        return None
+
+    bundle_id = data.get("CFBundleIdentifier", "")
+    if not bundle_id:
+        return None
+
+    unknown = [k for k in data if k not in KNOWN_SAFARIEXTZ_INFO_KEYS]
+
+    # Extract permissions
+    permissions_data = data.get("Permissions")
+    permissions_json = None
+    if permissions_data:
+        import json as _json
+        try:
+            permissions_json = _json.dumps(permissions_data)
+        except (TypeError, ValueError):
+            permissions_json = str(permissions_data)
+
+    return SafariExtension(
+        bundle_identifier=bundle_id,
+        name=data.get("CFBundleDisplayName", data.get("CFBundleName", bundle_id)),
+        version=data.get("CFBundleShortVersionString", data.get("CFBundleVersion")),
+        description=data.get("Description"),
+        author=data.get("Author"),
+        website=data.get("Website"),
+        permissions=permissions_json,
+        extension_era="legacy",
+        unknown_keys=unknown,
+    )
+
+
+def parse_appex_info_plist(info_plist_path: Path) -> Optional[SafariExtension]:
+    """Parse .appex/Contents/Info.plist for App Extension metadata.
+
+    Returns None if this is not a Safari extension (checks NSExtensionPointIdentifier).
+
+    Args:
+        info_plist_path: Path to Info.plist inside .appex/Contents/
+
+    Returns:
+        SafariExtension or None if not Safari-related
+    """
+    from .extensions._schemas import (
+        KNOWN_NSEXTENSION_KEYS, KNOWN_APPEX_INFO_KEYS,
+        SAFARI_EXTENSION_POINT_IDENTIFIERS,
+    )
+
+    try:
+        with open(info_plist_path, "rb") as f:
+            data = plistlib.load(f)
+    except Exception:
+        return None
+
+    if not isinstance(data, dict):
+        return None
+
+    ns_ext = data.get("NSExtension", {})
+    if not isinstance(ns_ext, dict):
+        return None
+
+    ext_point = ns_ext.get("NSExtensionPointIdentifier", "")
+    if ext_point not in SAFARI_EXTENSION_POINT_IDENTIFIERS:
+        return None
+
+    bundle_id = data.get("CFBundleIdentifier", "")
+    if not bundle_id:
+        return None
+
+    # Collect unknown keys
+    unknown_top = [k for k in data if k not in KNOWN_APPEX_INFO_KEYS]
+    unknown_ns = [k for k in ns_ext if k not in KNOWN_NSEXTENSION_KEYS]
+    unknown = unknown_top + [f"NSExtension.{k}" for k in unknown_ns]
+
+    # Extract SFSafariWebsiteAccess permissions
+    website_access = ns_ext.get("SFSafariWebsiteAccess", {})
+    permissions_json = None
+    if website_access:
+        import json as _json
+        try:
+            permissions_json = _json.dumps(website_access)
+        except (TypeError, ValueError):
+            pass
+
+    return SafariExtension(
+        bundle_identifier=bundle_id,
+        name=data.get("CFBundleDisplayName", data.get("CFBundleName", bundle_id)),
+        version=data.get("CFBundleShortVersionString", data.get("CFBundleVersion")),
+        description=data.get("NSHumanReadableCopyright"),
+        extension_era="app_extension",
+        extension_point=ext_point,
+        permissions=permissions_json,
+        unknown_keys=unknown,
+    )
+
+
+def parse_webextension_manifest(
+    manifest_path: Path,
+    bundle_info: Optional[SafariExtension] = None,
+) -> Optional[SafariExtension]:
+    """Parse manifest.json from a Safari Web Extension inside .appex.
+
+    If bundle_info is provided (from parent .appex Info.plist), merges
+    bundle metadata with manifest data.
+
+    Args:
+        manifest_path: Path to manifest.json
+        bundle_info: Optional SafariExtension from parent .appex Info.plist
+
+    Returns:
+        SafariExtension or None if unreadable
+    """
+    import json as _json
+    from .extensions._schemas import KNOWN_MANIFEST_KEYS
+
+    try:
+        with open(manifest_path, "r", encoding="utf-8") as f:
+            data = _json.load(f)
+    except Exception:
+        return None
+
+    if not isinstance(data, dict):
+        return None
+
+    unknown = [k for k in data if k not in KNOWN_MANIFEST_KEYS]
+
+    # Build permissions strings
+    permissions = data.get("permissions", [])
+    host_permissions = data.get("host_permissions", [])
+    content_scripts = data.get("content_scripts")
+
+    permissions_json = _json.dumps(permissions) if permissions else None
+    host_perms_json = _json.dumps(host_permissions) if host_permissions else None
+    content_scripts_json = _json.dumps(content_scripts) if content_scripts else None
+
+    bundle_id = (bundle_info.bundle_identifier if bundle_info else None) or data.get("name", "")
+    name = data.get("name", (bundle_info.name if bundle_info else ""))
+
+    return SafariExtension(
+        bundle_identifier=bundle_id,
+        name=name,
+        version=data.get("version", (bundle_info.version if bundle_info else None)),
+        description=data.get("description"),
+        author=data.get("author"),
+        website=data.get("homepage_url"),
+        permissions=permissions_json,
+        host_permissions=host_perms_json,
+        manifest_version=data.get("manifest_version"),
+        content_scripts=content_scripts_json,
+        extension_era="web_extension",
+        extension_point=(bundle_info.extension_point if bundle_info else "com.apple.Safari.web-extension"),
+        unknown_keys=unknown,
+    )
+
+
+def get_extension_stats(extensions: List[SafariExtension]) -> Dict[str, Any]:
+    """Compute summary statistics for a list of Safari extensions.
+
+    Returns dict with:
+        total_count, enabled_count, apple_signed_count,
+        by_era (legacy/app_extension/web_extension counts)
+    """
+    by_era: Dict[str, int] = {"legacy": 0, "app_extension": 0, "web_extension": 0}
+    enabled_count = 0
+    apple_signed_count = 0
+
+    for ext in extensions:
+        by_era[ext.extension_era] = by_era.get(ext.extension_era, 0) + 1
+        if ext.enabled is True:
+            enabled_count += 1
+        if ext.apple_signed is True:
+            apple_signed_count += 1
+
+    return {
+        "total_count": len(extensions),
+        "enabled_count": enabled_count,
+        "apple_signed_count": apple_signed_count,
+        "by_era": by_era,
+    }

@@ -400,11 +400,16 @@ def test_validation_report_overall_status_warning(case_with_evidence):
     """Test ValidationReport overall status with warnings."""
     case_folder, _ = case_with_evidence
 
-    # Full validation should have warnings (no manifests, no tools, etc.)
-    validator = FullValidator(case_folder)
-    report = validator.validate()
+    # Mock tool discovery so at least one tool is reported missing,
+    # making the test deterministic regardless of host environment.
+    fake_tool = Mock(status="not_found")
+    fake_results = {"fake_tool": fake_tool}
+    with patch("core.validation.ToolRegistry") as MockRegistry:
+        MockRegistry.return_value.discover_all_tools.return_value = fake_results
+        validator = FullValidator(case_folder)
+        report = validator.validate()
 
-    # Should have at least some warnings
+    # Should have at least some warnings (missing tool)
     assert report.warning_count >= 1
 
 

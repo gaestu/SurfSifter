@@ -403,7 +403,6 @@ class EdgeReadingListExtractor(BaseExtractor):
         total_entries = 0
         failed_files = 0
         all_url_records = []  # Collect URLs for unified urls table
-        seen_urls = set()  # Deduplicate URLs
 
         callbacks.on_progress(0, len(files), "Parsing Reading List files")
 
@@ -450,12 +449,8 @@ class EdgeReadingListExtractor(BaseExtractor):
                     callbacks,
                 )
 
-                # Collect unique URLs for batch insert
-                for url_rec in url_records:
-                    url = url_rec.get("url", "")
-                    if url and url not in seen_urls:
-                        seen_urls.add(url)
-                        all_url_records.append(url_rec)
+                # Collect URLs for batch insert
+                all_url_records.extend(url_records)
 
                 update_inventory_ingestion_status(
                     evidence_conn,

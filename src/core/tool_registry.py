@@ -13,6 +13,8 @@ import shutil
 import json
 import logging
 
+from .subprocess_env import clean_subprocess_env
+
 LOGGER = logging.getLogger(__name__)
 
 
@@ -241,7 +243,8 @@ class ToolRegistry:
                 capture_output=True,
                 text=True,
                 timeout=5,
-                check=False
+                check=False,
+                env=clean_subprocess_env(),
             )
 
             # Parse version from output
@@ -464,6 +467,7 @@ class ToolRegistry:
                 text=True,
                 timeout=5,
                 check=False,  # Don't raise on non-zero; some tools use non-zero for version
+                env=clean_subprocess_env(),
             )
             output = (result.stdout or result.stderr or "").strip()
             if result.returncode == 0 or output:

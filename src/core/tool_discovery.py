@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Dict, Iterable, List, Optional
 
 from .logging import get_logger
+from .subprocess_env import clean_subprocess_env
 
 LOGGER = get_logger("core.tool_discovery")
 
@@ -62,6 +63,7 @@ def get_tool_version(cmd: List[str]) -> Optional[str]:
             text=True,
             check=False,
             timeout=10,
+            env=clean_subprocess_env(),
         )
     except (OSError, subprocess.SubprocessError) as exc:
         LOGGER.warning("Unable to determine version for %s: %s", cmd, exc)

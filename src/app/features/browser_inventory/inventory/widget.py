@@ -6,6 +6,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+from core.subprocess_env import clean_subprocess_env
+
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QApplication,
@@ -224,11 +226,11 @@ class InventorySubtab(QWidget):
 
         try:
             if sys.platform == "win32":
-                subprocess.run(["explorer", "/select,", str(full_path)])
+                subprocess.run(["explorer", "/select,", str(full_path)], env=clean_subprocess_env())
             elif sys.platform == "darwin":
-                subprocess.run(["open", "-R", str(full_path)])
+                subprocess.run(["open", "-R", str(full_path)], env=clean_subprocess_env())
             else:
-                subprocess.run(["xdg-open", str(full_path.parent)])
+                subprocess.run(["xdg-open", str(full_path.parent)], env=clean_subprocess_env())
         except Exception as e:
             logger.error(f"Failed to open file browser: {e}", exc_info=True)
             QMessageBox.warning(self, "Error", f"Failed to open file browser:\n\n{e}")

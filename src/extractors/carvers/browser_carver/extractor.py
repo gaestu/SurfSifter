@@ -41,6 +41,7 @@ from ...base import BaseExtractor, ExtractorMetadata
 from ...callbacks import ExtractorCallbacks
 from core.logging import get_logger
 from core.tool_discovery import discover_tools
+from core.subprocess_env import clean_subprocess_env
 from core.database import (
     insert_urls,
     insert_browser_history_rows,
@@ -662,6 +663,7 @@ class BrowserCarverExtractor(BaseExtractor):
                 cmd,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
+                env=clean_subprocess_env(),
             )
 
             max_size_bytes = max_size_mb * 1024 * 1024

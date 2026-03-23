@@ -635,7 +635,6 @@ class IETabRecoveryExtractor(BaseExtractor):
 
         tab_records = []
         url_records = []
-        seen_urls = set()
 
         try:
             data = dat_path.read_bytes()
@@ -650,10 +649,6 @@ class IETabRecoveryExtractor(BaseExtractor):
 
             tab_index = 0
             for url in urls_found:
-                if url in seen_urls:
-                    continue
-                seen_urls.add(url)
-
                 # Parse URL for domain
                 domain = None
                 scheme = None
