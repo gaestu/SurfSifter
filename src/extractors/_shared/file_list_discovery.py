@@ -234,6 +234,16 @@ def _build_path_clause(
         if '*' in pattern and '%' not in pattern:
             sql_pattern = glob_to_sql_like(pattern)
 
+        # Ensure patterns without a leading slash or wildcard still match
+        # file_list paths that may have a leading / prefix.
+        # E.g. pattern "Users/*/AppData/..." becomes "%Users/%/AppData/..."
+        # to match "/Users/foo/AppData/..." in file_list.
+        # Trade-off: theoretically could match "/OtherPrefix/Users/..." but
+        # patterns from _patterns.py are specific enough that false positives
+        # are negligible, and without this the extraction is completely broken.
+        if sql_pattern and not sql_pattern.startswith('%') and not sql_pattern.startswith('/'):
+            sql_pattern = '%' + sql_pattern
+
         clauses.append("file_path LIKE ? ESCAPE '\\'")
         params.append(sql_pattern)
 

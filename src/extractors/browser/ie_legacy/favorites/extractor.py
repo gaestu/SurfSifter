@@ -532,7 +532,7 @@ class IEFavoritesExtractor(BaseExtractor):
         result = discover_from_file_list(
             evidence_conn,
             evidence_id,
-            filename_patterns=["%.url"],
+            filename_patterns=["*.url"],
             path_patterns=["%Favorites%"],
         )
 
