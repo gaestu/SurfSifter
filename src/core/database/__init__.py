@@ -131,6 +131,7 @@ from .helpers.statistics import (
     delete_extractor_statistics_by_evidence,
     delete_extractor_statistics_by_run,
     sync_process_log_from_statistics,
+    sync_process_log_counters,
 )
 
 # Domain-specific helpers (all re-exported from helpers package)

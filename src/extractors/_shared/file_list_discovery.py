@@ -79,10 +79,11 @@ class FileListMatch:
     inode: Optional[int] = None
     size_bytes: Optional[int] = None
     extension: Optional[str] = None
+    deleted: bool = False
 
     def to_dict(self) -> Dict:
         """Convert to dictionary for extractor compatibility."""
-        return {
+        d = {
             "file_path": self.file_path,
             "file_name": self.file_name,
             "partition_index": self.partition_index,
@@ -93,6 +94,9 @@ class FileListMatch:
             "logical_path": self.file_path,
             "path": self.file_path,
         }
+        if self.deleted:
+            d["deleted"] = True
+        return d
 
 
 @dataclass
@@ -324,7 +328,7 @@ def discover_from_file_list(
     params: List = [evidence_id]
 
     query_parts = [
-        "SELECT file_path, file_name, partition_index, inode, size_bytes, extension",
+        "SELECT file_path, file_name, partition_index, inode, size_bytes, extension, deleted",
         "FROM file_list",
         "WHERE evidence_id = ?",
     ]
@@ -370,6 +374,7 @@ def discover_from_file_list(
             inode = row[3]
             size_bytes = row[4]
             extension = row[5]
+            deleted_flag = bool(row[6]) if row[6] else False
 
             # Handle None partition_index (legacy data)
             if partition_index is None:
@@ -409,6 +414,7 @@ def discover_from_file_list(
                 inode=parsed_inode,
                 size_bytes=parsed_size,
                 extension=extension,
+                deleted=deleted_flag,
             )
 
             matches_by_partition.setdefault(partition_index, []).append(match)

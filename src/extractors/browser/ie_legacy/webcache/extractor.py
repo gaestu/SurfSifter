@@ -86,6 +86,11 @@ class IEWebCacheExtractor(BaseExtractor):
             can_ingest=False,  # Ingestion handled by artifact-specific extractors
         )
 
+    @property
+    def downstream_extractors(self) -> List[str]:
+        """IE WebCache extraction triggers downstream IE artifact ingesters."""
+        return ["ie_history", "ie_cookies", "ie_downloads", "ie_cache_metadata"]
+
     def can_run_extraction(self, evidence_fs) -> tuple[bool, str]:
         """Check if extraction can run."""
         if evidence_fs is None:

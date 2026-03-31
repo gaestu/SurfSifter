@@ -7,6 +7,7 @@ from typing import List, Optional, Dict, Callable, Any
 
 from .logging import get_logger
 from .database import slugify_label
+from .database.helpers.statistics import sync_process_log_counters
 
 from extractors import ExtractorRegistry
 from extractors.callbacks import ExtractorCallbacks
@@ -202,6 +203,7 @@ def run_extraction_pipeline(
         output_dir.mkdir(parents=True, exist_ok=True)
 
         # Run Extraction
+        extraction_succeeded = False
         if extractor.metadata.can_extract:
             # Determine input (fs or path) based on extractor requirements
             # Most modular extractors expect evidence_fs, but bulk_extractor expects path
@@ -216,6 +218,7 @@ def run_extraction_pipeline(
                     if can_run:
                         try:
                             extractor.run_extraction(source_path, output_dir, config, callbacks)
+                            extraction_succeeded = True
                         except Exception as e:
                             LOGGER.error(f"Extractor {name} failed extraction: {e}")
                             failed_extractors.append(
@@ -233,6 +236,7 @@ def run_extraction_pipeline(
                 if can_run:
                     try:
                         extractor.run_extraction(fs, output_dir, config, callbacks)
+                        extraction_succeeded = True
                     except Exception as e:
                         LOGGER.error(f"Extractor {name} failed extraction: {e}")
                         failed_extractors.append(
@@ -241,6 +245,40 @@ def run_extraction_pipeline(
                 else:
                     LOGGER.warning(f"Skipping {name} extraction: {reason}")
                     skipped_extractors.append(f"{name} extraction: {reason}")
+
+            # After successful extraction, trigger downstream ingest-only extractors
+            downstream_names = getattr(extractor, 'downstream_extractors', [])
+            if extraction_succeeded and downstream_names and extractor.metadata.can_extract and not extractor.metadata.can_ingest:
+                for ds_name in downstream_names:
+                    if callbacks.is_cancelled():
+                        break
+                    ds_ext = registry.get(ds_name)
+                    if ds_ext is None:
+                        LOGGER.warning("Downstream extractor %s not found", ds_name)
+                        continue
+                    if not ds_ext.metadata.can_ingest:
+                        continue
+                    # Use parent extractor's output dir — downstream ingesters
+                    # read manifest.json from the parent's output
+                    ingest_dir = output_dir
+                    can_ingest, reason = ds_ext.can_run_ingestion(ingest_dir)
+                    if can_ingest:
+                        try:
+                            LOGGER.info("Auto-triggering downstream ingestion: %s", ds_name)
+                            callbacks.on_log(f"Auto-triggering {ds_name} ingestion")
+                            ds_ext.run_ingestion(ingest_dir, evidence_conn, evidence_id, config, callbacks)
+                            # Sync process_log counters for downstream extractor
+                            try:
+                                sync_process_log_counters(evidence_conn, evidence_id, ds_name)
+                            except Exception as sync_err:
+                                LOGGER.debug("process_log sync for %s: %s", ds_name, sync_err)
+                        except Exception as e:
+                            LOGGER.error("Downstream %s ingestion failed: %s", ds_name, e)
+                            failed_extractors.append(
+                                ExtractorFailure(extractor=ds_name, phase="ingestion", message=str(e))
+                            )
+                    else:
+                        LOGGER.debug("Downstream %s cannot ingest: %s", ds_name, reason)
 
         # Run Ingestion
         if extractor.metadata.can_ingest:
@@ -251,6 +289,11 @@ def run_extraction_pipeline(
              if can_run:
                  try:
                      extractor.run_ingestion(output_dir, evidence_conn, evidence_id, config, callbacks)
+                     # Sync process_log counters from extractor_statistics
+                     try:
+                         sync_process_log_counters(evidence_conn, evidence_id, name)
+                     except Exception as sync_err:
+                         LOGGER.debug("process_log sync for %s: %s", name, sync_err)
                  except Exception as e:
                      LOGGER.error(f"Extractor {name} failed ingestion: {e}")
                      failed_extractors.append(

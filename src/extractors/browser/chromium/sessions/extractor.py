@@ -337,6 +337,22 @@ class ChromiumSessionsExtractor(BaseExtractor):
                         except Exception as e:
                             LOGGER.debug("Error closing partition %d handle: %s", partition_index, e)
 
+        # Deduplicate manifest entries by (logical_path, partition_index)
+        seen_files = set()
+        unique_files = []
+        for f in manifest_data["files"]:
+            key = (f.get("logical_path", ""), f.get("partition_index", 0))
+            if key not in seen_files:
+                seen_files.add(key)
+                unique_files.append(f)
+        if len(unique_files) < len(manifest_data["files"]):
+            LOGGER.info(
+                "Deduplicated manifest: %d -> %d files",
+                len(manifest_data["files"]),
+                len(unique_files),
+            )
+        manifest_data["files"] = unique_files
+
         # Finish statistics (once, at the end)
         if stats:
             status = "success" if manifest_data["status"] == "ok" else manifest_data["status"]
@@ -730,8 +746,6 @@ class ChromiumSessionsExtractor(BaseExtractor):
                 files_by_partition[partition_index] = files_list
 
         return files_by_partition
-
-        return session_files
 
     def _classify_session_file(self, path: str) -> str:
         """Classify session file type based on filename.

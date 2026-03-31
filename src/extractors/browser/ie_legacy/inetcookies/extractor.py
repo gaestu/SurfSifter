@@ -220,9 +220,11 @@ class IEINetCookiesExtractor(BaseExtractor):
             return False
 
         callbacks.on_step(f"Using file_list index for discovery ({count:,} files indexed)")
+        include_deleted = config.get("include_deleted", False)
         result = discover_from_file_list(
             evidence_conn, evidence_id,
             path_patterns=patterns,
+            exclude_deleted=not include_deleted,
         )
         # Convert FileListMatch objects to expected dict format
         discovered_files = [

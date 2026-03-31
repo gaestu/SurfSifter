@@ -49,6 +49,7 @@ from .statistics import (
     get_extractor_statistics_by_name,
     upsert_extractor_statistics,
     sync_process_log_from_statistics,
+    sync_process_log_counters,
 )
 
 # Browser History
@@ -662,6 +663,7 @@ __all__ = [
     "get_extractor_statistics_by_name",
     "upsert_extractor_statistics",
     "sync_process_log_from_statistics",
+    "sync_process_log_counters",
     # Browser History
     "insert_browser_history",
     "insert_browser_history_row",
