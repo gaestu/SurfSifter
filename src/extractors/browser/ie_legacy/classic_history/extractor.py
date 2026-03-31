@@ -368,6 +368,14 @@ class IEClassicHistoryExtractor(BaseExtractor):
             if callbacks.is_cancelled():
                 break
 
+            if file_entry.get("copy_status") not in (None, "ok"):
+                callbacks.on_log(
+                    f"Skipping {file_entry.get('logical_path', '?')} "
+                    f"(copy_status={file_entry.get('copy_status')})",
+                    "info",
+                )
+                continue
+
             callbacks.on_progress(
                 i + 1, len(files),
                 f"Parsing {Path(file_entry.get('extracted_path', '')).name}",
@@ -557,7 +565,25 @@ class IEClassicHistoryExtractor(BaseExtractor):
         filename = f"p{partition_index}_{safe_user}_{path_hash}_{original_name}"
         dest_path = output_dir / filename
 
-        file_content = evidence_fs.read_file(source_path)
+        try:
+            file_content = evidence_fs.read_file(source_path)
+        except OSError as e:
+            LOGGER.warning(
+                "Cannot read %s (file metadata exists but data is unreadable, "
+                "common for deleted/stub NTFS entries): %s",
+                source_path, e,
+            )
+            return {
+                "copy_status": "read_error",
+                "file_size_bytes": 0,
+                "md5": None,
+                "sha256": None,
+                "extracted_path": None,
+                "logical_path": source_path,
+                "user": user,
+                "browser": file_info.get("browser", "ie"),
+                "error": str(e),
+            }
         dest_path.write_bytes(file_content)
 
         md5 = hashlib.md5(file_content).hexdigest()
