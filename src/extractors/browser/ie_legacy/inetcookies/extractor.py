@@ -566,7 +566,7 @@ class IEINetCookiesExtractor(BaseExtractor):
                     )
                     inserted += 1
                 except Exception as e:
-                    LOGGER.debug("Failed to insert cookie: %s", e)
+                    LOGGER.warning("Failed to insert cookie: %s", e)
 
             return inserted
 

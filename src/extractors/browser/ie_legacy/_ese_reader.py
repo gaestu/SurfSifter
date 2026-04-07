@@ -509,13 +509,6 @@ class WebCacheReader(ESEReader):
     Provides helper methods for common WebCache operations.
     """
 
-    # Container name constants
-    CONTAINER_HISTORY = "History"
-    CONTAINER_COOKIES = "Cookies"
-    CONTAINER_IEDOWNLOAD = "iedownload"
-    CONTAINER_CONTENT = "Content"
-    CONTAINER_DOMSTORE = "DOMStore"
-
     def get_containers(self) -> List[Dict[str, Any]]:
         """
         Get list of containers from the Containers table.
@@ -533,65 +526,6 @@ class WebCacheReader(ESEReader):
                 "partition_id": record.get("PartitionId"),
             })
         return containers
-
-    def get_history_entries(self, limit: Optional[int] = None) -> Iterator[ESERecord]:
-        """
-        Get browsing history entries.
-
-        Finds the History container and reads its entries.
-
-        Yields:
-            ESERecord objects with history data
-        """
-        # Find History container
-        history_table = self._find_container_table(self.CONTAINER_HISTORY)
-        if history_table:
-            yield from self.read_table(history_table, limit=limit)
-
-    def get_download_entries(self, limit: Optional[int] = None) -> Iterator[ESERecord]:
-        """
-        Get download history entries.
-
-        Yields:
-            ESERecord objects with download data
-        """
-        download_table = self._find_container_table(self.CONTAINER_IEDOWNLOAD)
-        if download_table:
-            yield from self.read_table(download_table, limit=limit)
-
-    def get_cookie_entries(self, limit: Optional[int] = None) -> Iterator[ESERecord]:
-        """
-        Get cookie entries from all cookie containers.
-
-        Yields:
-            ESERecord objects with cookie data
-        """
-        # There may be multiple cookie containers (Cookies, CookiesLow, etc.)
-        for container in self.get_containers():
-            if container["name"] and "cookie" in container["name"].lower():
-                table_name = f"Container_{container['container_id']}"
-                if table_name in self.tables():
-                    yield from self.read_table(table_name, limit=limit)
-
-    def _find_container_table(self, container_name: str) -> Optional[str]:
-        """
-        Find the table name for a container by its name.
-
-        Container data is stored in tables named Container_N where N
-        is the ContainerId from the Containers table.
-
-        Args:
-            container_name: Name of the container (History, Cookies, etc.)
-
-        Returns:
-            Table name (Container_N) or None if not found
-        """
-        for container in self.get_containers():
-            if container["name"] == container_name:
-                table_name = f"Container_{container['container_id']}"
-                if table_name in self.tables():
-                    return table_name
-        return None
 
 
 def check_ese_available() -> tuple[bool, str]:
