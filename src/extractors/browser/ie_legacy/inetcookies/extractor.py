@@ -557,7 +557,6 @@ class IEINetCookiesExtractor(BaseExtractor):
                         expires_utc=cookie.get("expires_utc"),
                         is_secure=cookie.get("is_secure", False),
                         is_httponly=cookie.get("is_httponly", False),
-                        is_persistent=cookie.get("expires_utc") is not None,
                         samesite="None",
                         source_path=source_path,
                         discovered_by=discovered_by,

@@ -377,10 +377,14 @@ class IEHistoryExtractor(BaseExtractor):
 
                 # Get containers to find ALL History containers
                 # WebCache can have multiple History containers for different contexts
+                # Also include MSHist containers (per-day browsing history)
                 containers = reader.get_containers()
                 history_containers = [
                     c for c in containers
-                    if c.get("name") == "History"
+                    if (name := c.get("name")) and (
+                        name == "History"
+                        or name.startswith("MSHist")
+                    )
                 ]
 
                 if not history_containers:
@@ -521,6 +525,7 @@ class IEHistoryExtractor(BaseExtractor):
         - "https://example.com/path" (plain URL)
         - "Visited: username@file://C:/path" (file URLs)
         - "username@ftp://server/path" (other schemes)
+        - ":YYYYMMDDYYYYMMDD: username@https://example.com" (MSHist containers)
 
         Args:
             raw_url: Raw URL string from WebCache container
@@ -536,6 +541,14 @@ class IEHistoryExtractor(BaseExtractor):
         # Strip "Visited: " prefix (common in History containers)
         if url.lower().startswith("visited:"):
             url = url[8:].strip()
+
+        # Strip MSHist date prefix: ":YYYYMMDDYYYYMMDD: " (16-digit date range)
+        if url.startswith(":") and len(url) > 18:
+            colon2 = url.find(":", 1)
+            if colon2 != -1 and colon2 < 20:
+                potential_date = url[1:colon2]
+                if potential_date.isdigit() and len(potential_date) == 16:
+                    url = url[colon2 + 1:].strip()
 
         # Handle "username@url" format generically for any scheme
         # Look for @ followed by a URL scheme (scheme://)

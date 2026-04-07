@@ -547,9 +547,40 @@ class IEDOMStorageExtractor(BaseExtractor):
 
                 # Look for storage items
                 for item in root.iter():
+                    # Try attributes first (alternative XML formats)
                     key = item.get("key") or item.get("name")
-                    value = item.text or item.get("value", "")
+                    # Fall back to child elements (Edge Legacy DOMStore format)
+                    if not key:
+                        key_elem = next(
+                            (e for tag in ("Key", "key", "Name", "name")
+                             if (e := item.find(tag)) is not None),
+                            None,
+                        )
+                        if key_elem is not None:
+                            key = key_elem.text
+
+                    if not key:
+                        continue
+
+                    value = (item.text or "").strip() or item.get("value", "")
+                    if not value:
+                        val_elem = next(
+                            (e for tag in ("Value", "value")
+                             if (e := item.find(tag)) is not None),
+                            None,
+                        )
+                        if val_elem is not None:
+                            value = val_elem.text or ""
+
                     origin = item.get("origin") or item.get("url", "")
+                    if not origin:
+                        origin_elem = next(
+                            (e for tag in ("Origin", "origin", "Url", "url")
+                             if (e := item.find(tag)) is not None),
+                            None,
+                        )
+                        if origin_elem is not None:
+                            origin = origin_elem.text or ""
 
                     if key:
                         try:
