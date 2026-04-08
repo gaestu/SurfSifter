@@ -68,6 +68,8 @@ from core.statistics_collector import StatisticsCollector
 # Import shared utilities
 from ...._shared.risk_classifier import calculate_risk_level
 from ...._shared.known_extensions import load_known_extensions, match_known_extension
+from ...._shared.path_utils import normalize_evidence_path
+from ...._shared.unsupported_artifacts import discover_unsupported_chromium_artifacts
 
 # Import local modules
 from ._schemas import (
@@ -78,9 +80,15 @@ from ._schemas import (
 from ._discovery import discover_extensions
 from ._preferences import parse_all_preferences, merge_preferences_data
 from ._scripts import extract_extension_scripts, extract_extension_manifest
+from ._config_parser import parse_preferences_config
 
 # Import warning support
 from extractors._shared.extraction_warnings import ExtractionWarningCollector
+
+from core.database.helpers.browser_config import (
+    insert_browser_configs,
+    delete_browser_config_by_run,
+)
 
 LOGGER = get_logger("extractors.browser.chromium.extensions")
 
@@ -277,6 +285,30 @@ class ChromiumExtensionsExtractor(BaseExtractor):
         callbacks.on_step("Merging extension data")
         extensions = merge_preferences_data(extensions, preferences_data)
 
+        # Deduplicate extensions by (source_path, extension_id, version)
+        seen_extensions = set()
+        unique_extensions = []
+        for ext in extensions:
+            key = (
+                ext.get("source_path", ""),
+                ext.get("extension_id", ""),
+                ext.get("version", ""),
+            )
+            if key not in seen_extensions:
+                seen_extensions.add(key)
+                unique_extensions.append(ext)
+        if len(unique_extensions) < len(extensions):
+            dedup_count = len(extensions) - len(unique_extensions)
+            LOGGER.info(
+                "Deduplicated extensions: %d -> %d (removed %d duplicates)",
+                len(extensions), len(unique_extensions), dedup_count,
+            )
+            callbacks.on_log(
+                f"Deduplicated {dedup_count} duplicate extension entries",
+                "info",
+            )
+        extensions = unique_extensions
+
         if not extensions:
             manifest_data["status"] = "skipped"
             manifest_data["notes"].append("No Chromium browser extensions found")
@@ -334,6 +366,17 @@ class ChromiumExtensionsExtractor(BaseExtractor):
                     LOGGER.error(error_msg, exc_info=True)
                     manifest_data["notes"].append(error_msg)
                     manifest_data["status"] = "partial"
+
+        # Discover unsupported Chromium artifacts
+        if evidence_conn is not None:
+            unsupported_count = discover_unsupported_chromium_artifacts(
+                evidence_conn, evidence_id, run_id, warning_collector,
+                callbacks=callbacks,
+            )
+            if unsupported_count > 0:
+                manifest_data["notes"].append(
+                    f"Found {unsupported_count} unsupported auxiliary artifact files"
+                )
 
         # Flush warnings to database
         if evidence_conn:
@@ -447,9 +490,36 @@ class ChromiumExtensionsExtractor(BaseExtractor):
             )
             records.append(record)
 
-        # Batch insert (no deduplication - all versions retained)
+        # Deduplicate records by (browser, profile, extension_id, version, source_path)
+        seen_records = set()
+        unique_records = []
+        for record in records:
+            key = (
+                record.get("browser", ""),
+                record.get("profile", ""),
+                record.get("extension_id", ""),
+                record.get("version", ""),
+                record.get("source_path", ""),
+            )
+            if key not in seen_records:
+                seen_records.add(key)
+                unique_records.append(record)
+        if len(unique_records) < len(records):
+            dedup_count = len(records) - len(unique_records)
+            LOGGER.info(
+                "Deduplicated %d duplicate extension records at ingestion",
+                dedup_count,
+            )
+        records = unique_records
+
+        # Batch insert (all unique versions retained)
         inserted = insert_extensions(evidence_conn, evidence_id, records)
         evidence_conn.commit()
+
+        # Parse browser config from extracted Preferences files
+        config_count = self._ingest_browser_config(
+            manifest_data, run_id, evidence_conn, evidence_id, output_dir, callbacks,
+        )
 
         # Flush any ingestion warnings
         try:
@@ -464,7 +534,7 @@ class ChromiumExtensionsExtractor(BaseExtractor):
             stats.report_ingested(evidence_id, self.metadata.name, records=inserted, extensions=inserted)
             stats.finish_run(evidence_id, self.metadata.name, status="success")
 
-        return {"records": inserted, "extensions": inserted}
+        return {"records": inserted, "extensions": inserted, "config_records": config_count}
 
     def _build_extension_record(
         self,
@@ -535,10 +605,10 @@ class ChromiumExtensionsExtractor(BaseExtractor):
             "granted_permissions": self._normalize_json_text_field(ext.get("granted_permissions")),
             # Forensic provenance
             "run_id": run_id,
-            "source_path": ext.get("source_path"),
+            "source_path": normalize_evidence_path(ext.get("source_path")),
             "partition_index": ext.get("partition_index"),
             "fs_type": ext.get("fs_type"),
-            "logical_path": ext.get("logical_path"),
+            "logical_path": normalize_evidence_path(ext.get("logical_path")),
             "forensic_path": ext.get("forensic_path"),
             "notes": self._normalize_text_field(known_match.get("notes") if known_match else None),
         }
@@ -608,6 +678,73 @@ class ChromiumExtensionsExtractor(BaseExtractor):
             risk_factors.append("Loaded in developer mode (unpacked)")
 
         return risk_factors
+
+    def _ingest_browser_config(
+        self,
+        manifest_data: Dict[str, Any],
+        run_id: str,
+        evidence_conn,
+        evidence_id: int,
+        output_dir: Path,
+        callbacks: ExtractorCallbacks,
+    ) -> int:
+        """Parse Preferences files and ingest config to browser_config table."""
+        pref_files = manifest_data.get("preferences_files", [])
+        if not pref_files:
+            return 0
+
+        # Clear previous config for this run
+        delete_browser_config_by_run(evidence_conn, evidence_id, run_id)
+
+        total_records = 0
+        for pref_info in pref_files:
+            # dest_path is the locally extracted copy of the Preferences JSON
+            extracted_path = pref_info.get("dest_path")
+            if not extracted_path:
+                continue
+
+            pref_path = Path(extracted_path)
+            if not pref_path.is_absolute():
+                pref_path = output_dir / pref_path
+
+            if not pref_path.exists():
+                continue
+
+            try:
+                pref_data = json.loads(
+                    pref_path.read_text(encoding="utf-8", errors="replace")
+                )
+            except (json.JSONDecodeError, OSError) as e:
+                LOGGER.debug("Failed to read Preferences file %s: %s", pref_path, e)
+                continue
+
+            browser = pref_info.get("browser", "chrome")
+            profile = pref_info.get("profile", "Default")
+            source_path = pref_info.get("source_path", str(pref_path))
+
+            config_records = parse_preferences_config(
+                pref_data,
+                browser=browser,
+                profile=profile,
+                source_path=source_path,
+                run_id=run_id,
+            )
+
+            if config_records:
+                inserted = insert_browser_configs(
+                    evidence_conn, evidence_id, config_records
+                )
+                total_records += inserted
+
+        if total_records > 0:
+            evidence_conn.commit()
+            callbacks.on_log(
+                f"Ingested {total_records} browser config records from Preferences",
+                "info",
+            )
+            LOGGER.info("Ingested %d browser config records", total_records)
+
+        return total_records
 
     # =========================================================================
     # Helper Methods

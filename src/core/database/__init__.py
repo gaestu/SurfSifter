@@ -432,6 +432,7 @@ from .helpers import (
     insert_browser_inventory,
     update_inventory_ingestion_status,
     get_browser_inventory,
+    get_latest_browser_inventory,
     # Batch Operations
     get_evidence_table_counts,
     purge_evidence_data,
@@ -515,6 +516,12 @@ from .helpers import (
     update_credit_card_decrypted,
     batch_update_credentials_decrypted,
     batch_update_cookies_decrypted,
+    # Browser Indicators
+    insert_browser_indicator,
+    insert_browser_indicators,
+    get_browser_indicators,
+    delete_browser_indicators_by_run,
+    aggregate_tor_indicators,
 )
 
 # Internal function for upgrade path tests (exposed for test compatibility)
@@ -915,6 +922,7 @@ __all__ = [
     "insert_browser_inventory",
     "update_inventory_ingestion_status",
     "get_browser_inventory",
+    "get_latest_browser_inventory",
     # Batch Operations
     "get_evidence_table_counts",
     "purge_evidence_data",
@@ -972,4 +980,10 @@ __all__ = [
     "get_firefox_cache_index_entries",
     "get_firefox_cache_index_stats",
     "delete_firefox_cache_index_by_run",
+    # Browser Indicators
+    "insert_browser_indicator",
+    "insert_browser_indicators",
+    "get_browser_indicators",
+    "delete_browser_indicators_by_run",
+    "aggregate_tor_indicators",
 ]

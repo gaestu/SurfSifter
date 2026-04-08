@@ -523,6 +523,7 @@ from .browser_inventory import (
     insert_browser_inventory,
     update_inventory_ingestion_status,
     get_browser_inventory,
+    get_latest_browser_inventory,
 )
 
 # Batch Operations
@@ -646,6 +647,15 @@ from .dpapi import (
     delete_chromium_app_keys_by_evidence,
     delete_decrypt_audit_by_evidence,
     reset_decrypt_status_by_evidence,
+)
+
+# Browser Indicators
+from .browser_indicators import (
+    insert_browser_indicator,
+    insert_browser_indicators,
+    get_browser_indicators,
+    delete_browser_indicators_by_run,
+    aggregate_tor_indicators,
 )
 
 __all__ = [
@@ -1015,6 +1025,7 @@ __all__ = [
     "insert_browser_inventory",
     "update_inventory_ingestion_status",
     "get_browser_inventory",
+    "get_latest_browser_inventory",
     # Batch Operations
     "get_evidence_table_counts",
     "purge_evidence_data",
@@ -1132,4 +1143,10 @@ __all__ = [
     "delete_chromium_app_keys_by_evidence",
     "delete_decrypt_audit_by_evidence",
     "reset_decrypt_status_by_evidence",
+    # Browser Indicators
+    "insert_browser_indicator",
+    "insert_browser_indicators",
+    "get_browser_indicators",
+    "delete_browser_indicators_by_run",
+    "aggregate_tor_indicators",
 ]

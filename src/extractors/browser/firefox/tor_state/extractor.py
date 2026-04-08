@@ -515,22 +515,49 @@ class FirefoxTorStateExtractor(BaseExtractor):
             return files_by_partition
 
         # Use file_list discovery
-        # Build filename patterns from artifact patterns
+        # Build filename and path patterns from artifact patterns.
+        # For nested patterns like "pt_state/*" and "keys/*", we must NOT
+        # extract the glob "*" as a standalone filename pattern (it would
+        # match everything). Instead, add dedicated path patterns that
+        # constrain matches to the correct subdirectories.
         filename_patterns = []
+        nested_path_patterns = []
         for artifact in TOR_ARTIFACT_PATTERNS:
-            # Handle wildcards in artifact names
-            if "*" in artifact or "/" in artifact:
-                # For patterns like "cached-*" or "pt_state/*", extract the base
-                base = artifact.split("/")[-1]
-                if "*" in base:
-                    filename_patterns.append(base)
-                else:
-                    filename_patterns.append(base)
+            if "/" in artifact:
+                # Nested pattern like "pt_state/*" or "keys/*"
+                # Add path-based matching for each root
+                subdir = artifact.split("/")[0]  # "pt_state" or "keys"
+                for root in TOR_DATA_ROOTS:
+                    nested_path_patterns.append(
+                        f"%{root.replace('*', '%')}/{subdir}/%"
+                    )
+            elif "*" in artifact:
+                # Glob pattern like "cached-*"
+                filename_patterns.append(artifact)
             else:
+                # Exact filename like "torrc", "state", "geoip"
                 filename_patterns.append(artifact)
 
         # Build path patterns from TOR_DATA_ROOTS
         path_patterns = [f"%{root.replace('*', '%')}%" for root in TOR_DATA_ROOTS]
+
+        # For nested patterns, we do a separate discovery call with
+        # only path constraints (no filename patterns)
+        all_nested_results = []
+        if nested_path_patterns:
+            try:
+                nested_result = discover_from_file_list(
+                    evidence_conn,
+                    evidence_id,
+                    path_patterns=nested_path_patterns,
+                )
+                if not nested_result.is_empty:
+                    for partition_idx, matches in nested_result.matches_by_partition.items():
+                        all_nested_results.extend(
+                            (partition_idx, m) for m in matches
+                        )
+            except Exception as e:
+                LOGGER.debug("Nested path discovery failed: %s", e)
 
         try:
             result = discover_from_file_list(
@@ -542,14 +569,18 @@ class FirefoxTorStateExtractor(BaseExtractor):
 
             LOGGER.info("discover_from_file_list: %s", result.get_partition_summary())
 
-            if result.is_empty:
+            if result.is_empty and not all_nested_results:
                 callbacks.on_log("No Tor files found via file_list discovery", "info")
                 return files_by_partition
 
             # Process matches by partition
+            seen_paths = set()
             for partition_idx, matches in result.matches_by_partition.items():
                 partition_files = []
                 for match in matches:
+                    if match.file_path in seen_paths:
+                        continue
+                    seen_paths.add(match.file_path)
                     file_type = classify_tor_file(match.file_path)
                     partition_files.append({
                         "logical_path": match.file_path,
@@ -568,6 +599,30 @@ class FirefoxTorStateExtractor(BaseExtractor):
 
                 if partition_files:
                     files_by_partition[partition_idx] = partition_files
+
+            # Merge nested path results (pt_state/*, keys/*)
+            for partition_idx, match in all_nested_results:
+                if match.file_path in seen_paths:
+                    continue
+                seen_paths.add(match.file_path)
+                file_type = classify_tor_file(match.file_path)
+                file_info = {
+                    "logical_path": match.file_path,
+                    "browser": "tor",
+                    "profile": "tor_data",
+                    "file_type": file_type,
+                    "artifact_type": "tor_state",
+                    "partition_index": partition_idx,
+                    "inode": match.inode,
+                    "size_bytes": match.size_bytes,
+                }
+                if partition_idx not in files_by_partition:
+                    files_by_partition[partition_idx] = []
+                files_by_partition[partition_idx].append(file_info)
+                callbacks.on_log(
+                    f"Found Tor nested file (partition {partition_idx}): {match.file_path}",
+                    "info"
+                )
 
         except Exception as e:
             LOGGER.warning("file_list discovery failed: %s, falling back", e)

@@ -14,6 +14,7 @@ __all__ = [
     "insert_browser_inventory",
     "update_inventory_ingestion_status",
     "get_browser_inventory",
+    "get_latest_browser_inventory",
 ]
 
 
@@ -222,3 +223,65 @@ def get_browser_inventory(conn: sqlite3.Connection, evidence_id: int) -> List[Di
         })
 
     return inventory
+
+
+def get_latest_browser_inventory(
+    conn: sqlite3.Connection,
+    evidence_id: int,
+    *,
+    browser: Optional[str] = None,
+    artifact_type: Optional[str] = None,
+) -> List[Dict[str, Any]]:
+    """
+    Get the latest-run view of browser inventory, collapsing duplicates.
+
+    For each unique (browser, profile, artifact_type, logical_path) tuple,
+    returns only the most recent row by extraction_timestamp_utc with
+    successful ingestion status preferred.
+
+    This prevents re-running an extractor from inflating artifact counts
+    in UI summaries.
+
+    Args:
+        conn: SQLite connection to evidence database
+        evidence_id: Evidence ID
+        browser: Optional browser filter
+        artifact_type: Optional artifact type filter
+
+    Returns:
+        List of inventory records as dicts (latest run only, deduped)
+    """
+    params: List = [evidence_id]
+    where_extra = ""
+
+    if browser:
+        where_extra += " AND browser = ?"
+        params.append(browser)
+    if artifact_type:
+        where_extra += " AND artifact_type = ?"
+        params.append(artifact_type)
+
+    query = f"""
+        SELECT *
+        FROM browser_cache_inventory t1
+        WHERE evidence_id = ?
+          {where_extra}
+          AND id = (
+              SELECT t2.id
+              FROM browser_cache_inventory t2
+              WHERE t2.evidence_id = t1.evidence_id
+                AND t2.browser = t1.browser
+                AND COALESCE(t2.profile, '') = COALESCE(t1.profile, '')
+                AND t2.artifact_type = t1.artifact_type
+                AND t2.logical_path = t1.logical_path
+              ORDER BY
+                  CASE WHEN t2.ingestion_status = 'ok' THEN 0 ELSE 1 END,
+                  t2.extraction_timestamp_utc DESC
+              LIMIT 1
+          )
+        ORDER BY browser, artifact_type, logical_path
+    """
+
+    conn.row_factory = sqlite3.Row
+    rows = conn.execute(query, params).fetchall()
+    return [dict(row) for row in rows]

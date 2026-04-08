@@ -31,6 +31,7 @@ from core.database.helpers.extracted_files import (
     insert_extracted_files_batch,
     delete_extracted_files_by_run,
 )
+from extractors._shared.path_utils import normalize_evidence_path
 
 LOGGER = get_logger("extractors._shared.extracted_files_audit")
 
@@ -112,7 +113,7 @@ def record_browser_files(
             record = {
                 "dest_rel_path": rel_path,
                 "dest_filename": local_filename or Path(source_path).name,
-                "source_path": source_path,
+                "source_path": normalize_evidence_path(source_path),
                 "source_inode": str(file_info.get("inode")) if file_info.get("inode") else None,
                 "partition_index": file_info.get("partition_index"),
                 "source_offset_bytes": None,  # Not available for filesystem files
@@ -126,6 +127,21 @@ def record_browser_files(
                 "metadata_json": _build_browser_metadata_json(file_info),
             }
             extracted_records.append(record)
+
+        # Deduplicate by (source_path, dest_filename) within the same run
+        seen_audit = set()
+        unique_audit = []
+        for rec in extracted_records:
+            key = (rec.get("source_path") or "", rec.get("dest_filename") or "")
+            if key not in seen_audit:
+                seen_audit.add(key)
+                unique_audit.append(rec)
+        if len(unique_audit) < len(extracted_records):
+            LOGGER.debug(
+                "Deduplicated %d extracted_files audit records",
+                len(extracted_records) - len(unique_audit),
+            )
+        extracted_records = unique_audit
 
         # Batch insert
         count = insert_extracted_files_batch(
