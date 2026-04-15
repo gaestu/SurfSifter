@@ -448,8 +448,8 @@ class TestImagesModule:
         assert module is not None
         fields = module.get_filter_fields()
 
-        # Should have 12 filters: title, show_description, custom_description, tag_filter, match_filter, include_filename, include_filepath, include_url, sort_by, show_filter_info, show_image_count, limit
-        assert len(fields) == 12
+        # Should have 13 filters: title, show_description, custom_description, tag_filter, match_filter, include_filename, include_filepath, include_url, include_cache_key, sort_by, show_filter_info, show_image_count, limit
+        assert len(fields) == 13
 
         field_keys = [f.key for f in fields]
         assert "title" in field_keys
@@ -460,6 +460,7 @@ class TestImagesModule:
         assert "include_filename" in field_keys
         assert "include_filepath" in field_keys
         assert "include_url" in field_keys
+        assert "include_cache_key" in field_keys
         assert "sort_by" in field_keys
         assert "show_filter_info" in field_keys
         assert "show_image_count" in field_keys
@@ -473,7 +474,6 @@ class TestImagesModule:
         assert module is not None
         defaults = module.get_default_config()
 
-        assert defaults["tag_filter"] == "all"
         assert defaults["match_filter"] == "all"
         assert defaults["include_filepath"] is False
         assert defaults["sort_by"] == "date_desc"
@@ -559,16 +559,17 @@ class TestImagesModule:
 
         assert module is not None
         # Access private method for testing
-        desc = module._build_filter_description("all", "all")
+        desc = module._build_filter_description([], "all")
         assert "All tags" in desc
         assert "All matches" in desc
 
-        desc = module._build_filter_description("any_tag", "any_match")
-        assert "Any tagged" in desc
+        desc = module._build_filter_description(["important"], "any_match")
+        assert "important" in desc
         assert "Any hash match" in desc
 
-        desc = module._build_filter_description("important", "known_bad")
-        assert "Tag: important" in desc
+        desc = module._build_filter_description(["tag1", "tag2"], "known_bad")
+        assert "tag1" in desc
+        assert "tag2" in desc
         assert "Match: known_bad" in desc
 
     def test_images_module_resolve_path_uses_canonical_slug(self, tmp_path) -> None:

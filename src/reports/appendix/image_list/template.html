@@ -131,6 +131,17 @@
     margin-bottom: 0;
 }
 
+.appendix-image-cache-key {
+    color: #996600;
+    font-size: 0.9em;
+    word-break: break-all;
+    margin-bottom: 2px;
+}
+
+.appendix-image-cache-key:last-child {
+    margin-bottom: 0;
+}
+
 .appendix-images .empty-message {
     text-align: center;
     color: #888;
@@ -186,6 +197,13 @@
                 <div class="appendix-image-urls">
                     {% for url in image.urls %}
                     <div class="appendix-image-url">{{ url }}</div>
+                    {% endfor %}
+                </div>
+                {% endif %}
+                {% if include_cache_key and image.cache_keys %}
+                <div class="appendix-image-urls">
+                    {% for key in image.cache_keys %}
+                    <div class="appendix-image-cache-key">🔑 {{ key }}</div>
                     {% endfor %}
                 </div>
                 {% endif %}

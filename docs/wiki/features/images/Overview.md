@@ -13,7 +13,7 @@
 - Case folder image files and thumbnails.
 
 ## Key controls
-- Filters: tags, source, extension, size, and hash match status.
+- Filters: tags, source, extension, size, hash match status, URL text, and cache key text.
 - Subtabs: Grid, Clusters, Table views.
 - Actions: Tag Selected/Checked, Export Selected, Export Clusters CSV, Check Known Hashes.
 

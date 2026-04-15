@@ -53,6 +53,13 @@
                     {% endfor %}
                 </div>
                 {% endif %}
+                {% if include_cache_key and image.cache_keys %}
+                <div class="image-urls">
+                    {% for key in image.cache_keys %}
+                    <div class="image-cache-key" title="{{ key }}">🔑 {{ key }}</div>
+                    {% endfor %}
+                </div>
+                {% endif %}
             </div>
         </div>
         {% endfor %}
@@ -212,6 +219,17 @@
 }
 
 .image-url:last-child {
+    margin-bottom: 0;
+}
+
+.image-cache-key {
+    color: #996600;
+    font-size: 0.8em;
+    word-break: break-all;
+    margin-bottom: 2px;
+}
+
+.image-cache-key:last-child {
     margin-bottom: 0;
 }
 

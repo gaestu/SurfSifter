@@ -55,6 +55,7 @@ class ImagesListModel(QAbstractListModel):
             "extension": None,
             "hash_match": None,
             "url_text": None,
+            "cache_key_text": None,
             "min_size_bytes": None,
             "max_size_bytes": None,
         }
@@ -205,6 +206,7 @@ class ImagesListModel(QAbstractListModel):
         extension: Optional[str] = None,
         hash_match: Optional[str] = None,
         url_text: Optional[str] = None,
+        cache_key_text: Optional[str] = None,
         min_size_bytes: Optional[int] = None,
         max_size_bytes: Optional[int] = None,
     ) -> None:
@@ -233,6 +235,9 @@ class ImagesListModel(QAbstractListModel):
         # URL text filter
         if url_text is not None:
             self._filters["url_text"] = url_text if url_text else None
+        # Cache key text filter
+        if cache_key_text is not None:
+            self._filters["cache_key_text"] = cache_key_text if cache_key_text else None
         # Phase 3: Size filtering
         # Always update size filters when explicitly passed (even if None)
         # Use special sentinel _UNSET to detect when parameter was not passed at all
@@ -268,6 +273,7 @@ class ImagesListModel(QAbstractListModel):
             extension=self._filters.get("extension"),
             hash_match=self._filters.get("hash_match"),
             url_text=self._filters.get("url_text"),
+            cache_key_text=self._filters.get("cache_key_text"),
             min_size_bytes=self._filters.get("min_size_bytes"),
             max_size_bytes=self._filters.get("max_size_bytes"),
             limit=self.page_size,

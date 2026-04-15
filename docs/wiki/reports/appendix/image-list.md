@@ -15,6 +15,8 @@ Shows a grid of images as appendix content with tag and hash match filters.
 - Hash Matches: Multi-select match list filter.
 - Filter Mode: OR (any tag or match) or AND (must have both).
 - Include File Path: Show the image path under each thumbnail.
+- Include URL: Show source URLs under each thumbnail.
+- Include Cache Key: Show browser cache keys under each thumbnail.
 - Sort By: Order by date or filename.
 
 ## Output

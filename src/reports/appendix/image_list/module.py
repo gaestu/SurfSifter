@@ -134,6 +134,14 @@ class AppendixImageListModule(BaseAppendixModule):
                 required=False,
             ),
             FilterField(
+                key="include_cache_key",
+                label="Include Cache Keys",
+                filter_type=FilterType.CHECKBOX,
+                default=False,
+                help_text="Show associated cache keys (from cache/browser sources) for each image",
+                required=False,
+            ),
+            FilterField(
                 key="sort_by",
                 label="Sort By",
                 filter_type=FilterType.DROPDOWN,
@@ -205,6 +213,7 @@ class AppendixImageListModule(BaseAppendixModule):
         filter_mode = config.get("filter_mode", "or")
         include_filepath = bool(config.get("include_filepath", False))
         include_url = bool(config.get("include_url", False))
+        include_cache_key = bool(config.get("include_cache_key", False))
         sort_by = config.get("sort_by", "date_desc")
 
         # Get context for path resolution (injected by ReportBuilder)
@@ -300,6 +309,12 @@ class AppendixImageListModule(BaseAppendixModule):
             for img in processed:
                 img["urls"] = image_urls.get(img["id"], [])
 
+        # Fetch cache keys for images if requested
+        if include_cache_key and processed:
+            image_cache_keys = self._get_image_cache_keys(db_conn, image_ids)
+            for img in processed:
+                img["cache_keys"] = image_cache_keys.get(img["id"], [])
+
         if progress_cb:
             progress_cb(80, "Rendering template")
 
@@ -312,6 +327,7 @@ class AppendixImageListModule(BaseAppendixModule):
             total_count=len(processed),
             include_filepath=include_filepath,
             include_url=include_url,
+            include_cache_key=include_cache_key,
             t=translations,
             locale=locale,
         )
@@ -354,6 +370,40 @@ class AppendixImageListModule(BaseAppendixModule):
                         result[image_id] = []
                     if cache_url not in result[image_id]:
                         result[image_id].append(cache_url)
+        except Exception:
+            pass
+        return result
+
+    def _get_image_cache_keys(
+        self, db_conn: sqlite3.Connection, image_ids: List[int]
+    ) -> Dict[int, List[str]]:
+        """Fetch unique cache keys associated with images from image_discoveries.
+
+        Queries are chunked to stay within SQLite variable limits.
+        """
+        if not image_ids:
+            return {}
+
+        result: Dict[int, List[str]] = {}
+        try:
+            for chunk in self._chunked(image_ids):
+                placeholders = ",".join("?" * len(chunk))
+                cursor = db_conn.execute(
+                    f"""
+                    SELECT image_id, cache_key
+                    FROM image_discoveries
+                    WHERE image_id IN ({placeholders})
+                      AND cache_key IS NOT NULL
+                      AND cache_key != ''
+                    ORDER BY image_id, discovered_at
+                    """,
+                    chunk,
+                )
+                for image_id, cache_key in cursor.fetchall():
+                    if image_id not in result:
+                        result[image_id] = []
+                    if cache_key not in result[image_id]:
+                        result[image_id].append(cache_key)
         except Exception:
             pass
         return result
