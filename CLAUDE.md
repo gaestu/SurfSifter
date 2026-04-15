@@ -348,6 +348,7 @@ Before submitting any change:
 | `tests/README.md` | Test organization and markers |
 | `src/core/database/migrations*/0001_*.sql` | Schema source of truth |
 | `src/reports/modules/MODULE_GUIDE.md` | Report module development guide (field order, templates, localization) |
+| `docs/wiki/` | User-facing wiki (extractors, features, general guides, reports) |
 | GitHub Issues | Active work items — check before starting |
 
 ---
@@ -362,53 +363,93 @@ poetry run surfsifter
 
 ## Coding Procedure
 
-Follow this pipeline for every non-trivial task. Skip to step 2 for simple, well-defined changes.
+Follow this pipeline for every non-trivial task. Skip to Phase 2 for simple, well-defined changes.
 
-### 1. Research Phase (main agent)
-- Use `search_subagent` / `runSubagent` to gather all relevant codebase context
-- Identify affected files, existing patterns, migration state, and test coverage
-- If requirements are ambiguous → ask the user via `ask_questions` (subagents cannot do this)
-- Do NOT proceed to coding until all open questions are resolved
+### Phase 1: Research (main agent)
 
-### 1b. Implementation Plan (issue-driven work only)
-- If the task originates from a GitHub Issue, write a structured implementation plan summarizing:
-  - Affected files and planned changes
-  - New files/migrations to create
-  - Key design decisions and trade-offs
-- Post the plan as a comment on the GitHub Issue before proceeding
-- This creates a traceable link between the plan and the implementation
+1. Use `search_subagent` or `runSubagent` (Explore) to gather codebase context
+2. Identify affected files, existing patterns, migration state, and test coverage
+3. **Internet research is permitted** in this phase — use `fetch_webpage` to look up file format specs, protocol documentation, library APIs, or forensic artifact references when needed for implementation
+4. If requirements are ambiguous → ask the user via `vscode_askQuestions`
+5. **Do NOT proceed until all open questions are resolved**
 
-### 2. Implementation Phase
-- Launch a `runSubagent` with a detailed prompt containing:
-  - The full task description
-  - All research findings from step 1 (file paths, code snippets, patterns)
-  - Explicit constraints (dependency rules, migration rules, etc.)
-- The coding agent implements the change and returns a summary of all modified/created files
+### Phase 1b: Implementation Plan (issue-driven work only)
 
-### 3. Review Phase
-- **Reviewer 1 (Claude Opus 4.6):** Launch a `runSubagent` review agent receiving:
-  - The task description
-  - The full content of every changed/created file
-  - Focus: **correctness** — logic flaws, bugs, edge cases, data integrity, forensic safety
-  - Returns: **"Good to commit"** or **"Issues found"** with numbered list
-- **Reviewer 2 (GPT-5.4):** Prompt the user to invoke `@gpt_code_review` in Copilot Chat
-  - This triggers the custom agent at `.github/agents/gpt_code_review.agent.md`
-  - Focus: **architecture** — dependency rules, code quality, bloat, style
-  - Reviews all uncommitted changes via `git diff`
-  - Returns a structured verdict: ✅ GOOD TO COMMIT, ⚠️ NEEDS FIXES, or ❌ NEEDS REWORK
-- **Reviewer 3 — Issue Completeness (issue-driven work only):** Launch a `runSubagent` receiving:
-  - The full GitHub Issue body (title, description, acceptance criteria, checkboxes)
-  - The implementation plan from step 1b
-  - The summary of all changes made
-  - Focus: **completeness** — verify every requirement/acceptance criterion from the issue is addressed, and the implementation matches the plan
-  - Returns: **"Issue fully resolved"** or **"Gaps found"** with numbered list of unaddressed items
+If the task originates from a GitHub Issue:
 
-### 4. Decision Phase
-- If ALL applicable reviewers say "good to commit" / "issue fully resolved" → run tests, summarize changes, propose commit message
-- If ANY reviewer found issues → fix the issues, then repeat from step 3 (max 3 iterations before escalating to user)
-- If only the GPT reviewer was used (simple changes), its verdict alone is sufficient
+1. Write a structured implementation plan:
+   - Affected files and planned changes
+   - New files/migrations to create
+   - Key design decisions and trade-offs
+2. Post the plan as a comment on the GitHub Issue
+3. This creates a traceable link between plan and implementation
 
-### 5. Finalize
-- Run: `poetry run pytest -m "not gui_offscreen and not gui_live and not slow and not compat" -q`
-- If tests pass → present summary + commit message to user
-- If tests fail → fix and re-run (max 3 attempts before escalating to user)
+### Phase 2: Implementation
+
+For **single-layer changes** (e.g., just a helper fix, just a UI tweak):
+- Launch one `runSubagent` with the full task description, research findings, and constraints
+
+For **multi-layer changes** (spans DB + core + UI + tests), split into up to 3 coordinated subagents:
+
+| Agent | Scope | Runs |
+|-------|-------|------|
+| **DB & Core** | Migrations, helpers, `core/` modules, extractors | First (others depend on this) |
+| **UI & Services** | `app/features/`, `common/`, `services/`, `data/` | After DB & Core |
+| **Tests** | All new/modified test files | After DB & Core and UI & Services |
+
+Each subagent receives:
+- The full task description and research findings from Phase 1
+- Explicit constraints (dependency rules, migration rules, forensic rules)
+- **What the other agents are responsible for** (to avoid overlap and ensure interface consistency)
+- For dependent agents: a summary of what the previous agent produced
+
+Each returns a summary of all modified/created files.
+
+**Coordination rule:** If the change is small enough that splitting adds overhead without benefit, use a single agent. The split is for tasks touching 5+ files across multiple layers.
+
+### Phase 3: Review (5 mandatory reviewers + 1 conditional)
+
+Launch **all 5 core reviewers in parallel** as `runSubagent` calls. Each receives:
+- The task description
+- The full content of every changed/created file
+
+| Reviewer | Focus | Pass Criteria |
+|----------|-------|---------------|
+| **Correctness** | Logic flaws, bugs, edge cases, off-by-one errors, data integrity | No logic issues found |
+| **Forensic Safety** | Evidence read-only, audit logging present, deterministic outputs, no evidence mutation, provenance fields | All forensic rules satisfied |
+| **Security** | Path traversal prevention, no raw SQL in UI code, input validation, network safety, OWASP Top 10 | No security concerns |
+| **Architecture** | Dependency direction rules, no cross-feature imports, data access patterns, code quality, style, no bloat | Clean architecture |
+| **Documentation** | `planning/wip/` updated for behavioral changes, `docs/wiki/` pages updated when user-facing behavior changes (extractors, features, reports, general guides), README reflects changes, examples valid | Docs in sync with code |
+
+Each reviewer returns: **"PASS"** or **"ISSUES: [numbered list]"**
+
+#### Conditional Reviewer (issue-driven work only)
+
+| Reviewer | Focus | Pass Criteria |
+|----------|-------|---------------|
+| **Issue Completeness** | Every requirement/acceptance criterion from the Issue is addressed, implementation matches plan | All requirements met |
+
+Receives: GitHub Issue body, implementation plan from Phase 1b, summary of all changes.
+
+### Phase 4: Decision
+
+```
+IF all reviewers pass:
+    → Proceed to Phase 5
+
+ELSE:
+    → Fix the identified issues
+    → Re-run ONLY the failed reviewers (not all)
+    → Max 3 fix iterations before escalating to user
+```
+
+### Phase 5: Finalize
+
+1. **Run tests:**
+   ```bash
+   poetry run pytest -m "not gui_offscreen and not gui_live and not slow and not compat" -q
+   ```
+
+2. **If all pass:** Present summary + proposed commit message to user
+
+3. **If tests fail:** Fix and re-run (max 3 attempts before escalating to user)
