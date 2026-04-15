@@ -1,0 +1,182 @@
+{# Search Terms Module Template #}
+<div class="module-search-terms">
+
+    {# ── Title ────────────────────────────────────────────── #}
+    {% if section_title %}
+    <h3 class="module-title">{{ section_title }}</h3>
+    {% endif %}
+
+    {# ── Description ──────────────────────────────────────── #}
+    {% if section_description %}
+    <p class="module-description">{{ section_description }}</p>
+    {% endif %}
+
+    {# ── Main Content ─────────────────────────────────────── #}
+    {% if search_terms %}
+    <table class="search-terms-table">
+        <thead>
+            <tr>
+                <th class="col-term">{{ t.search_term | default('Search Term') }}</th>
+                {% if show_url %}
+                <th class="col-url">{{ t.search_url | default('URL') }}</th>
+                {% endif %}
+                {% if show_browser %}
+                <th class="col-browser">{{ t.search_browser | default('Browser') }}</th>
+                {% endif %}
+                {% if show_engine %}
+                <th class="col-engine">{{ t.search_engine | default('Search Engine') }}</th>
+                {% endif %}
+                {% if show_timestamp %}
+                <th class="col-time">{{ t.search_time | default('Search Time') }}</th>
+                {% endif %}
+                {% if show_profile %}
+                <th class="col-profile">{{ t.search_profile | default('Profile') }}</th>
+                {% endif %}
+            </tr>
+        </thead>
+        <tbody>
+            {% for item in search_terms %}
+            <tr>
+                <td class="col-term">{{ item.term }}</td>
+                {% if show_url %}
+                <td class="col-url"><span class="url-text">{{ item.url }}</span></td>
+                {% endif %}
+                {% if show_browser %}
+                <td class="col-browser">{{ item.browser }}</td>
+                {% endif %}
+                {% if show_engine %}
+                <td class="col-engine">{{ item.search_engine }}</td>
+                {% endif %}
+                {% if show_timestamp %}
+                <td class="col-time">{{ item.search_time }}</td>
+                {% endif %}
+                {% if show_profile %}
+                <td class="col-profile">{{ item.profile }}</td>
+                {% endif %}
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    {% else %}
+    <p class="empty-message">
+        {{ t.no_search_terms | default('No search terms found matching the filter criteria.') }}
+    </p>
+    {% endif %}
+
+    {# ── Truncation Notice ────────────────────────────────── #}
+    {% if is_truncated %}
+    <p class="truncation-info">
+        {{ t.showing_x_of_y | default('showing {shown} of {total}')
+           | replace('{shown}', shown_count|string)
+           | replace('{total}', total_count|string) }}
+        {{ t.search_terms_label | default('search terms') }}
+    </p>
+    {% endif %}
+
+    {# ── Filter Info Footer ───────────────────────────────── #}
+    {% if show_filter_info %}
+    <p class="filter-info">
+        <strong>{{ t.filter | default('Filter') }}:</strong> {{ filter_description }}
+        <span class="entry-count">({{ total_count }} {{ t.search_terms_label | default('search terms') }})</span>
+    </p>
+    {% endif %}
+
+</div>
+
+<style>
+/* All styles scoped to .module-search-terms */
+.module-search-terms {
+    margin: 1em 0;
+}
+
+.module-search-terms .module-title {
+    margin: 0 0 0.5em 0;
+    font-size: 1.1em;
+    font-weight: 600;
+    color: #333;
+}
+
+.module-search-terms .module-description {
+    margin: 0 0 0.75em 0;
+    color: #555;
+    font-size: 0.9em;
+    line-height: 1.4;
+}
+
+/* Table */
+.module-search-terms .search-terms-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.85em;
+    table-layout: fixed;
+}
+
+.module-search-terms .search-terms-table th,
+.module-search-terms .search-terms-table td {
+    border: 1px solid #ddd;
+    padding: 6px 8px;
+    text-align: left;
+    vertical-align: top;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.module-search-terms .search-terms-table th {
+    background-color: #f5f5f5;
+    font-weight: 600;
+}
+
+.module-search-terms .search-terms-table tbody tr:nth-child(even) {
+    background-color: #fafafa;
+}
+
+.module-search-terms .search-terms-table tbody tr:hover {
+    background-color: #f0f7ff;
+}
+
+/* Column widths */
+.module-search-terms .col-term { width: 25%; }
+.module-search-terms .col-url { width: 30%; }
+.module-search-terms .col-browser { width: 10%; }
+.module-search-terms .col-engine { width: 12%; }
+.module-search-terms .col-time { width: 13%; }
+.module-search-terms .col-profile { width: 10%; }
+
+.module-search-terms .url-text {
+    word-break: break-all;
+    font-size: 0.9em;
+    color: #555;
+}
+
+/* Empty state */
+.module-search-terms .empty-message {
+    text-align: center;
+    color: #888;
+    font-style: italic;
+    padding: 2em;
+}
+
+/* Footer */
+.module-search-terms .truncation-info {
+    margin-top: 0.75em;
+    margin-bottom: 0.5em;
+    color: #666;
+    font-size: 0.85em;
+    font-style: italic;
+}
+
+.module-search-terms .filter-info {
+    margin-top: 0.75em;
+    color: #555;
+    font-size: 0.9em;
+}
+
+.module-search-terms .entry-count {
+    color: #888;
+}
+
+@media print {
+    .module-search-terms .search-terms-table { font-size: 0.8em; }
+    .module-search-terms .search-terms-table tbody tr:hover { background-color: transparent; }
+}
+</style>

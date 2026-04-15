@@ -33,6 +33,7 @@ from .images import ImagesModule
 from .installed_applications import InstalledApplicationsModule
 from .jump_lists import JumpListsModule
 from .screenshots import ScreenshotsModule
+from .search_terms import SearchTermsModule
 from .site_engagement import SiteEngagementModule
 from .system_summary import SystemSummaryModule
 from .tagged_file_list import TaggedFileListModule
@@ -60,6 +61,7 @@ __all__ = [
     "InstalledApplicationsModule",
     "JumpListsModule",
     "ScreenshotsModule",
+    "SearchTermsModule",
     "SiteEngagementModule",
     "SystemSummaryModule",
     "TaggedFileListModule",
