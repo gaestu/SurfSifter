@@ -1,6 +1,6 @@
 ---
 description: Review uncommitted code for bugs, logic flaws, forensic safety violations, and architecture issues. Use when code review is needed before committing.
-model: gpt-5.4
+model: claude-opus-4.6
 tools:
   - search
   - execute
