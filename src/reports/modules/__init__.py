@@ -27,6 +27,7 @@ from .autofill_form_data import AutofillFormDataModule
 from .bookmarks import BookmarksModule
 from .browser_downloads import BrowserDownloadsModule
 from .browser_history import BrowserHistoryModule
+from .cookies import CookiesModule
 from .credentials import CredentialsModule
 from .downloaded_images import DownloadedImagesModule
 from .images import ImagesModule
@@ -55,6 +56,7 @@ __all__ = [
     "BookmarksModule",
     "BrowserDownloadsModule",
     "BrowserHistoryModule",
+    "CookiesModule",
     "CredentialsModule",
     "DownloadedImagesModule",
     "ImagesModule",

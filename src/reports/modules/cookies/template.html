@@ -1,0 +1,224 @@
+{# Cookies Report Module Template #}
+<div class="module-cookies">
+
+    {# ── Title ────────────────────────────────────────────── #}
+    {% if show_title %}
+    <h3 class="module-title">{{ title_text }}</h3>
+    {% endif %}
+
+    {# ── Description ──────────────────────────────────────── #}
+    {% if show_description %}
+    <p class="module-description">{{ description_text }}</p>
+    {% endif %}
+
+    {# ── Main Content ─────────────────────────────────────── #}
+    {% if cookies %}
+    <table class="cookies-table">
+        <thead>
+            <tr>
+                <th class="col-name">{{ t.cookie_name | default('Name') }}</th>
+                <th class="col-domain">{{ t.domain | default('Domain') }}</th>
+                {% if show_value %}
+                <th class="col-value">{{ t.value | default('Value') }}</th>
+                {% endif %}
+                {% if show_path %}
+                <th class="col-path">{{ t.path | default('Path') }}</th>
+                {% endif %}
+                {% if show_browser %}
+                <th class="col-browser">{{ t.browser | default('Browser') }}</th>
+                {% endif %}
+                {% if show_profile %}
+                <th class="col-profile">{{ t.profile | default('Profile') }}</th>
+                {% endif %}
+                {% if show_secure %}
+                <th class="col-secure">{{ t.secure | default('Secure') }}</th>
+                {% endif %}
+                {% if show_httponly %}
+                <th class="col-httponly">{{ t.httponly | default('HttpOnly') }}</th>
+                {% endif %}
+                {% if show_samesite %}
+                <th class="col-samesite">{{ t.samesite | default('SameSite') }}</th>
+                {% endif %}
+                {% if show_expires %}
+                <th class="col-expires">{{ t.expires | default('Expires') }}</th>
+                {% endif %}
+                {% if show_created %}
+                <th class="col-created">{{ t.created | default('Created') }}</th>
+                {% endif %}
+                {% if show_last_access %}
+                <th class="col-last-access">{{ t.last_access | default('Last Access') }}</th>
+                {% endif %}
+            </tr>
+        </thead>
+        <tbody>
+            {% for cookie in cookies %}
+            <tr>
+                <td class="col-name">{{ cookie.name }}</td>
+                <td class="col-domain">{{ cookie.domain }}</td>
+                {% if show_value %}
+                <td class="col-value">{{ cookie.value }}</td>
+                {% endif %}
+                {% if show_path %}
+                <td class="col-path">{{ cookie.path }}</td>
+                {% endif %}
+                {% if show_browser %}
+                <td class="col-browser">{{ cookie.browser }}</td>
+                {% endif %}
+                {% if show_profile %}
+                <td class="col-profile">{{ cookie.profile }}</td>
+                {% endif %}
+                {% if show_secure %}
+                <td class="col-secure">
+                    {% if cookie.is_secure %}
+                    <span class="flag-yes">✓</span>
+                    {% else %}
+                    <span class="flag-no">✗</span>
+                    {% endif %}
+                </td>
+                {% endif %}
+                {% if show_httponly %}
+                <td class="col-httponly">
+                    {% if cookie.is_httponly %}
+                    <span class="flag-yes">✓</span>
+                    {% else %}
+                    <span class="flag-no">✗</span>
+                    {% endif %}
+                </td>
+                {% endif %}
+                {% if show_samesite %}
+                <td class="col-samesite">{{ cookie.samesite }}</td>
+                {% endif %}
+                {% if show_expires %}
+                <td class="col-expires">{{ cookie.expires_utc }}</td>
+                {% endif %}
+                {% if show_created %}
+                <td class="col-created">{{ cookie.creation_utc }}</td>
+                {% endif %}
+                {% if show_last_access %}
+                <td class="col-last-access">{{ cookie.last_access_utc }}</td>
+                {% endif %}
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    {% else %}
+    <p class="empty-message">
+        {{ t.no_cookies_found | default('No cookies found matching the filter criteria.') }}
+    </p>
+    {% endif %}
+
+    {# ── Truncation Notice ────────────────────────────────── #}
+    {% if is_truncated %}
+    <p class="truncation-info">
+        {{ t.showing_x_of_y | default('showing {shown} of {total}')
+           | replace('{shown}', shown_count|string)
+           | replace('{total}', total_count|string) }}
+        {{ t.entries | default('entries') }}
+    </p>
+    {% endif %}
+
+    {# ── Filter Info Footer ───────────────────────────────── #}
+    {% if show_filter_info %}
+    <p class="filter-info">
+        <strong>{{ t.filter | default('Filter') }}:</strong> {{ filter_description }}
+        <span class="entry-count">({{ total_count }} {{ t.cookies_label | default('cookies') }})</span>
+    </p>
+    {% endif %}
+
+</div>
+
+<style>
+/* All styles scoped to .module-cookies */
+.module-cookies { margin: 1em 0; }
+.module-cookies .module-title {
+    margin: 0 0 0.5em 0;
+    font-size: 1.1em;
+    font-weight: 600;
+    color: #333;
+}
+.module-cookies .module-description {
+    margin: 0 0 0.75em 0;
+    color: #555;
+    font-size: 0.9em;
+    line-height: 1.4;
+}
+
+/* Table */
+.module-cookies .cookies-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.85em;
+    table-layout: auto;
+}
+.module-cookies .cookies-table th,
+.module-cookies .cookies-table td {
+    border: 1px solid #ddd;
+    padding: 4px 6px;
+    text-align: left;
+    vertical-align: top;
+}
+.module-cookies .cookies-table th {
+    background-color: #f5f5f5;
+    font-weight: 600;
+    white-space: nowrap;
+}
+.module-cookies .cookies-table tbody tr:nth-child(even) {
+    background-color: #fafafa;
+}
+.module-cookies .cookies-table tbody tr:hover {
+    background-color: #f0f7ff;
+}
+
+/* Column widths */
+.module-cookies .col-name { max-width: 200px; word-break: break-word; }
+.module-cookies .col-domain { max-width: 200px; word-break: break-all; }
+.module-cookies .col-value { max-width: 180px; overflow: hidden; text-overflow: ellipsis; }
+.module-cookies .col-path { max-width: 120px; word-break: break-all; }
+.module-cookies .col-browser { text-align: center; white-space: nowrap; }
+.module-cookies .col-profile { white-space: nowrap; }
+.module-cookies .col-secure,
+.module-cookies .col-httponly {
+    text-align: center;
+    white-space: nowrap;
+}
+.module-cookies .col-samesite { text-align: center; white-space: nowrap; }
+.module-cookies .col-expires,
+.module-cookies .col-created,
+.module-cookies .col-last-access {
+    white-space: nowrap;
+    text-align: center;
+}
+
+/* Flags */
+.module-cookies .flag-yes { color: #2a7d2a; font-weight: 600; }
+.module-cookies .flag-no { color: #bbb; }
+
+/* Empty state */
+.module-cookies .empty-message {
+    text-align: center;
+    color: #888;
+    font-style: italic;
+    padding: 2em;
+}
+
+/* Footer */
+.module-cookies .truncation-info {
+    margin-top: 0.75em;
+    margin-bottom: 0.5em;
+    color: #666;
+    font-size: 0.85em;
+    font-style: italic;
+}
+.module-cookies .filter-info {
+    margin-top: 0.75em;
+    color: #555;
+    font-size: 0.9em;
+}
+.module-cookies .entry-count {
+    color: #888;
+}
+
+@media print {
+    .module-cookies .cookies-table { font-size: 0.8em; }
+}
+</style>
