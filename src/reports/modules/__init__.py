@@ -36,6 +36,7 @@ from .jump_lists import JumpListsModule
 from .screenshots import ScreenshotsModule
 from .search_terms import SearchTermsModule
 from .site_engagement import SiteEngagementModule
+from .site_permissions import SitePermissionsModule
 from .system_summary import SystemSummaryModule
 from .tagged_file_list import TaggedFileListModule
 from .url_activity_timeline import UrlActivityTimelineModule
@@ -65,6 +66,7 @@ __all__ = [
     "ScreenshotsModule",
     "SearchTermsModule",
     "SiteEngagementModule",
+    "SitePermissionsModule",
     "SystemSummaryModule",
     "TaggedFileListModule",
     "UrlActivityTimelineModule",
