@@ -65,8 +65,17 @@ class UrlQueryMixin(BaseDataAccess):
         logger = logging.getLogger(__name__)
         start_time = time.time()
 
-        params: List[Any] = [evidence_id, domain_like, url_like]
-        where = ["u.evidence_id = ?", "COALESCE(u.domain, '') LIKE ?", "u.url LIKE ?"]
+        params: List[Any] = [evidence_id]
+        where = ["u.evidence_id = ?"]
+
+        # Skip no-op wildcard filters for performance (Issue #47)
+        # LIKE '%' forces full-table evaluation - omit when not needed
+        if domain_like and domain_like != "%":
+            where.append("COALESCE(u.domain, '') LIKE ?")
+            params.append(domain_like)
+        if url_like and url_like != "%":
+            where.append("u.url LIKE ?")
+            params.append(url_like)
 
         if tag_like and tag_like != "%":
             where.append("""
@@ -147,8 +156,17 @@ class UrlQueryMixin(BaseDataAccess):
         logger = logging.getLogger(__name__)
         start_time = time.time()
 
-        params: List[Any] = [evidence_id, domain_like, url_like]
-        where = ["u.evidence_id = ?", "COALESCE(u.domain, '') LIKE ?", "u.url LIKE ?"]
+        params: List[Any] = [evidence_id]
+        where = ["u.evidence_id = ?"]
+
+        # Skip no-op wildcard filters for performance (Issue #47)
+        # LIKE '%' forces full-table evaluation - omit when not needed
+        if domain_like and domain_like != "%":
+            where.append("COALESCE(u.domain, '') LIKE ?")
+            params.append(domain_like)
+        if url_like and url_like != "%":
+            where.append("u.url LIKE ?")
+            params.append(url_like)
 
         if tag_like and tag_like != "%":
             where.append("""
@@ -180,12 +198,14 @@ class UrlQueryMixin(BaseDataAccess):
 
         # Removed GROUP_CONCAT - tags loaded on-demand via get_artifact_tags_str()
         # This removes the LEFT JOIN overhead for every query (30-50% faster)
+        # Issue #47: Use first_seen_utc directly for ORDER BY to enable index usage
+        # NULLs sort to end with DESC, which is desired (timestamped URLs shown first)
         sql = f"""
             SELECT u.id, u.url, u.domain, u.scheme, u.discovered_by, u.first_seen_utc,
                    u.last_seen_utc, u.source_path, u.notes, u.occurrence_count
             FROM urls u
             WHERE {' AND '.join(where)}
-            ORDER BY COALESCE(u.first_seen_utc, u.last_seen_utc) DESC
+            ORDER BY u.first_seen_utc DESC
             LIMIT ? OFFSET ?
         """
         params.extend([limit, offset])
@@ -241,6 +261,7 @@ class UrlQueryMixin(BaseDataAccess):
             List of URL dictionaries
         """
         # Updated to use unified tagging system
+        # Issue #47: Use first_seen_utc directly for ORDER BY to enable index usage
         sql = """
             SELECT u.id, u.url, u.domain, u.scheme, u.discovered_by, u.first_seen_utc,
                    u.last_seen_utc, u.source_path, u.tags, u.notes
@@ -250,7 +271,7 @@ class UrlQueryMixin(BaseDataAccess):
             WHERE u.evidence_id = ?
               AND ta.artifact_type = 'url'
               AND t.name_normalized = ?
-            ORDER BY COALESCE(u.first_seen_utc, u.last_seen_utc) DESC
+            ORDER BY u.first_seen_utc DESC
         """
         with self._use_evidence_conn(evidence_id):
             with self._connect() as conn:
@@ -278,6 +299,47 @@ class UrlQueryMixin(BaseDataAccess):
                 result = conn.execute(sql, (evidence_id, url_id)).fetchone()
                 # SQLite's GROUP_CONCAT with DISTINCT uses ',' as default separator
                 return result[0] if result and result[0] else ""
+
+    def get_url_matches_batch(
+        self,
+        evidence_id: int,
+        url_ids: Iterable[int],
+    ) -> Dict[int, str]:
+        """
+        Get matched list names for multiple URLs in a single query.
+
+        Issue #47: Batch loading to avoid N+1 query pattern.
+        Loads all matches for a page of URLs in one query instead of
+        calling get_url_matches() individually per row.
+
+        Args:
+            evidence_id: Evidence ID
+            url_ids: Iterable of URL IDs to fetch matches for
+
+        Returns:
+            Mapping of url_id -> comma-separated list of matched list names.
+            URLs without matches are not included in the result.
+        """
+        url_ids_list = list(url_ids)
+        if not url_ids_list:
+            return {}
+
+        placeholders = ",".join("?" for _ in url_ids_list)
+        sql = f"""
+            SELECT url_id, GROUP_CONCAT(DISTINCT list_name) AS matched_lists
+            FROM url_matches
+            WHERE evidence_id = ? AND url_id IN ({placeholders})
+            GROUP BY url_id
+        """
+        params = [evidence_id, *url_ids_list]
+
+        with self._use_evidence_conn(evidence_id):
+            with self._connect() as conn:
+                cursor = conn.execute(sql, params)
+                return {
+                    row["url_id"]: row["matched_lists"] or ""
+                    for row in cursor.fetchall()
+                }
 
     # -------------------------------------------------------------------------
     # URL Filter Helpers (Cached)
