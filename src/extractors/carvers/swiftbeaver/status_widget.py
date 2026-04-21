@@ -130,7 +130,7 @@ class SwiftbeaverStatusWidget(QWidget):
                             continue
                         try:
                             entry = json.loads(line)
-                            if entry.get("artefact_kind") == "url":
+                            if entry.get("artefact_kind", "").lower() == "url":
                                 url_count += 1
                         except (json.JSONDecodeError, KeyError):
                             continue

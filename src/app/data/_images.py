@@ -524,6 +524,7 @@ class ImageQueryMixin(BaseDataAccess):
             "bulk_extractor_images": "bulk_extractor",
             "foremost_carver": "foremost_carver",
             "scalpel": "scalpel",
+            "swiftbeaver": "swiftbeaver",
             "image_carving": "",  # Legacy: rel_path is full path
             # Filesystem extractor
             "filesystem_images": "filesystem_images/extracted",

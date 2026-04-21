@@ -703,11 +703,11 @@ class SwiftbeaverExtractor(BaseExtractor):
                     continue
 
                 # Resolve file path (with path traversal protection)
-                file_path_value = entry.get("file_path")
+                file_path_value = entry.get("path") or entry.get("file_path")
                 if not file_path_value or not isinstance(file_path_value, str):
                     parse_errors += 1
                     continue
-                carved_path = (run_dir / file_path_value).resolve()
+                carved_path = (run_dir / CARVED_DIR / file_path_value).resolve()
                 if not carved_path.is_relative_to(run_dir.resolve()):
                     LOGGER.warning("Path traversal rejected: %s", file_path_value)
                     continue
@@ -739,8 +739,10 @@ class SwiftbeaverExtractor(BaseExtractor):
         processing_started_at = datetime.now(timezone.utc).isoformat()
 
         # Process images for phash, EXIF, thumbnails
+        # Pass run_dir.parent (the swiftbeaver/ output dir) so that rel_path
+        # includes the run timestamp component: {run_timestamp}/carved/...
         processor = ParallelImageProcessor(enable_parallel=True)
-        results = processor.process_images(image_paths, run_dir)
+        results = processor.process_images(image_paths, run_dir.parent)
 
         # Clean up previous run discoveries if re-ingesting
         deleted = delete_discoveries_by_run(evidence_conn, evidence_id, run_id)
@@ -791,6 +793,18 @@ class SwiftbeaverExtractor(BaseExtractor):
                     inserted += 1
                 else:
                     enriched += 1
+                    # Heal stale rel_path from prior runs: SwiftBeaver writes
+                    # carved files into a timestamped run directory that
+                    # changes between extractions. The images table dedupes
+                    # by SHA256 so the rel_path captured on the first run
+                    # would otherwise become unresolvable after a re-run.
+                    # Only update rows originally discovered by swiftbeaver
+                    # to avoid clobbering rel_paths owned by other extractors.
+                    evidence_conn.execute(
+                        "UPDATE images SET rel_path = ? "
+                        "WHERE id = ? AND first_discovered_by = 'swiftbeaver'",
+                        (result.rel_path, image_id),
+                    )
 
             except Exception as e:
                 error_count += 1
@@ -879,7 +893,7 @@ class SwiftbeaverExtractor(BaseExtractor):
                     skipped += 1
                     continue
 
-                if entry.get("artefact_kind") != "url":
+                if entry.get("artefact_kind", "").lower() != "url":
                     continue
 
                 url_value = entry.get("content", "").strip()
