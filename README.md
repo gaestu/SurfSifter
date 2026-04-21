@@ -148,6 +148,7 @@ python -m app.main
 - **Filesystem images:** Extract images from evidence with path/timestamp context, signature verification, MACB timestamps
 - **File carvers:** foremost and scalpel for unallocated space carving (slow, single-threaded)
 - **Bulk extraction:** bulk_extractor for URLs, emails, domains, IPs, phone numbers, Bitcoin/Ethereum addresses
+- **SwiftBeaver:** Multi-format image carving (JPEG/PNG/GIF/WebP/BMP/TIFF/HEIC/ICO) and URL extraction with native E01 support
 - **Browser carver:** Deep-scan for carved browser SQLite databases (history/cookies) with raw URL extraction
 - **Image analysis:** Perceptual hash (pHash) clustering, duplicate detection, similarity search
 - **Format support:** JPEG, PNG, GIF, WebP, BMP, ICO, TIFF, SVG, AVIF, HEIC/HEIF
@@ -220,6 +221,7 @@ Discovered automatically on `PATH`:
 - **foremost** — File carving (images, documents)
 - **scalpel** — Advanced file carving
 - **bulk_extractor** — URL/email/crypto extraction
+- **swiftbeaver** — Image carving and URL extraction (native E01 support)
 - **exiftool** — EXIF metadata extraction
 - **firejail** — Browser sandboxing (security feature)
 

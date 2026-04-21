@@ -27,6 +27,7 @@ EXTRACTOR_TOOL_REQUIREMENTS: Dict[str, List[str]] = {
     "bulk_extractor": ["bulk_extractor"],
     "foremost_carver": ["foremost"],
     "scalpel": ["scalpel"],
+    "swiftbeaver": ["swiftbeaver"],
 
     # Python-based Extractors (no external tools)
     "sqlite_browser_history": [],
@@ -36,6 +37,10 @@ EXTRACTOR_TOOL_REQUIREMENTS: Dict[str, List[str]] = {
     "registry_offline": [],  # Uses regipy (Python package, not external tool)
     "regex_text_scanner": [],
 }
+
+# Extractors that receive the raw evidence source path rather than an EvidenceFS.
+# Add new path-based extractors here when they are introduced.
+_PATH_BASED_EXTRACTORS: frozenset = frozenset({"bulk_extractor", "swiftbeaver"})
 
 
 def get_extractor_tool_requirements(extractor: str) -> List[str]:
@@ -209,16 +214,16 @@ def run_extraction_pipeline(
             # Most modular extractors expect evidence_fs, but bulk_extractor expects path
             # We check signature or metadata if possible, or try both
 
-            # For now, we know bulk_extractor needs path, others need fs
-            if name == "bulk_extractor":
-                # bulk_extractor needs path
+            if name in _PATH_BASED_EXTRACTORS:
+                # source_path-based extractor
                 source_path = getattr(fs, "source_path", None)
                 if source_path:
                     can_run, reason = extractor.can_run_extraction(source_path)
                     if can_run:
                         try:
-                            extractor.run_extraction(source_path, output_dir, config, callbacks)
-                            extraction_succeeded = True
+                            extraction_succeeded = extractor.run_extraction(
+                                source_path, output_dir, config, callbacks
+                            ) is not False
                         except Exception as e:
                             LOGGER.error(f"Extractor {name} failed extraction: {e}")
                             failed_extractors.append(
@@ -235,8 +240,9 @@ def run_extraction_pipeline(
                 can_run, reason = extractor.can_run_extraction(fs)
                 if can_run:
                     try:
-                        extractor.run_extraction(fs, output_dir, config, callbacks)
-                        extraction_succeeded = True
+                        extraction_succeeded = extractor.run_extraction(
+                            fs, output_dir, config, callbacks
+                        ) is not False
                     except Exception as e:
                         LOGGER.error(f"Extractor {name} failed extraction: {e}")
                         failed_extractors.append(

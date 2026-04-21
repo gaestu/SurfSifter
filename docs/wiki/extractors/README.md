@@ -9,7 +9,7 @@ This section documents all extractors under `src/extractors/`.
 - IE Legacy (`ie-legacy.md`) — 12 extractors for Internet Explorer and Legacy Edge
 
 ## Other Extractor Groups
-- Carvers (`carvers.md`) — bulk_extractor and browser carver
+- Carvers (`carvers.md`) — bulk_extractor, SwiftBeaver, and browser carver
 - Media (`media.md`) — filesystem image extraction and file carving (Foremost, Scalpel)
 - System (`system.md`) — registry, Jump Lists, file list enumeration, DPAPI decryption, and macOS plist parsing
 

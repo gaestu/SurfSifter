@@ -19,8 +19,10 @@ from __future__ import annotations
 # Import from nested locations within carvers/
 from .bulk_extractor import BulkExtractorExtractor
 from .browser_carver import BrowserCarverExtractor
+from .swiftbeaver import SwiftbeaverExtractor
 
 __all__ = [
     "BulkExtractorExtractor",
     "BrowserCarverExtractor",
+    "SwiftbeaverExtractor",
 ]
