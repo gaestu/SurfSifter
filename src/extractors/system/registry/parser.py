@@ -134,6 +134,50 @@ def systemtime_to_datetime(data: bytes) -> Optional[datetime]:
         return None
 
 
+def coerce_reg_string(data: bytes) -> Optional[str]:
+    """
+    Best-effort decode of a registry value returned as raw bytes.
+
+    Some registry values that are semantically REG_SZ / REG_EXPAND_SZ may be
+    returned by the underlying parser as raw bytes (e.g. when the value type
+    field is REG_NONE or when the cell data is read directly). This helper
+    decodes such buffers to a readable string by:
+
+    1. Trying UTF-16-LE up to the first NUL pair (Windows wide string).
+    2. Falling back to UTF-8 / latin-1 with NUL-trim.
+
+    Returns None if no printable text can be recovered. The caller is
+    responsible for deciding whether to use the decoded string for display.
+    """
+    if not isinstance(data, bytes) or not data:
+        return None
+
+    # Try UTF-16-LE: find first NUL pair on an even boundary.
+    try:
+        end = len(data)
+        for i in range(0, len(data) - 1, 2):
+            if data[i] == 0 and data[i + 1] == 0:
+                end = i
+                break
+        if end >= 2:
+            text = data[:end].decode("utf-16-le", errors="strict")
+            # Require at least one printable char to accept this decode.
+            if text and any(ch.isprintable() and not ch.isspace() for ch in text):
+                return text
+    except (UnicodeDecodeError, ValueError):
+        pass
+
+    # Fall back to UTF-8 with NUL trim.
+    try:
+        text = data.split(b"\x00", 1)[0].decode("utf-8", errors="strict")
+        if text and any(ch.isprintable() and not ch.isspace() for ch in text):
+            return text
+    except UnicodeDecodeError:
+        pass
+
+    return None
+
+
 def format_datetime(dt: Optional[datetime], fmt: str = "%Y-%m-%d %H:%M:%S") -> str:
     """
     Format datetime to string.
@@ -399,10 +443,18 @@ def _process_registry_key(
                 val_name = val.name
                 val_content = val.value
 
+                if isinstance(val_content, bytes):
+                    decoded = coerce_reg_string(val_content)
+                    display_content = decoded if decoded is not None else val_content.hex()
+                    raw_for_json = val_content.hex()
+                else:
+                    display_content = val_content
+                    raw_for_json = val_content
+
                 findings.append(RegistryFinding(
                     detector_id=target.get("name"),
                     name=key_def.get("indicator", target.get("name")),
-                    value=str(val_content),
+                    value=str(display_content),
                     confidence=str(key_def.get("confidence", 1.0)),
                     provenance=action.get("provenance", "registry"),
                     hive=hive_path,
@@ -410,7 +462,7 @@ def _process_registry_key(
                     extra_json=json.dumps({
                         "type": key_def.get("indicator"),
                         "value_name": val_name,
-                        "raw_value": val_content,
+                        "raw_value": raw_for_json,
                         "key_last_modified": str(key.header.last_modified)
                     }, default=str)
                 ))
@@ -518,10 +570,29 @@ def _process_registry_key(
             except Exception:
                 pass
 
+        # Generic safety net: if we still have raw bytes for a value with no
+        # bytes-aware type handler, attempt to decode it as a Windows wide
+        # string. Otherwise str(bytes) would emit a Python "b'\\x00...'" repr
+        # into the report (see TimeZoneKeyName regression).
+        if isinstance(display_value, bytes) and value_type not in {
+            "filetime_bytes", "systemtime_bytes",
+        }:
+            decoded = coerce_reg_string(display_value)
+            if decoded is not None:
+                display_value = decoded
+            else:
+                # No readable text — fall back to a hex preview rather than
+                # the bytes repr.
+                display_value = display_value.hex()
+
         # Build extra_json with all metadata
         extra_json_data = {
             "type": val_def.get("indicator"),  # Semantic type
-            "raw_value": value_content,
+            "raw_value": (
+                value_content
+                if not isinstance(value_content, bytes)
+                else value_content.hex()
+            ),
             "key_last_modified": str(key.header.last_modified),
             **extra_data,  # Include any additional type-specific data
         }
