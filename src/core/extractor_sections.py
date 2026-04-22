@@ -113,6 +113,8 @@ EXTRACTOR_SECTIONS: List[ExtractorSection] = [
             "safari_cache",
             "safari_storage",
             "safari_top_sites",
+            "safari_reading_list",
+            "safari_extensions",
         ],
         "collapsed": True,
         "auto_populate": False,
@@ -136,6 +138,8 @@ EXTRACTOR_SECTIONS: List[ExtractorSection] = [
             # Legacy Edge specific
             "edge_legacy_container",
             "edge_reading_list",
+            # Classic (pre-WebCache)
+            "ie_classic_history",
         ],
         "collapsed": True,
         "auto_populate": False,
@@ -144,6 +148,7 @@ EXTRACTOR_SECTIONS: List[ExtractorSection] = [
         "name": "Carvers",
         "icon": "🔍",
         "extractors": [
+            "swiftbeaver",
             "bulk_extractor",
             "foremost_carver",
             "scalpel",
