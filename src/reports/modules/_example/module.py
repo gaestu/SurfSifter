@@ -37,9 +37,7 @@ class ExampleModule(BaseReportModule):
       6. Footer            — show_filter_info
     """
 
-    # Sentinel values for tag / limit dropdowns
-    ALL = "all"
-    ANY_TAG = "any_tag"
+    # Sentinel values for limit dropdown
     UNLIMITED = "unlimited"
 
     @property
@@ -86,16 +84,16 @@ class ExampleModule(BaseReportModule):
                 help_text="Custom description (leave empty for default)",
             ),
             # ── 3. Data filters (module-specific) ───────────────────
+            # Multi-select checkbox list. Empty selection = no tag filter
+            # (include all items). Tag values are loaded dynamically from
+            # the database via get_dynamic_options().
             FilterField(
                 key="tag_filter",
                 label="Tags",
-                filter_type=FilterType.DROPDOWN,
-                default=self.ALL,
-                options=[
-                    (self.ALL, "All"),
-                    (self.ANY_TAG, "Any Tag"),
-                ],
-                help_text="Filter by tag (specific tags loaded dynamically)",
+                filter_type=FilterType.MULTI_SELECT,
+                default=[],
+                options=[],
+                help_text="Select one or more tags to filter by (leave all unchecked to include everything)",
             ),
             # ── 4. Display options (module-specific) ────────────────
             FilterField(
@@ -148,15 +146,14 @@ class ExampleModule(BaseReportModule):
     def get_dynamic_options(
         self, key: str, db_conn: sqlite3.Connection
     ) -> Optional[List[tuple]]:
-        """Load dynamic options for dropdown filters.
+        """Load dynamic options for filter fields.
 
-        Override this to populate tag_filter (or other dropdowns) from the DB.
+        For MULTI_SELECT tag filters, return one (value, label) tuple per
+        tag. The UI renders these as a checkbox list so the user can pick
+        any combination.
         """
         if key == "tag_filter":
-            options: List[tuple] = [
-                (self.ALL, "All"),
-                (self.ANY_TAG, "Any Tag"),
-            ]
+            options: List[tuple] = []
             # Example: load tags from database
             # cursor = db_conn.execute(
             #     "SELECT DISTINCT t.name FROM tags t ORDER BY t.name"
@@ -202,7 +199,9 @@ class ExampleModule(BaseReportModule):
         show_filter_info = config.get("show_filter_info", False)
 
         # ── Module-specific fields ──────────────────────────────────
-        tag_filter = config.get("tag_filter", self.ALL)
+        # MULTI_SELECT values arrive as a list of selected tag names.
+        # An empty list means "no tag filter applied".
+        selected_tags: List[str] = list(config.get("tag_filter", []) or [])
         show_details = config.get("show_details", True)
         sort_by = config.get("sort_by", "name_asc")
         limit = config.get("limit", "100")
@@ -217,7 +216,7 @@ class ExampleModule(BaseReportModule):
         is_truncated = shown_count < total_count
 
         # ── Filter description (for show_filter_info) ───────────────
-        filter_description = self._build_filter_description(tag_filter, sort_by, t)
+        filter_description = self._build_filter_description(selected_tags, sort_by, t)
 
         # ── Render template ─────────────────────────────────────────
         template_dir = get_module_template_dir(__file__)
@@ -244,17 +243,18 @@ class ExampleModule(BaseReportModule):
         )
 
     def _build_filter_description(
-        self, tag_filter: str, sort_by: str, t: Dict[str, str]
+        self, selected_tags: List[str], sort_by: str, t: Dict[str, str]
     ) -> str:
         """Build human-readable filter description for the footer."""
         parts = []
 
-        if tag_filter == self.ANY_TAG:
-            parts.append(t.get("filter_any_tag", "with any tag"))
-        elif tag_filter != self.ALL:
-            parts.append(t.get("filter_tagged", 'tagged "{tag}"').replace("{tag}", tag_filter))
-        else:
+        if not selected_tags:
             parts.append(t.get("filter_all_tags", "all tags"))
+        else:
+            joined = ", ".join(selected_tags)
+            parts.append(
+                t.get("filter_tagged", 'tagged "{tag}"').replace("{tag}", joined)
+            )
 
         sort_labels = {
             "name_asc": t.get("sort_name_az", "name A-Z"),
