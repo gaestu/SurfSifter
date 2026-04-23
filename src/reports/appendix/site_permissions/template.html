@@ -1,0 +1,120 @@
+<style>
+.appendix-sp-table {
+    width: 100%;
+    table-layout: fixed;
+    border-collapse: collapse;
+}
+.appendix-sp-table th,
+.appendix-sp-table td {
+    padding: 3px 5px;
+    font-size: 0.85em;
+    line-height: 1.2;
+    border: 1px solid #ddd;
+    vertical-align: top;
+    word-break: break-word;
+    overflow-wrap: break-word;
+}
+.appendix-sp-table th {
+    background-color: #f5f5f5;
+    text-align: left;
+    font-weight: 600;
+}
+.appendix-sp-table td.sp-time,
+.appendix-sp-table td.sp-browser {
+    white-space: nowrap;
+}
+.appendix-sp-table .sp-origin {
+    color: #0066cc;
+    word-break: break-all;
+}
+.appendix-sp-table .sp-value { font-weight: 500; }
+.appendix-sp-table .sp-value-allow { color: #2e7d32; }
+.appendix-sp-table .sp-value-deny,
+.appendix-sp-table .sp-value-block { color: #c62828; }
+.appendix-sp-table .sp-value-ask { color: #f57f17; }
+.appendix-sp-empty {
+    color: #888;
+    font-style: italic;
+}
+</style>
+
+{% macro header_row() -%}
+<tr>
+    {% if show_origin and group_by != group_origin %}
+    <th>{{ t.site_permissions_origin | default('Origin') }}</th>
+    {% endif %}
+    {% if show_type and group_by != group_type %}
+    <th style="width: 18%;">{{ t.site_permissions_type | default('Permission Type') }}</th>
+    {% endif %}
+    {% if show_value %}
+    <th style="width: 10%;">{{ t.site_permissions_value | default('Value') }}</th>
+    {% endif %}
+    {% if show_browser and group_by != group_browser %}
+    <th class="sp-browser" style="width: 12%;">{{ t.browser | default('Browser') }}</th>
+    {% endif %}
+    {% if show_profile %}
+    <th style="width: 12%;">{{ t.profile | default('Profile') }}</th>
+    {% endif %}
+    {% if show_granted_at %}
+    <th class="sp-time" style="width: 16%;">{{ t.site_permissions_granted_at | default('Granted At') }}</th>
+    {% endif %}
+    {% if show_expires_at %}
+    <th class="sp-time" style="width: 16%;">{{ t.site_permissions_expires_at | default('Expires At') }}</th>
+    {% endif %}
+</tr>
+{%- endmacro %}
+
+{% macro entry_row(entry) -%}
+<tr>
+    {% if show_origin and group_by != group_origin %}
+    <td><span class="sp-origin">{{ entry.origin }}</span></td>
+    {% endif %}
+    {% if show_type and group_by != group_type %}
+    <td>{{ entry.permission_type }}</td>
+    {% endif %}
+    {% if show_value %}
+    <td><span class="sp-value sp-value-{{ entry.permission_value | lower }}">{{ entry.permission_value }}</span></td>
+    {% endif %}
+    {% if show_browser and group_by != group_browser %}
+    <td class="sp-browser">{{ entry.browser }}</td>
+    {% endif %}
+    {% if show_profile %}
+    <td>{{ entry.profile }}</td>
+    {% endif %}
+    {% if show_granted_at %}
+    <td class="sp-time">{{ entry.granted_at }}</td>
+    {% endif %}
+    {% if show_expires_at %}
+    <td class="sp-time">{{ entry.expires_at }}</td>
+    {% endif %}
+</tr>
+{%- endmacro %}
+
+{% if total_count == 0 %}
+<p class="appendix-sp-empty">
+    {{ t.no_site_permissions_found | default('No site permissions found matching the filter criteria.') }}
+</p>
+{% else %}
+    {% if group_by != group_none and grouped %}
+        {% for group in grouped %}
+            <h4 class="appendix-subheader">{{ group.label }} ({{ group.entries | length }})</h4>
+            <table class="appendix-sp-table">
+                <thead>{{ header_row() }}</thead>
+                <tbody>
+                    {% for entry in group.entries %}
+                        {{ entry_row(entry) }}
+                    {% endfor %}
+                </tbody>
+            </table>
+        {% endfor %}
+    {% else %}
+        <table class="appendix-sp-table">
+            <thead>{{ header_row() }}</thead>
+            <tbody>
+                {% for entry in entries %}
+                    {{ entry_row(entry) }}
+                {% endfor %}
+            </tbody>
+        </table>
+    {% endif %}
+{% endif %}

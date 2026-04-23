@@ -10,6 +10,7 @@ from .extracted_analyzed_data import AppendixExtractedAnalyzedDataModule
 from .file_list import AppendixFileListModule
 from .image_list import AppendixImageListModule
 from .jump_lists import AppendixJumpListsModule
+from .site_permissions import AppendixSitePermissionsModule
 from .url_list import AppendixUrlListModule
 from .web_storage import AppendixWebStorageModule
 
@@ -26,6 +27,7 @@ __all__ = [
     "AppendixFileListModule",
     "AppendixImageListModule",
     "AppendixJumpListsModule",
+    "AppendixSitePermissionsModule",
     "AppendixUrlListModule",
     "AppendixWebStorageModule",
 ]

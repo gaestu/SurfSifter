@@ -169,6 +169,8 @@ TRANSLATIONS: Dict[str, TranslationDict] = {
         # ===================
         # Activity summary module
         # ===================
+        "activity_summary_title": "Activity Summary",
+        "activity_summary_desc": "Overview of system and browser activity patterns, showing when the device was actively used, significant periods of inactivity, and the distribution of events across different categories.",
         "activity_overview": "Activity Overview",
         "activity_period": "Activity Period",
         "duration": "Duration",
@@ -219,6 +221,8 @@ TRANSLATIONS: Dict[str, TranslationDict] = {
         # ===================
         # URL activity timeline module
         # ===================
+        "url_activity_title": "URL Activity Timeline",
+        "url_activity_description": "Per-domain URL activity with first/last seen timestamps and event counts.",
         "url_activity_summary": "URL Activity Summary",
         "total_url_events": "Total URL Events",
         "unique_urls": "Unique URLs",
@@ -466,6 +470,18 @@ TRANSLATIONS: Dict[str, TranslationDict] = {
         "no_urls_for_filters": "No URLs found for the selected filters.",
 
         # ===================
+        # Site Permissions module / appendix
+        # ===================
+        "site_permissions_title": "Site Permissions",
+        "site_permissions_description": "Site permissions control what capabilities websites are granted, such as notifications, geolocation, camera, and microphone access.",
+        "site_permissions_origin": "Origin",
+        "site_permissions_type": "Permission Type",
+        "site_permissions_value": "Value",
+        "site_permissions_granted_at": "Granted At",
+        "site_permissions_expires_at": "Expires At",
+        "no_site_permissions_found": "No site permissions found matching the filter criteria.",
+
+        # ===================
         # Common / shared
         # ===================
         "showing_x_of_y": "showing {shown} of {total}",
@@ -669,6 +685,8 @@ TRANSLATIONS: Dict[str, TranslationDict] = {
         # ===================
         # Activity summary module
         # ===================
+        "activity_summary_title": "Aktivitätsübersicht",
+        "activity_summary_desc": "Überblick über System- und Browser-Aktivitätsmuster, der zeigt, wann das Gerät aktiv genutzt wurde, signifikante Inaktivitätsphasen sowie die Verteilung der Ereignisse über verschiedene Kategorien.",
         "activity_overview": "Aktivitätsübersicht",
         "activity_period": "Aktivitätszeitraum",
         "duration": "Dauer",
@@ -719,6 +737,8 @@ TRANSLATIONS: Dict[str, TranslationDict] = {
         # ===================
         # URL activity timeline module
         # ===================
+        "url_activity_title": "URL-Aktivitätszeitachse",
+        "url_activity_description": "URL-Aktivität pro Domäne mit Zeitstempeln des ersten/letzten Auftretens und Ereigniszählung.",
         "url_activity_summary": "URL-Aktivitätsübersicht",
         "total_url_events": "URL-Ereignisse gesamt",
         "unique_urls": "Eindeutige URLs",
@@ -964,6 +984,18 @@ TRANSLATIONS: Dict[str, TranslationDict] = {
         # Appendix URL list
         # ===================
         "no_urls_for_filters": "Keine URLs für die ausgewählten Filter gefunden.",
+
+        # ===================
+        # Site Permissions module / appendix
+        # ===================
+        "site_permissions_title": "Website-Berechtigungen",
+        "site_permissions_description": "Website-Berechtigungen steuern, welche Funktionen Websites gewährt werden, z. B. Benachrichtigungen, Standort, Kamera- und Mikrofonzugriff.",
+        "site_permissions_origin": "Ursprung",
+        "site_permissions_type": "Berechtigungstyp",
+        "site_permissions_value": "Wert",
+        "site_permissions_granted_at": "Erteilt am",
+        "site_permissions_expires_at": "Läuft ab am",
+        "no_site_permissions_found": "Keine Website-Berechtigungen gefunden, die den Filterkriterien entsprechen.",
 
         # ===================
         # Common / shared
