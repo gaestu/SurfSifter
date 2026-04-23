@@ -1,6 +1,16 @@
 {# URL Activity Timeline Module Template #}
 <div class="module-url-activity-timeline">
-    
+
+    {# ===== TITLE ===== #}
+    {% if show_title %}
+    <h3 class="module-title">{{ title_text }}</h3>
+    {% endif %}
+
+    {# ===== DESCRIPTION ===== #}
+    {% if show_description %}
+    <p class="module-description">{{ description_text }}</p>
+    {% endif %}
+
     {# ===== SUMMARY STATISTICS ===== #}
     <div class="summary-section">
         <h4 class="section-title">{{ t.url_activity_summary | default('URL Activity Summary') }}</h4>
@@ -101,6 +111,20 @@
 <style>
 .module-url-activity-timeline {
     margin: 1em 0;
+}
+
+.module-url-activity-timeline .module-title {
+    margin: 0 0 0.5em 0;
+    font-size: 1.1em;
+    font-weight: 600;
+    color: #333;
+}
+
+.module-url-activity-timeline .module-description {
+    margin: 0 0 0.75em 0;
+    color: #555;
+    font-size: 0.9em;
+    line-height: 1.4;
 }
 
 .module-url-activity-timeline h4 {
