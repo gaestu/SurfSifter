@@ -2,6 +2,7 @@
 
 from .base import BaseAppendixModule
 from .registry import AppendixRegistry, get_registry
+from .autofill import AppendixAutofillModule
 from .cookies import AppendixCookiesModule
 from .download_audit import AppendixDownloadAuditModule
 from .download_list import AppendixDownloadListModule
@@ -17,6 +18,7 @@ __all__ = [
     "AppendixRegistry",
     "get_registry",
     # Built-in appendix modules
+    "AppendixAutofillModule",
     "AppendixCookiesModule",
     "AppendixDownloadAuditModule",
     "AppendixDownloadListModule",
