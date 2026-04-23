@@ -2,6 +2,7 @@
 
 from .base import BaseAppendixModule
 from .registry import AppendixRegistry, get_registry
+from .cookies import AppendixCookiesModule
 from .download_audit import AppendixDownloadAuditModule
 from .download_list import AppendixDownloadListModule
 from .extracted_analyzed_data import AppendixExtractedAnalyzedDataModule
@@ -16,6 +17,7 @@ __all__ = [
     "AppendixRegistry",
     "get_registry",
     # Built-in appendix modules
+    "AppendixCookiesModule",
     "AppendixDownloadAuditModule",
     "AppendixDownloadListModule",
     "AppendixExtractedAnalyzedDataModule",

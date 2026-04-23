@@ -1,0 +1,136 @@
+<style>
+.appendix-ck-table {
+    width: 100%;
+    table-layout: fixed;
+    border-collapse: collapse;
+}
+.appendix-ck-table th,
+.appendix-ck-table td {
+    padding: 3px 5px;
+    font-size: 0.85em;
+    line-height: 1.2;
+    border: 1px solid #ddd;
+    vertical-align: top;
+    word-break: break-word;
+    overflow-wrap: break-word;
+}
+.appendix-ck-table th {
+    background-color: #f5f5f5;
+    text-align: left;
+    font-weight: 600;
+    white-space: nowrap;
+}
+.appendix-ck-table .ck-time,
+.appendix-ck-table .ck-browser {
+    white-space: nowrap;
+}
+.appendix-ck-table .ck-time .ck-date {
+    display: block;
+}
+.appendix-ck-table .ck-time .ck-clock {
+    display: block;
+    color: #555;
+}
+.appendix-ck-empty {
+    color: #888;
+    font-style: italic;
+}
+</style>
+
+{% macro render_time(value) -%}
+    {%- set parts = (value or '').split(' ', 1) -%}
+    {%- if parts | length == 2 -%}
+        <span class="ck-date">{{ parts[0] }}</span><span class="ck-clock">{{ parts[1] }}</span>
+    {%- else -%}
+        {{ value }}
+    {%- endif -%}
+{%- endmacro %}
+
+{% macro header_row() -%}
+<tr>
+    <th>{{ t.cookie_name | default('Name') }}</th>
+    {% if not group_by_domain %}
+    <th>{{ t.cookie_domain | default('Domain') }}</th>
+    {% endif %}
+    {% if show_browser %}
+    <th class="ck-browser" style="width: 12%;">{{ t.cookie_browser | default('Browser') }}</th>
+    {% endif %}
+    {% if show_path %}
+    <th>{{ t.cookie_path | default('Path') }}</th>
+    {% endif %}
+    {% if show_value %}
+    <th>{{ t.cookie_value | default('Value') }}</th>
+    {% endif %}
+    {% if show_expires %}
+    <th class="ck-time" style="width: 14%;">{{ t.cookie_expires | default('Expires') }}</th>
+    {% endif %}
+    {% if show_last_access %}
+    <th class="ck-time" style="width: 14%;">{{ t.cookie_last_access | default('Last Access') }}</th>
+    {% endif %}
+    {% if show_creation %}
+    <th class="ck-time" style="width: 14%;">{{ t.cookie_creation | default('Created') }}</th>
+    {% endif %}
+    {% if show_flags %}
+    <th>{{ t.cookie_flags | default('Flags') }}</th>
+    {% endif %}
+</tr>
+{%- endmacro %}
+
+{% macro entry_row(entry) -%}
+<tr>
+    <td>{{ entry.name }}</td>
+    {% if not group_by_domain %}
+    <td>{{ entry.domain }}</td>
+    {% endif %}
+    {% if show_browser %}
+    <td class="ck-browser">{{ entry.browser }}</td>
+    {% endif %}
+    {% if show_path %}
+    <td>{{ entry.path }}</td>
+    {% endif %}
+    {% if show_value %}
+    <td>{{ entry.value }}</td>
+    {% endif %}
+    {% if show_expires %}
+    <td class="ck-time">{{ render_time(entry.expires) }}</td>
+    {% endif %}
+    {% if show_last_access %}
+    <td class="ck-time">{{ render_time(entry.last_access) }}</td>
+    {% endif %}
+    {% if show_creation %}
+    <td class="ck-time">{{ render_time(entry.creation) }}</td>
+    {% endif %}
+    {% if show_flags %}
+    <td>{{ entry.flags }}</td>
+    {% endif %}
+</tr>
+{%- endmacro %}
+
+{% if total_count == 0 %}
+<p class="appendix-ck-empty">
+    {{ t.no_cookies_found | default('No cookies found matching the filter criteria.') }}
+</p>
+{% else %}
+    {% if group_by_domain and grouped %}
+        {% for group in grouped %}
+            <h4 class="appendix-subheader">{{ group.domain }} ({{ group.entries | length }})</h4>
+            <table class="appendix-ck-table">
+                <thead>{{ header_row() }}</thead>
+                <tbody>
+                    {% for entry in group.entries %}
+                        {{ entry_row(entry) }}
+                    {% endfor %}
+                </tbody>
+            </table>
+        {% endfor %}
+    {% else %}
+        <table class="appendix-ck-table">
+            <thead>{{ header_row() }}</thead>
+            <tbody>
+                {% for entry in entries %}
+                    {{ entry_row(entry) }}
+                {% endfor %}
+            </tbody>
+        </table>
+    {% endif %}
+{% endif %}

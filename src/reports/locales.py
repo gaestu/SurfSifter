@@ -389,6 +389,20 @@ TRANSLATIONS: Dict[str, TranslationDict] = {
         "no_jump_lists_found": "No jump list entries found matching the filter criteria.",
 
         # ===================
+        # Cookies appendix module
+        # ===================
+        "cookie_name": "Name",
+        "cookie_domain": "Domain",
+        "cookie_browser": "Browser",
+        "cookie_path": "Path",
+        "cookie_value": "Value",
+        "cookie_expires": "Expires",
+        "cookie_last_access": "Last Access",
+        "cookie_creation": "Created",
+        "cookie_flags": "Flags",
+        "no_cookies_found": "No cookies found matching the filter criteria.",
+
+        # ===================
         # Installed Applications module
         # ===================
         "installed_applications_title": "Installed Applications",
@@ -873,6 +887,20 @@ TRANSLATIONS: Dict[str, TranslationDict] = {
         "jl_jumplist_path": "Sprunglisten-Pfad",
         "jl_entries": "Einträge",
         "no_jump_lists_found": "Keine Sprunglisten-Einträge gefunden, die den Filterkriterien entsprechen.",
+
+        # ===================
+        # Cookies appendix module
+        # ===================
+        "cookie_name": "Name",
+        "cookie_domain": "Domain",
+        "cookie_browser": "Browser",
+        "cookie_path": "Pfad",
+        "cookie_value": "Wert",
+        "cookie_expires": "Läuft ab",
+        "cookie_last_access": "Letzter Zugriff",
+        "cookie_creation": "Erstellt",
+        "cookie_flags": "Flags",
+        "no_cookies_found": "Keine Cookies gefunden, die den Filterkriterien entsprechen.",
 
         # ===================
         # Installed Applications module
