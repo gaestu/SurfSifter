@@ -60,6 +60,7 @@ from ..database import (
 )
 from ..generator import ReportBuilder, ReportGenerator, ReportMode
 from ..appendix import AppendixRegistry
+from core.database import create_process_log, finalize_process_log
 
 
 class ReportTabWidget(QWidget):
@@ -500,12 +501,26 @@ class ReportTabWidget(QWidget):
         # Add stretch to push buttons to the right
         layout.addStretch()
 
-        # Preview button
-        self._preview_btn = QPushButton("👁️ Preview")
+        # Preview buttons
+        self._preview_btn = QPushButton("👁️ Report Preview")
         self._preview_btn.setToolTip("Preview report in web browser")
-        self._preview_btn.setMinimumWidth(120)
+        self._preview_btn.setMinimumWidth(140)
         self._preview_btn.clicked.connect(self._on_preview)
         layout.addWidget(self._preview_btn)
+
+        self._preview_appendix_btn = QPushButton("👁️📎 Appendix Preview")
+        self._preview_appendix_btn.setToolTip("Preview appendix in web browser")
+        self._preview_appendix_btn.setMinimumWidth(140)
+        self._preview_appendix_btn.clicked.connect(self._on_preview_appendix)
+        layout.addWidget(self._preview_appendix_btn)
+
+        self._preview_complete_btn = QPushButton("👁️📄📎 Complete Preview")
+        self._preview_complete_btn.setToolTip(
+            "Preview both report and appendix in web browser (opens two tabs)"
+        )
+        self._preview_complete_btn.setMinimumWidth(160)
+        self._preview_complete_btn.clicked.connect(self._on_preview_complete)
+        layout.addWidget(self._preview_complete_btn)
 
         # Report-only PDF button
         self._create_report_pdf_btn = QPushButton("📄 Report PDF")
@@ -665,7 +680,72 @@ class ReportTabWidget(QWidget):
             return
 
         try:
-            self._generator.preview_in_browser(html)
+            self._open_preview_with_audit(html, "report")
+        except Exception as e:
+            QMessageBox.critical(
+                self,
+                "Preview Error",
+                f"Failed to open preview: {e}"
+            )
+
+    def _open_preview_with_audit(self, html_content: str, preview_kind: str) -> None:
+        """Open a browser preview and record the external invocation."""
+        if self._db_conn is None or self._evidence_id is None:
+            raise ValueError("Preview audit context is not configured.")
+
+        log_id = create_process_log(
+            self._db_conn,
+            self._evidence_id,
+            "report_preview",
+            f"Open {preview_kind} preview in default browser",
+        )
+
+        try:
+            preview_path = self._generator.preview_in_browser(html_content)
+        except Exception as exc:
+            finalize_process_log(
+                self._db_conn,
+                log_id,
+                exit_code=1,
+                stdout=None,
+                stderr=str(exc),
+            )
+            raise
+
+        finalize_process_log(
+            self._db_conn,
+            log_id,
+            exit_code=0,
+            stdout=str(preview_path),
+            stderr=None,
+        )
+
+    def _on_preview_appendix(self) -> None:
+        """Handle Appendix Preview button click - open appendix in browser."""
+        html = self._build_report_html(ReportMode.APPENDIX_ONLY)
+        if html is None:
+            return
+
+        try:
+            self._open_preview_with_audit(html, "appendix")
+        except Exception as e:
+            QMessageBox.critical(
+                self,
+                "Preview Error",
+                f"Failed to open preview: {e}"
+            )
+
+    def _on_preview_complete(self) -> None:
+        """Handle Complete Preview button click - open report and appendix."""
+        html = self._build_report_html(ReportMode.COMPLETE)
+        if html is None:
+            return
+
+        report_html, appendix_html = html
+
+        try:
+            self._open_preview_with_audit(report_html, "report")
+            self._open_preview_with_audit(appendix_html, "appendix")
         except Exception as e:
             QMessageBox.critical(
                 self,
@@ -1302,6 +1382,7 @@ class ReportTabWidget(QWidget):
             path: Path to case workspace directory (will save to path/reports/)
         """
         self._workspace_path = path
+        self._generator.set_preview_root(path)
 
     def set_default_settings(
         self,

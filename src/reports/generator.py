@@ -678,6 +678,7 @@ class ReportGenerator:
     def __init__(self):
         """Initialize the report generator."""
         self._weasyprint_available = False
+        self._preview_root: Optional[Path] = None
         self._check_weasyprint()
 
     def _check_weasyprint(self) -> None:
@@ -697,6 +698,10 @@ class ReportGenerator:
             True if WeasyPrint is available
         """
         return self._weasyprint_available
+
+    def set_preview_root(self, preview_root: Optional[Path]) -> None:
+        """Set the workspace-backed directory used for HTML previews."""
+        self._preview_root = preview_root
 
     def generate_pdf(self, html_content: str, output_path: Path | str) -> bool:
         """Generate a PDF from HTML content.
@@ -768,17 +773,24 @@ class ReportGenerator:
         Returns:
             Path to the temporary HTML file
         """
-        # Create a temporary file that won't be auto-deleted
-        # (browser needs time to open it)
-        temp_dir = Path(tempfile.gettempdir()) / "web_analyzer_reports"
-        temp_dir.mkdir(exist_ok=True)
+        if self._preview_root is None:
+            raise ValueError("Preview output directory is not configured.")
 
-        # Use timestamp for unique filename
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        temp_file = temp_dir / f"report_preview_{timestamp}.html"
+        preview_dir = self._preview_root / "reports" / "previews"
+        preview_dir.mkdir(parents=True, exist_ok=True)
 
-        # Write HTML to file
-        temp_file.write_text(html_content, encoding="utf-8")
+        # Use a unique temp file per preview call so back-to-back previews
+        # cannot overwrite each other before the browser opens them.
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            suffix=".html",
+            prefix="report_preview_",
+            dir=preview_dir,
+            delete=False,
+        ) as temp_handle:
+            temp_handle.write(html_content)
+            temp_file = Path(temp_handle.name)
 
         # Open in default browser
         webbrowser.open(f"file://{temp_file}")

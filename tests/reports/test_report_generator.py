@@ -297,9 +297,10 @@ class TestReportGenerator:
         # Should be True if weasyprint is installed
         assert isinstance(generator.can_generate_pdf, bool)
 
-    def test_preview_in_browser(self):
+    def test_preview_in_browser(self, tmp_path):
         """Test preview creates temp file and opens browser."""
         generator = ReportGenerator()
+        generator.set_preview_root(tmp_path)
         html = "<html><body><h1>Test</h1></body></html>"
 
         with patch('webbrowser.open') as mock_open:
@@ -314,6 +315,26 @@ class TestReportGenerator:
             mock_open.assert_called_once()
             call_args = mock_open.call_args[0][0]
             assert call_args.startswith("file://")
+
+    def test_preview_in_browser_uses_distinct_temp_files(self, tmp_path):
+        """Back-to-back previews should not overwrite the same temp file."""
+        generator = ReportGenerator()
+        generator.set_preview_root(tmp_path)
+
+        with patch('webbrowser.open'):
+            first = generator.preview_in_browser("<html><body>report</body></html>")
+            second = generator.preview_in_browser("<html><body>appendix</body></html>")
+
+        assert first != second
+        assert first.read_text(encoding="utf-8") == "<html><body>report</body></html>"
+        assert second.read_text(encoding="utf-8") == "<html><body>appendix</body></html>"
+
+    def test_preview_in_browser_requires_workspace_root(self):
+        """Preview output must be rooted in the case workspace."""
+        generator = ReportGenerator()
+
+        with pytest.raises(ValueError, match="Preview output directory is not configured"):
+            generator.preview_in_browser("<html><body>report</body></html>")
 
     @pytest.mark.skipif(
         not ReportGenerator()._weasyprint_available,
