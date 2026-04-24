@@ -55,10 +55,12 @@
                 <td class="col-path">{{ entry.target_path }}</td>
                 {% endif %}
                 {% if show_access_time %}
-                <td class="col-access-time">{{ entry.access_time }}</td>
+                <td class="col-access-time">{{ entry.access_time|replace(' ', '
+') }}</td>
                 {% endif %}
                 {% if show_creation_time %}
-                <td class="col-creation-time">{{ entry.creation_time }}</td>
+                <td class="col-creation-time">{{ entry.creation_time|replace(' ', '
+') }}</td>
                 {% endif %}
                 {% if show_access_count %}
                 <td class="col-access-count">{{ entry.access_count }}</td>
@@ -197,7 +199,7 @@
 
 .jump-lists-table .col-access-time,
 .jump-lists-table .col-creation-time {
-    white-space: nowrap;
+    white-space: pre-line;
 }
 
 .jump-lists-table .col-access-count {

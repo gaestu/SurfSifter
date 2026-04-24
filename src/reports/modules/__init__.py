@@ -34,6 +34,7 @@ from .images import ImagesModule
 from .installed_applications import InstalledApplicationsModule
 from .jump_lists import JumpListsModule
 from .screenshots import ScreenshotsModule
+from .search_term_frequency import SearchTermFrequencyModule
 from .search_terms import SearchTermsModule
 from .site_engagement import SiteEngagementModule
 from .site_permissions import SitePermissionsModule
@@ -64,6 +65,7 @@ __all__ = [
     "InstalledApplicationsModule",
     "JumpListsModule",
     "ScreenshotsModule",
+    "SearchTermFrequencyModule",
     "SearchTermsModule",
     "SiteEngagementModule",
     "SitePermissionsModule",

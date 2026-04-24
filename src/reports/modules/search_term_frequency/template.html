@@ -1,0 +1,180 @@
+{# Search Term Frequency Module Template #}
+<div class="module-search-term-frequency">
+
+    {# ── Title ────────────────────────────────────────────── #}
+    {% if section_title %}
+    <h3 class="module-title">{{ section_title }}</h3>
+    {% endif %}
+
+    {# ── Description ──────────────────────────────────────── #}
+    {% if section_description %}
+    <p class="module-description">{{ section_description }}</p>
+    {% endif %}
+
+    {# ── Main Content ─────────────────────────────────────── #}
+    {% if rows %}
+    <table class="search-term-frequency-table">
+        <thead>
+            <tr>
+                <th class="col-term">{{ t.search_term | default('Search Term') }}</th>
+                <th class="col-count">{{ t.count | default('Count') }}</th>
+                {% if show_browsers %}
+                <th class="col-browsers">{{ t.search_browsers | default('Browsers') }}</th>
+                {% endif %}
+                {% if show_engines %}
+                <th class="col-engines">{{ t.search_engines | default('Search Engines') }}</th>
+                {% endif %}
+                {% if show_first_seen %}
+                <th class="col-first-seen">{{ t.search_first_seen | default('First Seen') }}</th>
+                {% endif %}
+                {% if show_last_seen %}
+                <th class="col-last-seen">{{ t.search_last_seen | default('Last Seen') }}</th>
+                {% endif %}
+                {% if show_profiles %}
+                <th class="col-profiles">{{ t.search_profiles | default('Profiles') }}</th>
+                {% endif %}
+            </tr>
+        </thead>
+        <tbody>
+            {% for item in rows %}
+            <tr>
+                <td class="col-term">{{ item.term }}</td>
+                <td class="col-count">{{ item.count }}</td>
+                {% if show_browsers %}
+                <td class="col-browsers">{{ item.browsers }}</td>
+                {% endif %}
+                {% if show_engines %}
+                <td class="col-engines">{{ item.engines }}</td>
+                {% endif %}
+                {% if show_first_seen %}
+                <td class="col-first-seen">{{ item.first_seen }}</td>
+                {% endif %}
+                {% if show_last_seen %}
+                <td class="col-last-seen">{{ item.last_seen }}</td>
+                {% endif %}
+                {% if show_profiles %}
+                <td class="col-profiles">{{ item.profiles }}</td>
+                {% endif %}
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    {% else %}
+    <p class="empty-message">
+        {{ t.no_search_term_frequencies | default('No search terms found matching the filter criteria.') }}
+    </p>
+    {% endif %}
+
+    {# ── Truncation Notice ────────────────────────────────── #}
+    {% if is_truncated %}
+    <p class="truncation-info">
+        {{ t.showing_x_of_y | default('showing {shown} of {total}')
+           | replace('{shown}', shown_count|string)
+           | replace('{total}', total_count|string) }}
+        {{ t.unique_search_terms_label | default('unique search terms') }}
+    </p>
+    {% endif %}
+
+    {# ── Filter Info Footer ───────────────────────────────── #}
+    {% if show_filter_info %}
+    <p class="filter-info">
+        <strong>{{ t.filter | default('Filter') }}:</strong> {{ filter_description }}
+        <span class="entry-count">({{ total_count }} {{ t.unique_search_terms_label | default('unique search terms') }})</span>
+    </p>
+    {% endif %}
+
+</div>
+
+<style>
+/* All styles scoped to .module-search-term-frequency */
+.module-search-term-frequency {
+    margin: 1em 0;
+}
+
+.module-search-term-frequency .module-title {
+    margin: 0 0 0.5em 0;
+    font-size: 1.1em;
+    font-weight: 600;
+    color: #333;
+}
+
+.module-search-term-frequency .module-description {
+    margin: 0 0 0.75em 0;
+    color: #555;
+    font-size: 0.9em;
+    line-height: 1.4;
+}
+
+/* Table */
+.module-search-term-frequency .search-term-frequency-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.85em;
+    table-layout: fixed;
+}
+
+.module-search-term-frequency .search-term-frequency-table th,
+.module-search-term-frequency .search-term-frequency-table td {
+    border: 1px solid #ddd;
+    padding: 6px 8px;
+    text-align: left;
+    vertical-align: top;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    word-break: break-word;
+}
+
+.module-search-term-frequency .search-term-frequency-table th {
+    background-color: #f5f5f5;
+    font-weight: 600;
+}
+
+.module-search-term-frequency .search-term-frequency-table tbody tr:nth-child(even) {
+    background-color: #fafafa;
+}
+
+.module-search-term-frequency .search-term-frequency-table tbody tr:hover {
+    background-color: #f0f7ff;
+}
+
+/* Column widths */
+.module-search-term-frequency .col-term       { width: 26%; }
+.module-search-term-frequency .col-count      { width: 7%; text-align: right; }
+.module-search-term-frequency .col-browsers   { width: 14%; }
+.module-search-term-frequency .col-engines    { width: 15%; }
+.module-search-term-frequency .col-first-seen { width: 14%; }
+.module-search-term-frequency .col-last-seen  { width: 14%; }
+.module-search-term-frequency .col-profiles   { width: 10%; }
+
+/* Empty state */
+.module-search-term-frequency .empty-message {
+    text-align: center;
+    color: #888;
+    font-style: italic;
+    padding: 2em;
+}
+
+/* Footer */
+.module-search-term-frequency .truncation-info {
+    margin-top: 0.75em;
+    margin-bottom: 0.5em;
+    color: #666;
+    font-size: 0.85em;
+    font-style: italic;
+}
+
+.module-search-term-frequency .filter-info {
+    margin-top: 0.75em;
+    color: #555;
+    font-size: 0.9em;
+}
+
+.module-search-term-frequency .entry-count {
+    color: #888;
+}
+
+@media print {
+    .module-search-term-frequency .search-term-frequency-table { font-size: 0.8em; }
+    .module-search-term-frequency .search-term-frequency-table tbody tr:hover { background-color: transparent; }
+}
+</style>

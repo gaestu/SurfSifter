@@ -533,6 +533,21 @@ TRANSLATIONS: Dict[str, TranslationDict] = {
         "sort_smallest_first": "smallest first",
         "sort_domain_shortest_first": "domain shortest first",
         "sort_domain_longest_first": "domain longest first",
+
+        # ===================
+        # Search term frequency module
+        # ===================
+        "search_term_frequency_title": "Search Term Frequency",
+        "search_term_frequency_desc": "Aggregated view of search terms grouped by term, showing how often each term was searched along with the first and last time it was seen.",
+        "search_browser": "Browser",
+        "search_browsers": "Browsers",
+        "search_engine": "Search Engine",
+        "search_engines": "Search Engines",
+        "search_first_seen": "First Seen",
+        "search_last_seen": "Last Seen",
+        "search_profiles": "Profiles",
+        "no_search_term_frequencies": "No search terms found matching the filter criteria.",
+        "unique_search_terms_label": "unique search terms",
     },
 
     "de": {
@@ -1049,6 +1064,21 @@ TRANSLATIONS: Dict[str, TranslationDict] = {
         "sort_smallest_first": "kleinste zuerst",
         "sort_domain_shortest_first": "kürzeste Domain zuerst",
         "sort_domain_longest_first": "längste Domain zuerst",
+
+        # ===================
+        # Search term frequency module
+        # ===================
+        "search_term_frequency_title": "Suchbegriff-Häufigkeit",
+        "search_term_frequency_desc": "Aggregierte Ansicht der Suchbegriffe, gruppiert nach Begriff, mit Anzahl der Suchen sowie erstem und letztem Auftreten.",
+        "search_browser": "Browser",
+        "search_browsers": "Browser",
+        "search_engine": "Suchmaschine",
+        "search_engines": "Suchmaschinen",
+        "search_first_seen": "Zuerst gesehen",
+        "search_last_seen": "Zuletzt gesehen",
+        "search_profiles": "Profile",
+        "no_search_term_frequencies": "Keine Suchbegriffe entsprechen den Filterkriterien.",
+        "unique_search_terms_label": "eindeutige Suchbegriffe",
     },
 }
 
