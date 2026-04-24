@@ -26,6 +26,12 @@ SurfSifter is a forensic triage workstation that helps investigators:
 
 Designed for Windows evidence on any platform (Linux/macOS/Windows host).
 
+## Optional Runtime Dependencies
+
+- **WeasyPrint** is required for main report PDF export.
+- **Chromium-family browser 131+** (`Chromium`, `Google Chrome`, `Microsoft Edge`, or `Brave`) is the default appendix PDF renderer when available and is especially recommended for large image appendices.
+- If Chromium `131+` is missing, unsupported, or the Chromium appendix render fails at runtime, appendix PDF export falls back to the slower WeasyPrint path when WeasyPrint is installed; otherwise appendix PDF export is unavailable.
+
 ## Quick Start
 
 ### Option 1: Linux Installer Script (Recommended)

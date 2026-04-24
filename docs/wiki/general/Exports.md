@@ -44,7 +44,11 @@ Tabs with CSV export:
 - **Images → Clusters** — cluster membership and similarity data.
 
 ## PDF Reports
-The **Reports** tab generates PDF documents using Jinja2 templates and WeasyPrint. Reports include:
+The **Reports** tab generates PDF documents from Jinja2 templates.
+- Main report PDFs use WeasyPrint.
+- Appendix PDFs use Chromium-family browsers with supported headless print rendering (`Chromium/Chrome/Edge/Brave 131+`) by default when available, fall back to WeasyPrint when Chromium is missing, unsupported, or the Chromium render fails and WeasyPrint is installed, and are otherwise unavailable.
+
+Reports include:
 - Title page with case metadata and branding.
 - Table of contents (auto-generated).
 - Configurable report sections and modules.

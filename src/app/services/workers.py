@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import sqlite3
 import traceback
 from copy import deepcopy
@@ -16,6 +17,7 @@ from core.logging import get_logger
 
 if TYPE_CHECKING:
     from core.audit_logging import AuditLogger, EvidenceLogger
+    from reports.generator import ExternalInvocation
 from core.extraction_orchestrator import run_extraction_pipeline
 from core.database import (
     create_process_log,
@@ -2168,6 +2170,8 @@ class ReportBuildTask(BaseTask):
         mode: "ReportMode",
         report_path: Optional[Path] = None,
         appendix_path: Optional[Path] = None,
+        audit_db_path: Optional[Path] = None,
+        audit_evidence_id: Optional[int] = None,
     ) -> None:
         """
         Args:
@@ -2179,6 +2183,9 @@ class ReportBuildTask(BaseTask):
             mode: Which report parts to generate.
             report_path: Destination for the report PDF (if applicable).
             appendix_path: Destination for the appendix PDF (if applicable).
+            audit_db_path: Evidence DB path used to open a worker-local
+                connection for process_log audit entries.
+            audit_evidence_id: Evidence ID used for process_log audit entries.
         """
         super().__init__()
         self._builder_factory = builder_factory
@@ -2186,69 +2193,168 @@ class ReportBuildTask(BaseTask):
         self._mode = mode
         self._report_path = report_path
         self._appendix_path = appendix_path
+        self._audit_db_path = audit_db_path
+        self._audit_evidence_id = audit_evidence_id
+        self._audit_conn: Optional[sqlite3.Connection] = None
 
     # Expose a progress bridge compatible with ReportBuilder's callback API
     def _progress_bridge(self, pct: int, msg: str) -> None:
         """Forward progress from ReportBuilder / modules to Qt signals."""
         self.report_progress(pct, msg)
 
+    def _audit_start_external_invocation(self, task: str, command: str) -> Optional[int]:
+        """Create the process_log row before launching an external tool."""
+        if self._audit_conn is None or self._audit_evidence_id is None:
+            _worker_logger.warning("Dropping report render audit start: no audit connection configured for %s", task)
+            return None
+        return create_process_log(
+            self._audit_conn,
+            self._audit_evidence_id,
+            task,
+            command,
+        )
+
+    def _audit_finish_external_invocation(
+        self,
+        log_id: Optional[int],
+        event: "ExternalInvocation",
+    ) -> None:
+        """Finalize the process_log row after the external tool exits."""
+        if log_id is None:
+            return
+        finalize_process_log(
+            self._audit_conn,
+            log_id,
+            exit_code=event.exit_code,
+            stdout=event.stdout,
+            stderr=event.stderr,
+        )
+
     def run_task(self) -> Dict[str, Any]:
-        from reports.generator import ReportMode
+        from reports.generator import AppendixRenderError, AppendixRenderPlan, ReportMode
 
         self.report_progress(0, "Preparing report builder…")
         builder = self._builder_factory()
+        if self._audit_db_path is not None and self._audit_evidence_id is not None:
+            self._audit_conn = sqlite3.connect(self._audit_db_path, check_same_thread=False)
 
         mode = self._mode
+        appendix_plan = None
+        appendix_fallback_html: Optional[str] = None
 
-        # ── Load data ─────────────────────────────────────────────────
-        if mode != ReportMode.APPENDIX_ONLY:
-            self.raise_if_cancelled()
-            self.report_progress(2, "Loading report sections…")
-            builder.load_sections_from_db()
-
-        if mode != ReportMode.REPORT_ONLY:
-            self.raise_if_cancelled()
-            self.report_progress(5, "Loading appendix modules…")
-            builder.load_appendix_from_db(
-                progress_callback=self._progress_bridge,
-                cancelled_fn=self.is_cancelled,
-            )
-
-        self.raise_if_cancelled()
-
-        # ── Render HTML ───────────────────────────────────────────────
-        self.report_progress(82, "Rendering HTML…")
-        html_result = builder.render_html(mode)
-
-        self.raise_if_cancelled()
-
-        # ── Generate PDF(s) ──────────────────────────────────────────
         result: Dict[str, Any] = {
             "mode": mode,
             "report_path": None,
             "appendix_path": None,
+            "appendix_renderer": None,
+            "appendix_note": None,
         }
 
-        if mode == ReportMode.COMPLETE:
-            report_html, appendix_html = html_result
-            self.report_progress(85, "Generating report PDF…")
-            self._generator.generate_pdf(report_html, self._report_path)
-            result["report_path"] = str(self._report_path)
+        try:
+            # ── Load data ─────────────────────────────────────────────────
+            if mode != ReportMode.APPENDIX_ONLY:
+                self.raise_if_cancelled()
+                self.report_progress(2, "Loading report sections…")
+                builder.load_sections_from_db()
+
+            if mode != ReportMode.REPORT_ONLY:
+                self.raise_if_cancelled()
+                self.report_progress(5, "Loading appendix modules…")
+                builder.load_appendix_from_db(
+                    progress_callback=self._progress_bridge,
+                    cancelled_fn=self.is_cancelled,
+                )
+                running_as_root = hasattr(os, "geteuid") and os.geteuid() == 0
+                if self._audit_conn is None or self._audit_evidence_id is None:
+                    if self._generator.can_generate_pdf:
+                        appendix_plan = AppendixRenderPlan(
+                            renderer="weasyprint",
+                            note="Chromium appendix rendering disabled because audit logging is not configured; using slower WeasyPrint fallback.",
+                        )
+                    else:
+                        raise RuntimeError(
+                            "Appendix PDF generation requires audit logging for Chromium rendering, "
+                            "and WeasyPrint is not available for fallback."
+                        )
+                else:
+                    appendix_plan = self._generator.plan_appendix_render(
+                        audit_start_cb=self._audit_start_external_invocation,
+                        audit_finish_cb=self._audit_finish_external_invocation,
+                    )
+                    if appendix_plan.renderer == "unavailable":
+                        raise ImportError(appendix_plan.note or "Appendix PDF generation is unavailable.")
+                    if running_as_root and appendix_plan.renderer == "chromium":
+                        root_note = (
+                            "Chromium appendix rendering is disabled while SurfSifter runs as root because "
+                            "Chromium sandboxing would be unavailable."
+                        )
+                        if self._generator.can_generate_pdf:
+                            _worker_logger.warning("%s Falling back to WeasyPrint.", root_note)
+                            appendix_plan = AppendixRenderPlan(
+                                renderer="weasyprint",
+                                note=f"{root_note} Using slower WeasyPrint fallback instead.",
+                                audit_events=appendix_plan.audit_events,
+                            )
+                        else:
+                            raise RuntimeError(
+                                f"{root_note} Run SurfSifter as a non-root user or install WeasyPrint."
+                            )
+
             self.raise_if_cancelled()
 
-            self.report_progress(92, "Generating appendix PDF…")
-            self._generator.generate_pdf(appendix_html, self._appendix_path)
-            result["appendix_path"] = str(self._appendix_path)
+            # ── Render HTML ───────────────────────────────────────────────
+            self.report_progress(82, "Rendering HTML…")
+            appendix_renderer = appendix_plan.renderer if appendix_plan is not None else "weasyprint"
+            html_result = builder.render_html(mode, appendix_renderer=appendix_renderer)
+            if appendix_plan is not None and appendix_plan.renderer == "chromium":
+                appendix_fallback_html = builder.render_appendix_html(renderer="weasyprint")
 
-        elif mode == ReportMode.REPORT_ONLY:
-            self.report_progress(85, "Generating report PDF…")
-            self._generator.generate_pdf(html_result, self._report_path)
-            result["report_path"] = str(self._report_path)
+            self.raise_if_cancelled()
 
-        else:  # APPENDIX_ONLY
-            self.report_progress(85, "Generating appendix PDF…")
-            self._generator.generate_pdf(html_result, self._appendix_path)
-            result["appendix_path"] = str(self._appendix_path)
+            # ── Generate PDF(s) ──────────────────────────────────────────
+            if mode == ReportMode.COMPLETE:
+                report_html, appendix_html = html_result
+                self.report_progress(85, "Generating report PDF…")
+                self._generator.generate_pdf(report_html, self._report_path)
+                result["report_path"] = str(self._report_path)
+                self.raise_if_cancelled()
+
+                self.report_progress(92, "Generating appendix PDF…")
+                appendix_result = self._generator.generate_appendix_pdf(
+                    appendix_html,
+                    self._appendix_path,
+                    plan=appendix_plan,
+                    fallback_html_content=appendix_fallback_html,
+                    audit_start_cb=self._audit_start_external_invocation,
+                    audit_finish_cb=self._audit_finish_external_invocation,
+                )
+                result["appendix_path"] = str(self._appendix_path)
+                result["appendix_renderer"] = appendix_result.renderer
+                result["appendix_note"] = appendix_result.note
+
+            elif mode == ReportMode.REPORT_ONLY:
+                self.report_progress(85, "Generating report PDF…")
+                self._generator.generate_pdf(html_result, self._report_path)
+                result["report_path"] = str(self._report_path)
+
+            else:  # APPENDIX_ONLY
+                self.report_progress(85, "Generating appendix PDF…")
+                appendix_result = self._generator.generate_appendix_pdf(
+                    html_result,
+                    self._appendix_path,
+                    plan=appendix_plan,
+                    fallback_html_content=appendix_fallback_html,
+                    audit_start_cb=self._audit_start_external_invocation,
+                    audit_finish_cb=self._audit_finish_external_invocation,
+                )
+                result["appendix_path"] = str(self._appendix_path)
+                result["appendix_renderer"] = appendix_result.renderer
+                result["appendix_note"] = appendix_result.note
+        finally:
+            builder.close_owned_db_connection()
+            if self._audit_conn is not None:
+                self._audit_conn.close()
+                self._audit_conn = None
 
         self.report_progress(100, "Done")
         return result

@@ -71,6 +71,10 @@ sudo apt-get install libewf-dev libtsk-dev build-essential python3-dev \
 - Python **>= 3.10, < 3.14**
 - Key packages include PySide6, pytsk3, libewf-python, Pillow, imagehash, WeasyPrint, regipy
 
+### Optional runtime tools
+- A Chromium-family browser `131+` (`Chromium`, `Google Chrome`, `Microsoft Edge`, or `Brave`) is the default appendix PDF renderer when available and is especially recommended for large image appendices.
+- If Chromium `131+` is missing, unsupported, or the Chromium appendix render fails at runtime, appendix export falls back to WeasyPrint when installed; otherwise appendix export is unavailable.
+
 ## Bundled Python Dependencies
 All artifact-parsing libraries are installed automatically with `poetry install`:
 - brotli, zstandard (Chromium cache decompression)

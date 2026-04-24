@@ -19,6 +19,7 @@ Used in legal proceedings — integrity violations can invalidate evidence.
 - All writes target the **case workspace only**
 - Every external tool invocation **must** be logged via `core.audit_logging` and `process_log` helpers
 - **Deterministic outputs**: no timestamps, random IDs, or non-deterministic logic in `core/`
+- **Report PDF determinism**: generated PDFs in `reports/` must preserve stable investigator-visible content, ordering, and labeling for a fixed renderer/version environment; renderer metadata does not need to be byte-identical across runs, and the selected external renderer/version must be auditable
 - **Append-only audit logs** — never delete or modify audit entries
 - Evidence access **only** via `core.evidence_fs.EvidenceFS` subclasses (`PyEwfTskFS`, `MountedFS`)
 

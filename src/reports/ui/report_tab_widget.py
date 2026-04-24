@@ -602,6 +602,7 @@ class ReportTabWidget(QWidget):
         evidence_label = self._evidence_label
         investigator = self._investigator
         db_conn = self._db_conn
+        db_path = self._get_db_path(db_conn)
         evidence_id = self._evidence_id
         workspace_path = self._workspace_path
 
@@ -632,12 +633,20 @@ class ReportTabWidget(QWidget):
             hide_appendix_page_numbers = False
 
         def _factory() -> ReportBuilder:
+            worker_conn = db_conn
+            owns_conn = False
+            if db_path:
+                worker_conn = sqlite3.connect(db_path, check_same_thread=False)
+                worker_conn.row_factory = sqlite3.Row
+                owns_conn = True
             builder = ReportBuilder(
-                db_conn,
+                worker_conn,
                 evidence_id,
                 case_folder=workspace_path,
                 locale=locale,
             )
+            if owns_conn:
+                builder.take_db_connection_ownership()
             builder.set_title(title)
             builder.set_date_format(date_format)
             builder.set_case_info(
@@ -672,6 +681,20 @@ class ReportTabWidget(QWidget):
             return builder
 
         return _factory
+
+    def _get_db_path(self, conn: Optional[sqlite3.Connection]) -> Optional[str]:
+        """Return the filesystem path for a SQLite connection when available."""
+        if conn is None:
+            return None
+        try:
+            database_rows = conn.execute("PRAGMA database_list").fetchall()
+            for row in database_rows:
+                path_value = row[2] if not isinstance(row, sqlite3.Row) else row["file"]
+                if path_value:
+                    return path_value
+        except sqlite3.Error:
+            return None
+        return None
 
     def _on_preview(self) -> None:
         """Handle Preview button click - open report in browser."""
@@ -755,8 +778,8 @@ class ReportTabWidget(QWidget):
 
     # ── Helpers for PDF generation ────────────────────────────────────
 
-    def _check_weasyprint(self) -> bool:
-        """Check WeasyPrint availability and show warning if missing.
+    def _check_report_pdf_generation(self) -> bool:
+        """Check report PDF availability and show warning if missing.
 
         Returns:
             True if WeasyPrint is available.
@@ -768,6 +791,29 @@ class ReportTabWidget(QWidget):
                 "WeasyPrint is not installed. Please install it with:\n\n"
                 "pip install weasyprint\n\n"
                 "Note: WeasyPrint requires additional system dependencies."
+            )
+            return False
+        return True
+
+    def _check_appendix_pdf_generation(self) -> bool:
+        """Check appendix PDF availability and show warning if missing."""
+        if self._generator.can_generate_pdf:
+            return True
+
+        if self._db_conn is None or self._evidence_id is None:
+            QMessageBox.warning(
+                self,
+                "Appendix PDF Generation Unavailable",
+                "Appendix PDF generation requires an evidence audit context when Chromium rendering is needed.\n\n"
+                "Select an evidence item or install WeasyPrint and try again."
+            )
+            return False
+        if self._get_db_path(self._db_conn) is None:
+            QMessageBox.warning(
+                self,
+                "Appendix PDF Generation Unavailable",
+                "Appendix PDF generation requires a file-backed evidence database for audit logging when Chromium "
+                "rendering is needed.\n\nInstall WeasyPrint or reopen the case and try again."
             )
             return False
         return True
@@ -840,6 +886,7 @@ class ReportTabWidget(QWidget):
 
         rpath = Path(report_path) if report_path else None
         apath = Path(appendix_path) if appendix_path else None
+        audit_db_path = self._get_db_path(self._db_conn)
 
         task = ReportBuildTask(
             builder_factory=factory,
@@ -847,6 +894,8 @@ class ReportTabWidget(QWidget):
             mode=mode,
             report_path=rpath,
             appendix_path=apath,
+            audit_db_path=Path(audit_db_path) if audit_db_path else None,
+            audit_evidence_id=self._evidence_id,
         )
 
         # Keep a reference so it isn't garbage-collected
@@ -888,6 +937,8 @@ class ReportTabWidget(QWidget):
             return
 
         msg = "PDF(s) saved to:\n" + "\n".join(paths)
+        if data.get("appendix_note"):
+            msg += "\n\nAppendix renderer note:\n" + data["appendix_note"]
         QMessageBox.information(self, "PDF Created", msg)
         for p in paths:
             QDesktopServices.openUrl(QUrl.fromLocalFile(p))
@@ -905,7 +956,7 @@ class ReportTabWidget(QWidget):
 
     def _on_create_report_pdf(self) -> None:
         """Generate report-only PDF (no appendix)."""
-        if not self._check_weasyprint():
+        if not self._check_report_pdf_generation():
             return
         file_path = self._ask_save_path(
             "Save Report PDF", self._default_pdf_path()
@@ -916,7 +967,7 @@ class ReportTabWidget(QWidget):
 
     def _on_create_appendix_pdf(self) -> None:
         """Generate appendix-only PDF."""
-        if not self._check_weasyprint():
+        if not self._check_appendix_pdf_generation():
             return
         file_path = self._ask_save_path(
             "Save Appendix PDF", self._default_pdf_path("_Appendix")
@@ -927,7 +978,7 @@ class ReportTabWidget(QWidget):
 
     def _on_create_complete_pdf(self) -> None:
         """Generate both report and appendix PDFs at once."""
-        if not self._check_weasyprint():
+        if not self._check_report_pdf_generation():
             return
         report_path = self._ask_save_path(
             "Save Report PDF (appendix will be saved alongside)",
