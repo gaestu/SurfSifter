@@ -235,3 +235,6 @@ test_input.txt
 
 #local settings
 config/settings.json
+
+# Agents
+.codex
