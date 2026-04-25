@@ -57,9 +57,21 @@ Reports include:
 
 See the **Reports Overview** page for details.
 
+## Tag Summary XLSX (working document)
+The **Reports** tab also provides a 📝 **Export Tag Summary** action that produces a single-sheet `.xlsx` working document for prosecutor review.
+
+- Default save location: `<case>/reports/tag_summary_<evidence>_<UTC timestamp>.xlsx`. Saving outside the case workspace is refused to preserve forensic output isolation.
+- Layout: one row per tag, then a heading with a ☐ checkbox for each artifact group (e.g. *Browser search terms*, *Stored sites*, *Bookmarks*), followed by up to 10 sample rows per group and a "…and N more" indicator when truncated.
+- Sample selection is fully deterministic: rows are ordered most-recent first, then alphabetically, then by primary key, so two runs against identical evidence state always pick the same sample rows.
+- A final *Reference-list matches* section lists URL/hash/file-list matches grouped by list name, also with one checkbox per group. Distinct artifacts only are counted (repeated matches against the same artifact within one list are collapsed).
+- Tagged artifacts whose canonical type is not yet renderable in the workbook are surfaced as an explicit *Unsupported artifact type* placeholder section showing the count, so the export never silently omits tagged items.
+- The workbook is written first; the export is then recorded in `process_log` with the actual write outcome. If the audit insert fails, the freshly written workbook is removed so an exported artifact never exists without a provenance entry.
+- Inside the ZIP container the local-header timestamps are pinned (1980-01-01) so two runs that produce the same workbook content yield byte-identical bytes. The default filename and the `Exported:` header line embed the wall-clock UTC export time intentionally — they are part of the audit trail and uniquely identify each run on disk; the export pipeline does not attempt to reproduce them across runs.
+- The Tag Summary XLSX export ignores the current Tag tab filter — it always reflects the full set of tagged artifacts and reference-list matches for the selected evidence (the filter only controls the live UI views).
+
 ## JSON Export
 - **Text Blocks** — export and import reusable text snippets as JSON via **Preferences → Text Blocks**.
 - **Reference Lists** — URL, hash, and file pattern lists stored as text files in `reference_lists/`.
 
 ## Tag-based filtering
-All export operations respect the current tag filter. To export only tagged items, apply a tag filter before exporting.
+Most export operations respect the current tag filter — to export only tagged items, apply a tag filter before exporting. The Tag Summary XLSX export is the exception: it always exports the full per-evidence summary (see the section above).

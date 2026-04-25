@@ -24,6 +24,7 @@ Reports let you assemble a final, shareable document from case data. You can mix
 ## Preview and export
 - Preview opens the HTML in your default browser.
 - Main report PDF export requires WeasyPrint.
+- Tag Summary XLSX export (📝 button in the Reports tab toolbar) produces a printable working document grouped by tag and artifact group with a ☐ checkbox per group; saved by default under `<case>/reports/tag_summary_<evidence>_<utc>.xlsx` and restricted to the case workspace.
 - Appendix PDF export uses Chromium-family browsers with supported headless print rendering (`Chromium/Chrome/Edge/Brave 131+`) by default when available and falls back to WeasyPrint when Chromium is missing, unsupported, or the Chromium render fails and WeasyPrint is installed.
 - Chromium appendix rendering is disabled while SurfSifter runs as `root`; use a non-root account if you need the Chromium appendix path.
 - Under Chromium, appendix TOC entries are listed by title only, without page numbers.

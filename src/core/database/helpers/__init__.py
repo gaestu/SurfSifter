@@ -192,6 +192,12 @@ from .tags import (
     get_match_summary,
 )
 
+# Tag export (XLSX working document)
+from .tag_export import (
+    get_tagged_artifact_export,
+    get_reference_list_match_export,
+)
+
 # Timeline
 from .timeline import (
     insert_timeline_event,
@@ -779,6 +785,9 @@ __all__ = [
     "merge_tag_associations",
     "query_artifacts_by_tags",
     "query_all_tagged_artifacts",
+    # Tag export
+    "get_tagged_artifact_export",
+    "get_reference_list_match_export",
     # Timeline
     "insert_timeline_event",
     "insert_timeline_events",
