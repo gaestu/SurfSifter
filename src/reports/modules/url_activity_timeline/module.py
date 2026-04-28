@@ -101,6 +101,22 @@ class UrlActivityTimelineModule(BaseReportModule):
                 required=False,
             ),
             FilterField(
+                key="date_from",
+                label="From Date",
+                filter_type=FilterType.TEXT,
+                default="",
+                help_text="Start date filter (YYYY-MM-DD). Leave empty for no limit.",
+                required=False,
+            ),
+            FilterField(
+                key="date_to",
+                label="To Date",
+                filter_type=FilterType.TEXT,
+                default="",
+                help_text="End date filter (YYYY-MM-DD). Leave empty for no limit.",
+                required=False,
+            ),
+            FilterField(
                 key="tag_filter",
                 label="Filter by Tag",
                 filter_type=FilterType.DROPDOWN,

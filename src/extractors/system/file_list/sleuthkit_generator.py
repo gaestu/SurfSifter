@@ -39,8 +39,6 @@ try:
 except Exception:
     logger = logging.getLogger(__name__)
 
-__all__ = ["SleuthKitFileListGenerator", "GenerationResult"]
-
 
 # Indexes to drop before bulk insert and recreate after
 # NOTE: idx_file_list_unique_path is NOT included because it's required for
