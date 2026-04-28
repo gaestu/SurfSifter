@@ -10,7 +10,7 @@ A cross-platform forensic workstation for analyzing browser artifacts, cached me
 
 ## Status
 
-**v0.3.6-beta** — Feature-complete core functionality, actively tested. [Download pre-built releases](https://github.com/gaestu/surfsifter/releases) or build from source.
+**v0.3.7-beta** — Feature-complete core functionality, actively tested. [Download pre-built releases](https://github.com/gaestu/surfsifter/releases) or build from source.
 
 Mostly tested on fedora and ubuntu - running on windows is still abigious :-) I recommend to use wsl on windows for running the app.
 
@@ -25,6 +25,12 @@ SurfSifter is a forensic triage workstation that helps investigators:
 - **Browse safely** — All extraction happens offline; optional sandboxed browser preview (firejail) for controlled URL inspection
 
 Designed for Windows evidence on any platform (Linux/macOS/Windows host).
+
+## Optional Runtime Dependencies
+
+- **WeasyPrint** is required for main report PDF export.
+- **Chromium-family browser 131+** (`Chromium`, `Google Chrome`, `Microsoft Edge`, or `Brave`) is the default appendix PDF renderer when available and is especially recommended for large image appendices.
+- If Chromium `131+` is missing, unsupported, or the Chromium appendix render fails at runtime, appendix PDF export falls back to the slower WeasyPrint path when WeasyPrint is installed; otherwise appendix PDF export is unavailable.
 
 ## Quick Start
 
@@ -148,6 +154,7 @@ python -m app.main
 - **Filesystem images:** Extract images from evidence with path/timestamp context, signature verification, MACB timestamps
 - **File carvers:** foremost and scalpel for unallocated space carving (slow, single-threaded)
 - **Bulk extraction:** bulk_extractor for URLs, emails, domains, IPs, phone numbers, Bitcoin/Ethereum addresses
+- **SwiftBeaver:** Multi-format image carving (JPEG/PNG/GIF/WebP/BMP/TIFF/HEIC/ICO) and URL extraction with native E01 support
 - **Browser carver:** Deep-scan for carved browser SQLite databases (history/cookies) with raw URL extraction
 - **Image analysis:** Perceptual hash (pHash) clustering, duplicate detection, similarity search
 - **Format support:** JPEG, PNG, GIF, WebP, BMP, ICO, TIFF, SVG, AVIF, HEIC/HEIF
@@ -220,6 +227,7 @@ Discovered automatically on `PATH`:
 - **foremost** — File carving (images, documents)
 - **scalpel** — Advanced file carving
 - **bulk_extractor** — URL/email/crypto extraction
+- **swiftbeaver** — Image carving and URL extraction (native E01 support)
 - **exiftool** — EXIF metadata extraction
 - **firejail** — Browser sandboxing (security feature)
 

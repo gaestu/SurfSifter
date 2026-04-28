@@ -3,6 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src 'self' file: data:; style-src 'unsafe-inline'; font-src 'self' file: data:;">
     <title>{{ report_title }} — {{ t.appendix | default('Appendix') }}</title>
     <style>
         /* ===== CSS Reset & Base ===== */
@@ -33,12 +34,14 @@
                 color: #666;
             }
 
+            {% if not hide_appendix_page_numbers %}
             @bottom-center {
                 content: "{{ t.appendix_page | default('Appendix') }} — {{ t.page | default('Page') }} " counter(page) " {{ t.of | default('of') }} " counter(pages);
                 font-family: Arial, 'Helvetica Neue', Helvetica, sans-serif;
                 font-size: 9pt;
                 color: #666;
             }
+            {% endif %}
 
             {% if show_footer_date %}
             @bottom-right {
@@ -206,10 +209,12 @@
             color: #4a4a6a;
         }
 
-        /* For PDF - use target-counter for page numbers */
+        /* WeasyPrint appendix TOC supports target-counter page references */
+        {% if appendix_toc_page_numbers %}
         .toc-table .toc-page-num::after {
             content: target-counter(attr(href), page);
         }
+        {% endif %}
 
         /* ===== Content Sections ===== */
         .report-section {
@@ -438,9 +443,13 @@
         <table class="toc-table">
             {% for module in appendix_modules %}
             <tr>
+                {% if appendix_toc_page_numbers %}
                 <td class="toc-title"><a href="#appendix-{{ loop.index }}">{{ loop.index }}. {{ module.title }}</a></td>
                 <td class="toc-dots"></td>
                 <td class="toc-page-num" href="#appendix-{{ loop.index }}"></td>
+                {% else %}
+                <td class="toc-title" colspan="3"><a href="#appendix-{{ loop.index }}">{{ loop.index }}. {{ module.title }}</a></td>
+                {% endif %}
             </tr>
             {% endfor %}
         </table>

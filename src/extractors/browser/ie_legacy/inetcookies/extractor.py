@@ -220,9 +220,11 @@ class IEINetCookiesExtractor(BaseExtractor):
             return False
 
         callbacks.on_step(f"Using file_list index for discovery ({count:,} files indexed)")
+        include_deleted = config.get("include_deleted", False)
         result = discover_from_file_list(
             evidence_conn, evidence_id,
             path_patterns=patterns,
+            exclude_deleted=not include_deleted,
         )
         # Convert FileListMatch objects to expected dict format
         discovered_files = [
@@ -555,7 +557,6 @@ class IEINetCookiesExtractor(BaseExtractor):
                         expires_utc=cookie.get("expires_utc"),
                         is_secure=cookie.get("is_secure", False),
                         is_httponly=cookie.get("is_httponly", False),
-                        is_persistent=cookie.get("expires_utc") is not None,
                         samesite="None",
                         source_path=source_path,
                         discovered_by=discovered_by,
@@ -565,7 +566,7 @@ class IEINetCookiesExtractor(BaseExtractor):
                     )
                     inserted += 1
                 except Exception as e:
-                    LOGGER.debug("Failed to insert cookie: %s", e)
+                    LOGGER.warning("Failed to insert cookie: %s", e)
 
             return inserted
 

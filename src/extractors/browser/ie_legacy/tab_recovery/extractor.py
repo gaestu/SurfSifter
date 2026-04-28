@@ -233,8 +233,10 @@ class IETabRecoveryExtractor(BaseExtractor):
             return False
 
         callbacks.on_log(f"Using file_list discovery ({count:,} files indexed)", "info")
+        include_deleted = config.get("include_deleted", False)
         files_by_partition = self._discover_files_multi_partition(
-            evidence_conn, evidence_id, callbacks
+            evidence_conn, evidence_id, callbacks,
+            include_deleted=include_deleted,
         )
 
         # Flatten for counting
@@ -508,6 +510,7 @@ class IETabRecoveryExtractor(BaseExtractor):
         evidence_conn,
         evidence_id: int,
         callbacks: ExtractorCallbacks,
+        include_deleted: bool = False,
     ) -> Dict[int, List[Dict]]:
         """Discover recovery files across ALL partitions using file_list."""
         result = discover_from_file_list(
@@ -515,6 +518,7 @@ class IETabRecoveryExtractor(BaseExtractor):
             evidence_id,
             filename_patterns=["*.dat"],
             path_patterns=["%Recovery%Active%", "%Recovery%Last Active%", "%Recovery%Immersive%"],
+            exclude_deleted=not include_deleted,
         )
 
         if result.is_empty:

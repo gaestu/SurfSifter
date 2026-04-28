@@ -26,6 +26,8 @@ from core.image_codecs import ensure_pillow_heif_registered
 from core.database.manager import slugify_label
 from reports.paths import get_module_template_dir
 
+_SQL_CHUNK_SIZE = 500
+
 # Try to import PIL for thumbnail generation
 try:
     from PIL import Image as PILImage
@@ -95,13 +97,8 @@ class ImagesModule(BaseReportModule):
             FilterField(
                 key="tag_filter",
                 label="Tags",
-                filter_type=FilterType.DROPDOWN,
-                default=self.ALL,
-                options=[
-                    (self.ALL, "All"),
-                    (self.ANY_TAG, "Any Tag"),
-                ],
-                help_text="Filter by tag (specific tags loaded dynamically)",
+                filter_type=FilterType.TAG_SELECT,
+                help_text="Filter by one or more tags",
                 required=False,
             ),
             FilterField(
@@ -138,6 +135,14 @@ class ImagesModule(BaseReportModule):
                 filter_type=FilterType.CHECKBOX,
                 default=False,
                 help_text="Show the source URL(s) under each image (from cache discoveries)",
+                required=False,
+            ),
+            FilterField(
+                key="include_cache_key",
+                label="Include Cache Key",
+                filter_type=FilterType.CHECKBOX,
+                default=False,
+                help_text="Show the cache key(s) under each image (from cache discoveries)",
                 required=False,
             ),
             FilterField(
@@ -201,11 +206,7 @@ class ImagesModule(BaseReportModule):
             List of (value, label) tuples or None if not a dynamic field
         """
         if key == "tag_filter":
-            # Get all tags used for images
-            options = [
-                (self.ALL, "All"),
-                (self.ANY_TAG, "Any Tag"),
-            ]
+            options: list[tuple] = []
             try:
                 cursor = db_conn.execute(
                     """
@@ -265,11 +266,12 @@ class ImagesModule(BaseReportModule):
         title = config.get("title", "")
         show_description = config.get("show_description", False)
         custom_description = config.get("custom_description", "")
-        tag_filter = config.get("tag_filter", self.ALL)
+        tag_filter = config.get("tag_filter") or []
         match_filter = config.get("match_filter", self.ALL)
         include_filename = config.get("include_filename", True)
         include_filepath = config.get("include_filepath", False)
         include_url = config.get("include_url", False)
+        include_cache_key = config.get("include_cache_key", False)
         sort_by = config.get("sort_by", "date_desc")
         show_filter_info = config.get("show_filter_info", False)
         show_image_count = config.get("show_image_count", True)
@@ -303,12 +305,20 @@ class ImagesModule(BaseReportModule):
         rows = cursor.fetchall()
         columns = [desc[0] for desc in cursor.description]
 
+        # Compute image IDs once for batch lookups
+        image_ids = [dict(zip(columns, row))["id"] for row in rows]
+
         # If URLs are requested, fetch them for all images in one query
         image_urls_map: Dict[int, List[str]] = {}
         if include_url:
-            image_ids = [dict(zip(columns, row))["id"] for row in rows]
             if image_ids:
                 image_urls_map = self._fetch_image_urls(db_conn, image_ids)
+
+        # If cache keys are requested, fetch them
+        image_cache_keys_map: Dict[int, List[str]] = {}
+        if include_cache_key:
+            if image_ids:
+                image_cache_keys_map = self._fetch_image_cache_keys(db_conn, image_ids)
 
         # Process images
         images = []
@@ -322,6 +332,7 @@ class ImagesModule(BaseReportModule):
                 date_format,
                 translations,
                 urls=image_urls_map.get(row_dict["id"], []) if include_url else [],
+                cache_keys=image_cache_keys_map.get(row_dict["id"], []) if include_cache_key else [],
             )
             images.append(image_data)
 
@@ -355,6 +366,7 @@ class ImagesModule(BaseReportModule):
                 include_filename=include_filename,
                 include_filepath=include_filepath,
                 include_url=include_url,
+                include_cache_key=include_cache_key,
                 show_filter_info=show_filter_info,
                 show_image_count=show_image_count,
                 t=translations,
@@ -367,7 +379,7 @@ class ImagesModule(BaseReportModule):
     def _build_query(
         self,
         evidence_id: int,
-        tag_filter: str,
+        tag_filter: list,
         match_filter: str,
         sort_by: str,
         limit: str = "all",
@@ -376,7 +388,7 @@ class ImagesModule(BaseReportModule):
 
         Args:
             evidence_id: Evidence ID to filter by
-            tag_filter: Tag filter value
+            tag_filter: List of tag names to filter by
             match_filter: Hash match filter value
             sort_by: Sort option
             limit: Maximum number of images to return
@@ -386,7 +398,7 @@ class ImagesModule(BaseReportModule):
         """
         params: list = [evidence_id]
 
-        # Base select with distinct to avoid duplicates from joins
+        # Base select
         select = """
             SELECT DISTINCT
                 i.id,
@@ -401,42 +413,39 @@ class ImagesModule(BaseReportModule):
             FROM images i
         """
 
-        joins = []
         where = ["i.evidence_id = ?"]
 
-        # Tag filter
-        if tag_filter == self.ANY_TAG:
-            joins.append(
-                """
-                JOIN tag_associations ta ON ta.artifact_id = i.id
-                    AND ta.artifact_type = 'image'
-                """
-            )
-        elif tag_filter not in (self.ALL, None, ""):
-            joins.append(
-                """
-                JOIN tag_associations ta ON ta.artifact_id = i.id
-                    AND ta.artifact_type = 'image'
-                JOIN tags t ON t.id = ta.tag_id
-                """
-            )
-            where.append("t.name = ?")
-            params.append(tag_filter)
+        # Tag filter (multi-select)
+        if tag_filter:
+            placeholders = ", ".join(["?"] * len(tag_filter))
+            where.append(f"""
+                EXISTS (
+                    SELECT 1
+                    FROM tag_associations ta
+                    JOIN tags t ON t.id = ta.tag_id
+                    WHERE ta.artifact_id = i.id
+                      AND ta.artifact_type = 'image'
+                      AND t.name IN ({placeholders})
+                )
+            """)
+            params.extend(tag_filter)
 
         # Match filter
         if match_filter == self.ANY_MATCH:
-            joins.append(
-                """
-                JOIN hash_matches hm ON hm.image_id = i.id
-                """
-            )
+            where.append("""
+                EXISTS (
+                    SELECT 1 FROM hash_matches hm
+                    WHERE hm.image_id = i.id
+                )
+            """)
         elif match_filter not in (self.ALL, None, ""):
-            joins.append(
-                """
-                JOIN hash_matches hm ON hm.image_id = i.id
-                """
-            )
-            where.append("hm.db_name = ?")
+            where.append("""
+                EXISTS (
+                    SELECT 1 FROM hash_matches hm
+                    WHERE hm.image_id = i.id
+                    AND hm.db_name = ?
+                )
+            """)
             params.append(match_filter)
 
         # Sort order
@@ -449,7 +458,7 @@ class ImagesModule(BaseReportModule):
         order = order_map.get(sort_by, "i.ts_utc DESC NULLS LAST")
 
         # Build full query
-        query = select + " ".join(joins)
+        query = select
         query += " WHERE " + " AND ".join(where)
         query += f" ORDER BY {order}"
 
@@ -472,6 +481,7 @@ class ImagesModule(BaseReportModule):
         date_format: str,
         t: Dict[str, str],
         urls: Optional[List[str]] = None,
+        cache_keys: Optional[List[str]] = None,
     ) -> Dict[str, Any]:
         """Process an image row into display data.
 
@@ -530,7 +540,16 @@ class ImagesModule(BaseReportModule):
             "exif_display": exif_display,
             "thumbnail_b64": thumbnail_b64,
             "urls": urls or [],
+            "cache_keys": cache_keys or [],
         }
+
+    # ── Chunked batch query helpers ───────────────────────────────────
+
+    @staticmethod
+    def _chunked(lst: List[Any], size: int = _SQL_CHUNK_SIZE):
+        """Yield successive chunks of *lst* with at most *size* items."""
+        for i in range(0, len(lst), size):
+            yield lst[i : i + size]
 
     def _fetch_image_urls(
         self,
@@ -550,25 +569,59 @@ class ImagesModule(BaseReportModule):
             return {}
 
         result: Dict[int, List[str]] = {}
-        placeholders = ",".join("?" * len(image_ids))
         try:
-            cursor = db_conn.execute(
-                f"""
-                SELECT image_id, cache_url
-                FROM image_discoveries
-                WHERE image_id IN ({placeholders})
-                  AND cache_url IS NOT NULL
-                  AND cache_url != ''
-                ORDER BY image_id, discovered_at
-                """,
-                image_ids,
-            )
-            for image_id, cache_url in cursor.fetchall():
-                if image_id not in result:
-                    result[image_id] = []
-                # Add only unique URLs per image
-                if cache_url not in result[image_id]:
-                    result[image_id].append(cache_url)
+            for chunk in self._chunked(image_ids):
+                placeholders = ",".join("?" * len(chunk))
+                cursor = db_conn.execute(
+                    f"""
+                    SELECT image_id, cache_url
+                    FROM image_discoveries
+                    WHERE image_id IN ({placeholders})
+                      AND cache_url IS NOT NULL
+                      AND cache_url != ''
+                    ORDER BY image_id, discovered_at
+                    """,
+                    chunk,
+                )
+                for image_id, cache_url in cursor.fetchall():
+                    if image_id not in result:
+                        result[image_id] = []
+                    # Add only unique URLs per image
+                    if cache_url not in result[image_id]:
+                        result[image_id].append(cache_url)
+        except Exception:
+            pass
+        return result
+
+    def _fetch_image_cache_keys(
+        self,
+        db_conn: sqlite3.Connection,
+        image_ids: List[int],
+    ) -> Dict[int, List[str]]:
+        """Fetch unique cache keys for a list of images."""
+        if not image_ids:
+            return {}
+
+        result: Dict[int, List[str]] = {}
+        try:
+            for chunk in self._chunked(image_ids):
+                placeholders = ",".join("?" * len(chunk))
+                cursor = db_conn.execute(
+                    f"""
+                    SELECT image_id, cache_key
+                    FROM image_discoveries
+                    WHERE image_id IN ({placeholders})
+                      AND cache_key IS NOT NULL
+                      AND cache_key != ''
+                    ORDER BY image_id, discovered_at
+                    """,
+                    chunk,
+                )
+                for image_id, cache_key in cursor.fetchall():
+                    if image_id not in result:
+                        result[image_id] = []
+                    if cache_key not in result[image_id]:
+                        result[image_id].append(cache_key)
         except Exception:
             pass
         return result
@@ -669,6 +722,7 @@ class ImagesModule(BaseReportModule):
             "bulk_extractor_images": "bulk_extractor",
             "foremost_carver": "foremost_carver",
             "scalpel": "scalpel",
+            "swiftbeaver": "swiftbeaver",
             "image_carving": "",  # Legacy: rel_path is full path
             # Filesystem extractor
             "filesystem_images": "filesystem_images/extracted",
@@ -704,12 +758,12 @@ class ImagesModule(BaseReportModule):
         return None
 
     def _build_filter_description(
-        self, tag_filter: str, match_filter: str, t: Dict[str, str] | None = None
+        self, tag_filter: list, match_filter: str, t: Dict[str, str] | None = None
     ) -> str:
         """Build human-readable filter description.
 
         Args:
-            tag_filter: Tag filter value
+            tag_filter: List of tag names
             match_filter: Match filter value
 
         Returns:
@@ -718,13 +772,12 @@ class ImagesModule(BaseReportModule):
         parts = []
         t = t or {}
 
-        if tag_filter == self.ALL:
+        if not tag_filter:
             parts.append(t.get("filter_all_tags", "All tags"))
-        elif tag_filter == self.ANY_TAG:
-            parts.append(t.get("filter_any_tagged", "Any tagged"))
         else:
+            tag_names = ", ".join(tag_filter)
             parts.append(
-                t.get("filter_tag_label", "Tag: {tag}").format(tag=tag_filter)
+                t.get("filter_tag_label", "Tags: {tag}").format(tag=tag_names)
             )
 
         if match_filter == self.ALL:

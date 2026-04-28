@@ -12,15 +12,18 @@ Displays extracted images with hashes, timestamps, and optional file paths.
 
 ## Filters and controls
 - Title: Optional heading text.
-- Tags: Filter by tag (All, Any Tag, or a specific tag).
+- Tags: Filter by tags (multi-select).
 - Hash Match: Filter by hash match list (All, Any Match, or a specific list).
 - Include File Path: Show the image path under each thumbnail.
+- Include URL: Show source URLs under each thumbnail.
+- Include Cache Key: Show browser cache keys under each thumbnail.
 - Sort By: Order by date or filename.
 - Show Filter Info: Display selected filters below the grid.
 - Max Images: Limit the number of images displayed.
 
 ## Output
 - Image grid with thumbnail, hash values, and discovery timestamp.
+- Optional URL and cache key annotations per image.
 
 ## Notes
 - Thumbnails require Pillow; if not installed, images may show without previews.

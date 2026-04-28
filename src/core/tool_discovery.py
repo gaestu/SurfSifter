@@ -13,6 +13,7 @@ LOGGER = get_logger("core.tool_discovery")
 
 TOOL_CANDIDATES: Dict[str, Iterable[str]] = {
     "bulk_extractor": ("bulk_extractor",),
+    "swiftbeaver": ("swiftbeaver",),
     "foremost": ("foremost",),
     "scalpel": ("scalpel",),
     "exiftool": ("exiftool",),

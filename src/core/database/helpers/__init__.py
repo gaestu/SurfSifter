@@ -49,6 +49,7 @@ from .statistics import (
     get_extractor_statistics_by_name,
     upsert_extractor_statistics,
     sync_process_log_from_statistics,
+    sync_process_log_counters,
 )
 
 # Browser History
@@ -189,6 +190,12 @@ from .tags import (
     query_all_tagged_artifacts,
     get_tag_artifact_summary,
     get_match_summary,
+)
+
+# Tag export (XLSX working document)
+from .tag_export import (
+    get_tagged_artifact_export,
+    get_reference_list_match_export,
 )
 
 # Timeline
@@ -522,6 +529,7 @@ from .browser_inventory import (
     insert_browser_inventory,
     update_inventory_ingestion_status,
     get_browser_inventory,
+    get_latest_browser_inventory,
 )
 
 # Batch Operations
@@ -647,6 +655,15 @@ from .dpapi import (
     reset_decrypt_status_by_evidence,
 )
 
+# Browser Indicators
+from .browser_indicators import (
+    insert_browser_indicator,
+    insert_browser_indicators,
+    get_browser_indicators,
+    delete_browser_indicators_by_run,
+    aggregate_tor_indicators,
+)
+
 __all__ = [
     # Generic CRUD
     "delete_by_run",
@@ -662,6 +679,7 @@ __all__ = [
     "get_extractor_statistics_by_name",
     "upsert_extractor_statistics",
     "sync_process_log_from_statistics",
+    "sync_process_log_counters",
     # Browser History
     "insert_browser_history",
     "insert_browser_history_row",
@@ -767,6 +785,9 @@ __all__ = [
     "merge_tag_associations",
     "query_artifacts_by_tags",
     "query_all_tagged_artifacts",
+    # Tag export
+    "get_tagged_artifact_export",
+    "get_reference_list_match_export",
     # Timeline
     "insert_timeline_event",
     "insert_timeline_events",
@@ -1013,6 +1034,7 @@ __all__ = [
     "insert_browser_inventory",
     "update_inventory_ingestion_status",
     "get_browser_inventory",
+    "get_latest_browser_inventory",
     # Batch Operations
     "get_evidence_table_counts",
     "purge_evidence_data",
@@ -1130,4 +1152,10 @@ __all__ = [
     "delete_chromium_app_keys_by_evidence",
     "delete_decrypt_audit_by_evidence",
     "reset_decrypt_status_by_evidence",
+    # Browser Indicators
+    "insert_browser_indicator",
+    "insert_browser_indicators",
+    "get_browser_indicators",
+    "delete_browser_indicators_by_run",
+    "aggregate_tor_indicators",
 ]

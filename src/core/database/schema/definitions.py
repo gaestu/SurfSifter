@@ -86,6 +86,7 @@ __all__ = [
     "DPAPI_MASTER_KEYS_SCHEMA",
     "CHROMIUM_APP_KEYS_SCHEMA",
     "DECRYPT_AUDIT_SCHEMA",
+    "BROWSER_INDICATORS_SCHEMA",
 ]
 
 
@@ -2064,6 +2065,36 @@ DECRYPT_AUDIT_SCHEMA = TableSchema(
 )
 
 
+BROWSER_INDICATORS_SCHEMA = TableSchema(
+    name="browser_indicators",
+    columns=[
+        Column("id", "INTEGER", nullable=False),
+        Column("evidence_id", "INTEGER", nullable=False),
+        Column("run_id", "TEXT", nullable=False),
+        Column("browser", "TEXT", nullable=False),
+        Column("indicator_type", "TEXT", nullable=False),
+        Column("source_table", "TEXT", nullable=False),
+        Column("source_id", "INTEGER"),
+        Column("indicator_value", "TEXT", nullable=False),
+        Column("source_path", "TEXT"),
+        Column("timestamp_utc", "TEXT"),
+        Column("confidence", "TEXT", nullable=False, default="medium"),
+        Column("notes", "TEXT"),
+        Column("created_at_utc", "TEXT"),
+    ],
+    conflict_action=ConflictAction.FAIL,
+    sortable_columns=["browser", "indicator_type", "confidence"],
+    default_order=[OrderColumn("browser", "ASC"), OrderColumn("confidence", "DESC")],
+    filterable_columns=[
+        FilterColumn("browser", [FilterOp.EQ]),
+        FilterColumn("indicator_type", [FilterOp.EQ]),
+        FilterColumn("confidence", [FilterOp.EQ]),
+        FilterColumn("run_id", [FilterOp.EQ]),
+    ],
+    supports_run_delete=True,
+)
+
+
 TABLE_SCHEMAS: Dict[str, TableSchema] = {
     "cookies": COOKIES_SCHEMA,
     "bookmarks": BOOKMARKS_SCHEMA,
@@ -2121,4 +2152,5 @@ TABLE_SCHEMAS: Dict[str, TableSchema] = {
     "dpapi_master_keys": DPAPI_MASTER_KEYS_SCHEMA,
     "chromium_app_keys": CHROMIUM_APP_KEYS_SCHEMA,
     "decrypt_audit": DECRYPT_AUDIT_SCHEMA,
+    "browser_indicators": BROWSER_INDICATORS_SCHEMA,
 }

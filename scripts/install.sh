@@ -271,6 +271,117 @@ install_recommended_tools() {
   warn "The app remains usable without it (URL fallback extractors stay available)."
 }
 
+install_swiftbeaver() {
+  local version="${1:-latest}"
+  local sb_repo="gaestu/SwiftBeaver"
+  local arch
+  arch="$(arch_token)"
+
+  log "Installing SwiftBeaver from GitHub releases (${sb_repo}, version=${version}, arch=${arch})."
+
+  if $DRY_RUN; then
+    printf '[DRY-RUN] Download swiftbeaver-%s-cpu-only.tar.gz from %s\n' "${arch}" "${sb_repo}"
+    printf '[DRY-RUN] install -m 0755 swiftbeaver %s/bin/swiftbeaver\n' "${PREFIX}"
+    return
+  fi
+
+  local api_url
+  if [[ "${version}" == "latest" ]]; then
+    api_url="https://api.github.com/repos/${sb_repo}/releases/latest"
+  else
+    api_url="https://api.github.com/repos/${sb_repo}/releases/tags/${version}"
+  fi
+
+  local json_file="${TMP_DIR}/swiftbeaver_release.json"
+  local http_code=""
+
+  if have_cmd curl; then
+    local -a curl_args=(-sL -H "Accept: application/vnd.github+json" -o "${json_file}" -w "%{http_code}")
+    if [[ -n "${GITHUB_TOKEN}" ]]; then
+      curl_args+=(-H "Authorization: Bearer ${GITHUB_TOKEN}")
+    fi
+    http_code="$(curl "${curl_args[@]}" "${api_url}" 2>/dev/null || true)"
+  elif have_cmd wget; then
+    local -a wget_args=(-q -O "${json_file}" --header "Accept: application/vnd.github+json")
+    if [[ -n "${GITHUB_TOKEN}" ]]; then
+      wget_args+=(--header "Authorization: Bearer ${GITHUB_TOKEN}")
+    fi
+    if wget "${wget_args[@]}" "${api_url}" 2>/dev/null; then
+      http_code="200"
+    else
+      http_code="000"
+    fi
+  else
+    warn "Neither curl nor wget found — cannot download SwiftBeaver."
+    return 1
+  fi
+
+  if [[ "${http_code}" != "200" ]]; then
+    warn "Failed to fetch SwiftBeaver release info (HTTP ${http_code}). Skipping."
+    return 1
+  fi
+
+  # Find the cpu-only tarball matching arch
+  local asset_name="swiftbeaver-${arch}-cpu-only.tar.gz"
+  local download_url
+  download_url="$(python3 - "${json_file}" "${asset_name}" "${arch}" 2>/dev/null <<'PY'
+import json, sys
+json_path, asset_name, arch = sys.argv[1], sys.argv[2].lower(), sys.argv[3].lower()
+with open(json_path) as fh:
+    data = json.load(fh)
+for a in data.get('assets', []):
+    if asset_name in a.get('name', '').lower():
+        print(a['browser_download_url'])
+        sys.exit(0)
+# Fallback: any tarball with cpu-only that contains the requested arch token only
+for a in data.get('assets', []):
+    name = a.get('name', '').lower()
+    if 'cpu' in name and arch in name:
+        print(a['browser_download_url'])
+        sys.exit(0)
+sys.exit(1)
+PY
+)" || true
+
+  if [[ -z "${download_url}" ]]; then
+    warn "Could not find SwiftBeaver asset '${asset_name}' in release. Skipping."
+    return 1
+  fi
+
+  log "Downloading: ${download_url}"
+  local tarball="${TMP_DIR}/swiftbeaver.tar.gz"
+
+  if have_cmd curl; then
+    curl -fsSL -o "${tarball}" "${download_url}"
+  else
+    wget -q -O "${tarball}" "${download_url}"
+  fi
+
+  local extract_dir="${TMP_DIR}/swiftbeaver_extract"
+  mkdir -p "${extract_dir}"
+  tar -xzf "${tarball}" -C "${extract_dir}"
+
+  # Find the swiftbeaver binary
+  local sb_bin
+  sb_bin="$(find "${extract_dir}" -name "swiftbeaver" -type f | head -n 1)"
+
+  if [[ -z "${sb_bin}" || ! -f "${sb_bin}" ]]; then
+    warn "swiftbeaver binary not found in archive. Skipping."
+    return 1
+  fi
+
+  need_privileges
+  run_priv install -m 0755 "${sb_bin}" "${PREFIX}/bin/swiftbeaver"
+
+  if [[ -x "${PREFIX}/bin/swiftbeaver" ]]; then
+    local sb_version
+    sb_version="$("${PREFIX}/bin/swiftbeaver" --version 2>/dev/null | head -n 1 || true)"
+    log "SwiftBeaver installed: ${PREFIX}/bin/swiftbeaver (${sb_version})"
+  else
+    warn "SwiftBeaver binary installed but not executable."
+  fi
+}
+
 auto_local_bin_source() {
   local candidate1="${PROJECT_ROOT}/dist/SurfSifter"
   local candidate2="${PROJECT_ROOT}/dist/surfsifter"
@@ -745,7 +856,7 @@ except Exception:
 
 registry = ToolRegistry()
 tools = registry.discover_all_tools()
-for key in ("bulk_extractor", "foremost", "scalpel", "exiftool", "firejail", "ewfmount"):
+for key in ("bulk_extractor", "foremost", "scalpel", "exiftool", "firejail", "ewfmount", "swiftbeaver"):
     info = tools.get(key)
     if info is None:
         print(f"{key}: missing")
@@ -770,7 +881,7 @@ verify_tools() {
       esac
     done <<< "${output}"
   else
-    local tools=(bulk_extractor foremost scalpel exiftool firejail ewfmount)
+    local tools=(bulk_extractor foremost scalpel exiftool firejail ewfmount swiftbeaver)
     local t
     for t in "${tools[@]}"; do
       if have_cmd "${t}"; then
@@ -983,6 +1094,7 @@ main() {
   install_runtime_deps
   if [[ "${WITH_RECOMMENDED_TOOLS}" == "true" ]] && ! $SKIP_TOOLS; then
     install_recommended_tools
+    install_swiftbeaver || true  # Non-fatal: app works without SwiftBeaver
   fi
   install_binary
 

@@ -50,6 +50,56 @@ class UrlActivityTimelineModule(BaseReportModule):
     def get_filter_fields(self) -> List[FilterField]:
         """Return filter fields for URL activity timeline configuration."""
         return [
+            # ── Title group ─────────────────────────────────────────
+            FilterField(
+                key="show_title",
+                label="Show Title",
+                filter_type=FilterType.CHECKBOX,
+                default=True,
+                help_text="Display a title at the top of this section",
+                required=False,
+            ),
+            FilterField(
+                key="custom_title",
+                label="Custom Title",
+                filter_type=FilterType.TEXT,
+                default="",
+                help_text="Custom title (leave empty for default)",
+                required=False,
+            ),
+            # ── Description group ───────────────────────────────────
+            FilterField(
+                key="show_description",
+                label="Show Description",
+                filter_type=FilterType.CHECKBOX,
+                default=True,
+                help_text="Display a short description below the title",
+                required=False,
+            ),
+            FilterField(
+                key="custom_description",
+                label="Custom Description",
+                filter_type=FilterType.TEXT,
+                default="",
+                help_text="Custom description (leave empty for default)",
+                required=False,
+            ),
+            FilterField(
+                key="date_from",
+                label="From Date",
+                filter_type=FilterType.TEXT,
+                default="",
+                help_text="Start date filter (YYYY-MM-DD). Leave empty for no limit.",
+                required=False,
+            ),
+            FilterField(
+                key="date_to",
+                label="To Date",
+                filter_type=FilterType.TEXT,
+                default="",
+                help_text="End date filter (YYYY-MM-DD). Leave empty for no limit.",
+                required=False,
+            ),
             FilterField(
                 key="date_from",
                 label="From Date",
@@ -223,6 +273,18 @@ class UrlActivityTimelineModule(BaseReportModule):
         translations = config.get("_translations", {})
         date_format = config.get("_date_format", "eu")
 
+        # Title / description (optional)
+        show_title = config.get("show_title", True)
+        custom_title = config.get("custom_title", "") or ""
+        title_text = custom_title.strip() or translations.get(
+            "url_activity_title", self.metadata.name
+        )
+        show_description = config.get("show_description", True)
+        custom_description = config.get("custom_description", "") or ""
+        description_text = custom_description.strip() or translations.get(
+            "url_activity_description", self.metadata.description
+        )
+
         # Extract config
         tag_filter = config.get("tag_filter", self.ALL)
         match_filter = config.get("match_filter", self.ALL)
@@ -280,6 +342,10 @@ class UrlActivityTimelineModule(BaseReportModule):
             show_urls=show_urls,
             total_domains=total_domains,
             shown_domains=len(domain_data),
+            show_title=show_title,
+            title_text=title_text,
+            show_description=show_description,
+            description_text=description_text,
             t=translations,
             locale=locale,
         )

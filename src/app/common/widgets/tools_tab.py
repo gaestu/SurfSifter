@@ -204,7 +204,7 @@ class ToolsTab(QWidget):
 
     def _populate_tables(self):
         """Populate both tables with tool information."""
-        forensic_tools = ["bulk_extractor", "foremost", "scalpel", "exiftool", "firejail", "ewfmount"]
+        forensic_tools = ["bulk_extractor", "swiftbeaver", "foremost", "scalpel", "exiftool", "firejail", "ewfmount"]
         python_tools = ["pytsk3", "pyewf"]
 
         self._populate_table(self.forensic_table, forensic_tools)

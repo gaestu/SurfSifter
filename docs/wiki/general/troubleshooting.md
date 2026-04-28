@@ -8,6 +8,12 @@
 **Symptom:** PDF reports fail or render incorrectly.
 - Verify `libpango`, `libcairo`, and related GTK dependencies are installed (Linux).
 
+**Symptom:** Appendix PDFs are slow or fall back to WeasyPrint.
+- Install a recent Chromium-family browser (Chromium, Chrome, Edge, or Brave).
+- Appendix PDFs use Chromium `131+` by default when available; if Chromium is missing, unsupported, or the Chromium render fails at runtime, SurfSifter falls back to the slower WeasyPrint path when WeasyPrint is installed.
+- Chromium appendix rendering is intentionally disabled when SurfSifter runs as `root`, because Chromium sandboxing would be unavailable in that mode. Run SurfSifter as a non-root user to use Chromium appendix rendering.
+- If appendix generation still fails, review the evidence `process_log` entries for `chromium_probe` and/or `chromium_appendix_pdf`, depending on how far the export progressed.
+
 ## Optional features not available
 **Symptom:** A feature is missing (e.g., Jump Lists, cache decompression, Safari).
 - All artifact-parsing libraries are now installed by default. Re-run `poetry install` to ensure they are present.

@@ -919,6 +919,8 @@ class PyEwfTskFS(EvidenceFS):
         size = getattr(meta.meta, "size", None) if meta and meta.meta else None
         if size is None:
             raise FileNotFoundError(f"Unable to determine size for {path}")
+        if size == 0:
+            return io.BytesIO(b"")
         data = file_object.read_random(0, size)
         return io.BytesIO(data)
 

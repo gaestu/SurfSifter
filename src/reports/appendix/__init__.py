@@ -2,11 +2,16 @@
 
 from .base import BaseAppendixModule
 from .registry import AppendixRegistry, get_registry
+from .autofill import AppendixAutofillModule
+from .cookies import AppendixCookiesModule
 from .download_audit import AppendixDownloadAuditModule
 from .download_list import AppendixDownloadListModule
 from .extracted_analyzed_data import AppendixExtractedAnalyzedDataModule
 from .file_list import AppendixFileListModule
 from .image_list import AppendixImageListModule
+from .jump_lists import AppendixJumpListsModule
+from .search_terms import AppendixSearchTermsModule
+from .site_permissions import AppendixSitePermissionsModule
 from .url_list import AppendixUrlListModule
 from .web_storage import AppendixWebStorageModule
 
@@ -15,11 +20,16 @@ __all__ = [
     "AppendixRegistry",
     "get_registry",
     # Built-in appendix modules
+    "AppendixAutofillModule",
+    "AppendixCookiesModule",
     "AppendixDownloadAuditModule",
     "AppendixDownloadListModule",
     "AppendixExtractedAnalyzedDataModule",
     "AppendixFileListModule",
     "AppendixImageListModule",
+    "AppendixJumpListsModule",
+    "AppendixSearchTermsModule",
+    "AppendixSitePermissionsModule",
     "AppendixUrlListModule",
     "AppendixWebStorageModule",
 ]

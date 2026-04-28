@@ -169,6 +169,8 @@ TRANSLATIONS: Dict[str, TranslationDict] = {
         # ===================
         # Activity summary module
         # ===================
+        "activity_summary_title": "Activity Summary",
+        "activity_summary_desc": "Overview of system and browser activity patterns, showing when the device was actively used, significant periods of inactivity, and the distribution of events across different categories.",
         "activity_overview": "Activity Overview",
         "activity_period": "Activity Period",
         "duration": "Duration",
@@ -219,6 +221,8 @@ TRANSLATIONS: Dict[str, TranslationDict] = {
         # ===================
         # URL activity timeline module
         # ===================
+        "url_activity_title": "URL Activity Timeline",
+        "url_activity_description": "Per-domain URL activity with first/last seen timestamps and event counts.",
         "url_activity_summary": "URL Activity Summary",
         "total_url_events": "Total URL Events",
         "unique_urls": "Unique URLs",
@@ -389,6 +393,20 @@ TRANSLATIONS: Dict[str, TranslationDict] = {
         "no_jump_lists_found": "No jump list entries found matching the filter criteria.",
 
         # ===================
+        # Cookies appendix module
+        # ===================
+        "cookie_name": "Name",
+        "cookie_domain": "Domain",
+        "cookie_browser": "Browser",
+        "cookie_path": "Path",
+        "cookie_value": "Value",
+        "cookie_expires": "Expires",
+        "cookie_last_access": "Last Access",
+        "cookie_creation": "Created",
+        "cookie_flags": "Flags",
+        "no_cookies_found": "No cookies found matching the filter criteria.",
+
+        # ===================
         # Installed Applications module
         # ===================
         "installed_applications_title": "Installed Applications",
@@ -452,6 +470,18 @@ TRANSLATIONS: Dict[str, TranslationDict] = {
         "no_urls_for_filters": "No URLs found for the selected filters.",
 
         # ===================
+        # Site Permissions module / appendix
+        # ===================
+        "site_permissions_title": "Site Permissions",
+        "site_permissions_description": "Site permissions control what capabilities websites are granted, such as notifications, geolocation, camera, and microphone access.",
+        "site_permissions_origin": "Origin",
+        "site_permissions_type": "Permission Type",
+        "site_permissions_value": "Value",
+        "site_permissions_granted_at": "Granted At",
+        "site_permissions_expires_at": "Expires At",
+        "no_site_permissions_found": "No site permissions found matching the filter criteria.",
+
+        # ===================
         # Common / shared
         # ===================
         "showing_x_of_y": "showing {shown} of {total}",
@@ -503,6 +533,25 @@ TRANSLATIONS: Dict[str, TranslationDict] = {
         "sort_smallest_first": "smallest first",
         "sort_domain_shortest_first": "domain shortest first",
         "sort_domain_longest_first": "domain longest first",
+
+        # ===================
+        # Search term frequency module
+        # ===================
+        "search_term_frequency_title": "Search Term Frequency",
+        "search_term_frequency_desc": "Aggregated view of search terms grouped by term, showing how often each term was searched along with the first and last time it was seen.",
+        "search_browser": "Browser",
+        "search_browsers": "Browsers",
+        "search_engine": "Search Engine",
+        "search_engines": "Search Engines",
+        "search_first_seen": "First Seen",
+        "search_last_seen": "Last Seen",
+        "search_profile": "Profile",
+        "search_profiles": "Profiles",
+        "search_time": "Search Time",
+        "search_terms_label": "search terms",
+        "no_search_terms": "No search terms found for the selected filters.",
+        "no_search_term_frequencies": "No search terms found matching the filter criteria.",
+        "unique_search_terms_label": "unique search terms",
     },
 
     "de": {
@@ -655,6 +704,8 @@ TRANSLATIONS: Dict[str, TranslationDict] = {
         # ===================
         # Activity summary module
         # ===================
+        "activity_summary_title": "Aktivitätsübersicht",
+        "activity_summary_desc": "Überblick über System- und Browser-Aktivitätsmuster, der zeigt, wann das Gerät aktiv genutzt wurde, signifikante Inaktivitätsphasen sowie die Verteilung der Ereignisse über verschiedene Kategorien.",
         "activity_overview": "Aktivitätsübersicht",
         "activity_period": "Aktivitätszeitraum",
         "duration": "Dauer",
@@ -705,6 +756,8 @@ TRANSLATIONS: Dict[str, TranslationDict] = {
         # ===================
         # URL activity timeline module
         # ===================
+        "url_activity_title": "URL-Aktivitätszeitachse",
+        "url_activity_description": "URL-Aktivität pro Domäne mit Zeitstempeln des ersten/letzten Auftretens und Ereigniszählung.",
         "url_activity_summary": "URL-Aktivitätsübersicht",
         "total_url_events": "URL-Ereignisse gesamt",
         "unique_urls": "Eindeutige URLs",
@@ -875,6 +928,20 @@ TRANSLATIONS: Dict[str, TranslationDict] = {
         "no_jump_lists_found": "Keine Sprunglisten-Einträge gefunden, die den Filterkriterien entsprechen.",
 
         # ===================
+        # Cookies appendix module
+        # ===================
+        "cookie_name": "Name",
+        "cookie_domain": "Domain",
+        "cookie_browser": "Browser",
+        "cookie_path": "Pfad",
+        "cookie_value": "Wert",
+        "cookie_expires": "Läuft ab",
+        "cookie_last_access": "Letzter Zugriff",
+        "cookie_creation": "Erstellt",
+        "cookie_flags": "Flags",
+        "no_cookies_found": "Keine Cookies gefunden, die den Filterkriterien entsprechen.",
+
+        # ===================
         # Installed Applications module
         # ===================
         "installed_applications_title": "Installierte Anwendungen",
@@ -938,6 +1005,18 @@ TRANSLATIONS: Dict[str, TranslationDict] = {
         "no_urls_for_filters": "Keine URLs für die ausgewählten Filter gefunden.",
 
         # ===================
+        # Site Permissions module / appendix
+        # ===================
+        "site_permissions_title": "Website-Berechtigungen",
+        "site_permissions_description": "Website-Berechtigungen steuern, welche Funktionen Websites gewährt werden, z. B. Benachrichtigungen, Standort, Kamera- und Mikrofonzugriff.",
+        "site_permissions_origin": "Ursprung",
+        "site_permissions_type": "Berechtigungstyp",
+        "site_permissions_value": "Wert",
+        "site_permissions_granted_at": "Erteilt am",
+        "site_permissions_expires_at": "Läuft ab am",
+        "no_site_permissions_found": "Keine Website-Berechtigungen gefunden, die den Filterkriterien entsprechen.",
+
+        # ===================
         # Common / shared
         # ===================
         "showing_x_of_y": "zeige {shown} von {total}",
@@ -989,6 +1068,25 @@ TRANSLATIONS: Dict[str, TranslationDict] = {
         "sort_smallest_first": "kleinste zuerst",
         "sort_domain_shortest_first": "kürzeste Domain zuerst",
         "sort_domain_longest_first": "längste Domain zuerst",
+
+        # ===================
+        # Search term frequency module
+        # ===================
+        "search_term_frequency_title": "Suchbegriff-Häufigkeit",
+        "search_term_frequency_desc": "Aggregierte Ansicht der Suchbegriffe, gruppiert nach Begriff, mit Anzahl der Suchen sowie erstem und letztem Auftreten.",
+        "search_browser": "Browser",
+        "search_browsers": "Browser",
+        "search_engine": "Suchmaschine",
+        "search_engines": "Suchmaschinen",
+        "search_first_seen": "Zuerst gesehen",
+        "search_last_seen": "Zuletzt gesehen",
+        "search_profile": "Profil",
+        "search_profiles": "Profile",
+        "search_time": "Suchzeitpunkt",
+        "search_terms_label": "Suchbegriffe",
+        "no_search_terms": "Keine Suchbegriffe für die gewählten Filter gefunden.",
+        "no_search_term_frequencies": "Keine Suchbegriffe entsprechen den Filterkriterien.",
+        "unique_search_terms_label": "eindeutige Suchbegriffe",
     },
 }
 

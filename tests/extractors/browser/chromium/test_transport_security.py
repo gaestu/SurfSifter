@@ -186,3 +186,130 @@ class TestHstsInsertReplace:
 
         assert len(get_hsts_entries(hsts_db, evidence_id=1)) == 1
         assert len(get_hsts_entries(hsts_db, evidence_id=2)) == 1
+
+
+# =============================================================================
+# Hashed-Host Mapping Format Tests
+# =============================================================================
+
+class TestHashedHostFormat:
+    """Test parsing of the top-level hashed-host object mapping format."""
+
+    @pytest.fixture
+    def extractor(self):
+        """Create a minimal ChromiumTransportSecurityExtractor instance."""
+        from unittest.mock import PropertyMock, patch
+        from extractors.browser.chromium.transport_security.extractor import (
+            ChromiumTransportSecurityExtractor,
+        )
+        from extractors.base import ExtractorMetadata
+
+        ext = ChromiumTransportSecurityExtractor.__new__(ChromiumTransportSecurityExtractor)
+        meta = ExtractorMetadata(
+            name="transport_security",
+            display_name="Transport Security",
+            description="test",
+            category="browser",
+            requires_tools=[],
+            can_extract=True,
+            can_ingest=True,
+        )
+        with patch.object(
+            ChromiumTransportSecurityExtractor, "metadata",
+            new_callable=PropertyMock, return_value=meta,
+        ):
+            yield ext
+
+    @pytest.fixture
+    def file_entry(self):
+        return {
+            "browser": "chrome",
+            "profile": "Default",
+            "logical_path": "/p3/chrome/TransportSecurity",
+            "forensic_path": None,
+            "partition_index": 3,
+            "fs_type": "NTFS",
+        }
+
+    @pytest.fixture
+    def callbacks(self):
+        from types import SimpleNamespace
+        logs = []
+        return SimpleNamespace(on_log=lambda msg, level="info": logs.append(msg))
+
+    def _write_json(self, tmp_path, data):
+        import json
+        p = tmp_path / "TransportSecurity"
+        p.write_text(json.dumps(data), encoding="utf-8")
+        return p
+
+    def test_hashed_host_mapping_parsed(self, tmp_path, hsts_db, extractor, file_entry, callbacks):
+        """Hashed-host mapping format is parsed when sts list is absent."""
+        data = {
+            "hashed_host_abc123": {
+                "sts_observed": 1700000000.0,
+                "expiry": 1731536000.0,
+                "mode": "force-https",
+                "sts_include_subdomains": False,
+            },
+            "hashed_host_def456": {
+                "sts_observed": 1700100000.0,
+                "expiry": 1731636000.0,
+                "mode": "force-https",
+                "sts_include_subdomains": True,
+            },
+            "hashed_host_ghi789": {
+                "sts_observed": 1700200000.0,
+                "expiry": 1731736000.0,
+                "mode": "force-https",
+                "sts_include_subdomains": False,
+            },
+            "version": 2,
+        }
+        fp = self._write_json(tmp_path, data)
+        count = extractor._parse_and_insert_hsts(
+            fp, file_entry, "run1", 1, hsts_db, callbacks,
+        )
+        assert count == 3
+
+        rows = get_hsts_entries(hsts_db, evidence_id=1)
+        hosts = {r["hashed_host"] for r in rows}
+        assert hosts == {"hashed_host_abc123", "hashed_host_def456", "hashed_host_ghi789"}
+
+    def test_sts_list_format_still_works(self, tmp_path, hsts_db, extractor, file_entry, callbacks):
+        """The existing sts-list format continues to work."""
+        data = {
+            "sts": [
+                {
+                    "host": "host_aaa",
+                    "sts_observed": 1700000000.0,
+                    "expiry": 1731536000.0,
+                    "mode": "force-https",
+                    "sts_include_subdomains": False,
+                },
+                {
+                    "host": "host_bbb",
+                    "sts_observed": 1700100000.0,
+                    "expiry": 1731636000.0,
+                    "mode": "force-https",
+                    "sts_include_subdomains": True,
+                },
+            ]
+        }
+        fp = self._write_json(tmp_path, data)
+        count = extractor._parse_and_insert_hsts(
+            fp, file_entry, "run1", 1, hsts_db, callbacks,
+        )
+        assert count == 2
+
+        rows = get_hsts_entries(hsts_db, evidence_id=1)
+        hosts = {r["hashed_host"] for r in rows}
+        assert hosts == {"host_aaa", "host_bbb"}
+
+    def test_empty_data_returns_zero(self, tmp_path, hsts_db, extractor, file_entry, callbacks):
+        """Empty dict returns 0 records."""
+        fp = self._write_json(tmp_path, {})
+        count = extractor._parse_and_insert_hsts(
+            fp, file_entry, "run1", 1, hsts_db, callbacks,
+        )
+        assert count == 0

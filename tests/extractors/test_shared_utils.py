@@ -435,17 +435,32 @@ class TestNormalizeEvidencePath:
     def test_backslash_to_forward(self):
         """Test backslash conversion."""
         result = normalize_evidence_path("Users\\john\\Documents")
-        assert result == "Users/john/Documents"
+        assert result == "/Users/john/Documents"
 
     def test_double_slash_removal(self):
         """Test double slash removal."""
         result = normalize_evidence_path("Users//john//Documents")
-        assert result == "Users/john/Documents"
+        assert result == "/Users/john/Documents"
 
     def test_path_object(self):
         """Test Path object input."""
         result = normalize_evidence_path(Path("Users/john/Documents"))
-        assert result == "Users/john/Documents"
+        assert result == "/Users/john/Documents"
+
+    def test_already_has_leading_slash(self):
+        """Test path that already has leading slash."""
+        result = normalize_evidence_path("/Users/john/Documents")
+        assert result == "/Users/john/Documents"
+
+    def test_none_returns_none(self):
+        """Test None input returns None."""
+        result = normalize_evidence_path(None)
+        assert result is None
+
+    def test_empty_string_returns_empty(self):
+        """Test empty string returns empty."""
+        result = normalize_evidence_path("")
+        assert result == ""
 
 
 class TestExtractUsernameFromPath:

@@ -473,6 +473,11 @@ class BrowserCarverExtractor(BaseExtractor):
 
         if not manifest_path.exists():
             callbacks.on_error("Manifest not found", str(manifest_path))
+            # Finalize stats if they are stuck in "running" (e.g. extraction
+            # crashed before writing the manifest).
+            _stats = StatisticsCollector.instance()
+            if _stats:
+                _stats.finish_run(evidence_id, self.metadata.name, "failed")
             return {"urls": 0, "history": 0, "cookies": 0}
 
         manifest_data = json.loads(manifest_path.read_text())

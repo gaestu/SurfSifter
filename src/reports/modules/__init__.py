@@ -27,13 +27,17 @@ from .autofill_form_data import AutofillFormDataModule
 from .bookmarks import BookmarksModule
 from .browser_downloads import BrowserDownloadsModule
 from .browser_history import BrowserHistoryModule
+from .cookies import CookiesModule
 from .credentials import CredentialsModule
 from .downloaded_images import DownloadedImagesModule
 from .images import ImagesModule
 from .installed_applications import InstalledApplicationsModule
 from .jump_lists import JumpListsModule
 from .screenshots import ScreenshotsModule
+from .search_term_frequency import SearchTermFrequencyModule
+from .search_terms import SearchTermsModule
 from .site_engagement import SiteEngagementModule
+from .site_permissions import SitePermissionsModule
 from .system_summary import SystemSummaryModule
 from .tagged_file_list import TaggedFileListModule
 from .url_activity_timeline import UrlActivityTimelineModule
@@ -54,13 +58,17 @@ __all__ = [
     "BookmarksModule",
     "BrowserDownloadsModule",
     "BrowserHistoryModule",
+    "CookiesModule",
     "CredentialsModule",
     "DownloadedImagesModule",
     "ImagesModule",
     "InstalledApplicationsModule",
     "JumpListsModule",
     "ScreenshotsModule",
+    "SearchTermFrequencyModule",
+    "SearchTermsModule",
     "SiteEngagementModule",
+    "SitePermissionsModule",
     "SystemSummaryModule",
     "TaggedFileListModule",
     "UrlActivityTimelineModule",

@@ -9,6 +9,7 @@ Some features rely on optional external tools that are discovered on your system
 | **foremost** | File carving for common formats (images, docs) | Install via OS package manager or the project's website |
 | **scalpel** | Advanced file carving (configurable signatures) | Install via OS package manager or the project's website |
 | **bulk_extractor** | Bulk extraction of URLs, emails, domains, phone numbers, crypto addresses | Install via OS package manager or the project's website |
+| **swiftbeaver** | Image carving (jpeg/png/gif/webp/bmp/tiff/heic/ico) and URL extraction from E01/EWF evidence | Installed automatically via `install.sh --with-recommended-tools` or download from [gaestu/SwiftBeaver](https://github.com/gaestu/SwiftBeaver) releases |
 | **exiftool** | EXIF/metadata extraction for media files | Install via OS package manager or the project's website |
 | **firejail** | Sandboxed browser preview for safer URL inspection | Install via OS package manager or the project's website |
 | **ewfmount** | E01 mount fallback for carving workflows | `ewf-tools` (Ubuntu/Debian) or `ewftools` (Fedora) |

@@ -1,0 +1,145 @@
+<style>
+.appendix-jl-table {
+    width: 100%;
+    table-layout: fixed;
+    border-collapse: collapse;
+}
+.appendix-jl-table th,
+.appendix-jl-table td {
+    padding: 3px 5px;
+    font-size: 0.85em;
+    line-height: 1.2;
+    border: 1px solid #ddd;
+    vertical-align: top;
+    word-break: break-word;
+    overflow-wrap: break-word;
+}
+.appendix-jl-table th {
+    background-color: #f5f5f5;
+    text-align: left;
+    font-weight: 600;
+    white-space: nowrap;
+}
+.appendix-jl-table .jl-main {
+    border-bottom: none;
+}
+.appendix-jl-table .jl-detail {
+    border-top: none;
+    background-color: #fafafa;
+}
+.appendix-jl-table .jl-time,
+.appendix-jl-table .jl-app {
+    white-space: nowrap;
+}
+.appendix-jl-table .jl-time .jl-date {
+    display: block;
+}
+.appendix-jl-table .jl-time .jl-clock {
+    display: block;
+    color: #555;
+}
+.appendix-jl-table .jl-detail .label {
+    color: #888;
+    font-size: 0.9em;
+}
+.appendix-jl-empty {
+    color: #888;
+    font-style: italic;
+}
+</style>
+
+{# Only target_path is rendered on the second row (it is typically the
+   widest field). All other columns stay on the main row. #}
+{% set has_detail_row = show_target_path %}
+
+{% macro render_time(value) -%}
+    {%- set parts = (value or '').split(' ', 1) -%}
+    {%- if parts | length == 2 -%}
+        <span class="jl-date">{{ parts[0] }}</span><span class="jl-clock">{{ parts[1] }}</span>
+    {%- else -%}
+        {{ value }}
+    {%- endif -%}
+{%- endmacro %}
+
+{% macro header_row() -%}
+<tr>
+    {% if not group_by_application %}
+    <th class="jl-app" style="width: 15%;">{{ t.jl_application | default('Application') }}</th>
+    {% endif %}
+    {% if show_title %}
+    <th>{{ t.jl_title | default('Title') }}</th>
+    {% endif %}
+    {% if show_url %}
+    <th>{{ t.jl_url | default('URL') }}</th>
+    {% endif %}
+    {% if show_access_time %}
+    <th class="jl-time" style="width: 16%;">{{ t.jl_access_time | default('Access Time') }}</th>
+    {% endif %}
+    {% if show_creation_time %}
+    <th class="jl-time" style="width: 16%;">{{ t.jl_creation_time | default('Creation Time') }}</th>
+    {% endif %}
+    {% if show_appid %}
+    <th>{{ t.jl_appid | default('App ID') }}</th>
+    {% endif %}
+</tr>
+{%- endmacro %}
+
+{% macro entry_rows(entry) -%}
+<tr class="jl-main">
+    {% if not group_by_application %}
+    <td class="jl-app">{{ entry.application }}</td>
+    {% endif %}
+    {% if show_title %}
+    <td>{{ entry.title }}</td>
+    {% endif %}
+    {% if show_url %}
+    <td>{{ entry.url }}</td>
+    {% endif %}
+    {% if show_access_time %}
+    <td class="jl-time">{{ render_time(entry.access_time) }}</td>
+    {% endif %}
+    {% if show_creation_time %}
+    <td class="jl-time">{{ render_time(entry.creation_time) }}</td>
+    {% endif %}
+    {% if show_appid %}
+    <td>{{ entry.appid }}</td>
+    {% endif %}
+</tr>
+{% if has_detail_row %}
+<tr class="jl-detail">
+    <td colspan="{{ col_count }}">
+        <span class="label">{{ t.jl_target_path | default('Target Path') }}:</span>
+        {{ entry.target_path }}
+    </td>
+</tr>
+{% endif %}
+{%- endmacro %}
+
+{% if total_count == 0 %}
+<p class="appendix-jl-empty">
+    {{ t.no_jump_lists_found | default('No jump list entries found matching the filter criteria.') }}
+</p>
+{% else %}
+    {% if group_by_application and grouped %}
+        {% for group in grouped %}
+            <h4 class="appendix-subheader">{{ group.application }} ({{ group.entries | length }})</h4>
+            <table class="appendix-jl-table">
+                <thead>{{ header_row() }}</thead>
+                <tbody>
+                    {% for entry in group.entries %}
+                        {{ entry_rows(entry) }}
+                    {% endfor %}
+                </tbody>
+            </table>
+        {% endfor %}
+    {% else %}
+        <table class="appendix-jl-table">
+            <thead>{{ header_row() }}</thead>
+            <tbody>
+                {% for entry in entries %}
+                    {{ entry_rows(entry) }}
+                {% endfor %}
+            </tbody>
+        </table>
+    {% endif %}
+{% endif %}

@@ -13,6 +13,7 @@ Report modules are data blocks you can add inside any custom section. They are c
 - [[reports/modules/browser-downloads|Browser Downloads]]
 - [[reports/modules/browser-history|Browser History]]
 - [[reports/modules/credentials|Credentials]]
+- [[reports/modules/search-terms|Search Terms]]
 - [[reports/modules/site-engagement|Site Engagement]]
 - [[reports/modules/web-storage-details|Web Storage Details]]
 

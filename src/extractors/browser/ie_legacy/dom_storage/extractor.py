@@ -42,7 +42,9 @@ from ...._shared.file_list_discovery import (
 )
 from .._patterns import (
     get_patterns,
+    get_all_patterns,
     extract_user_from_path,
+    detect_browser_from_path,
 )
 from .._ese_reader import (
     WebCacheReader,
@@ -183,8 +185,8 @@ class IEDOMStorageExtractor(BaseExtractor):
             "notes": [],
         }
 
-        # Get Edge Legacy patterns
-        patterns = get_patterns("edge_legacy", "dom_storage")
+        # Get both IE and Edge Legacy DOMStore patterns
+        patterns = get_all_patterns("dom_storage")
         if not patterns:
             manifest_data["notes"].append("No Edge Legacy DOMStore patterns")
             callbacks.on_log("No Edge Legacy DOMStore patterns defined", "warning")
@@ -224,9 +226,11 @@ class IEDOMStorageExtractor(BaseExtractor):
             return False
 
         callbacks.on_step(f"Using file_list index for discovery ({count:,} files indexed)")
+        include_deleted = config.get("include_deleted", False)
         result = discover_from_file_list(
             evidence_conn, evidence_id,
             path_patterns=patterns,
+            exclude_deleted=not include_deleted,
         )
         # Convert FileListMatch objects to expected dict format
         discovered_files = [
@@ -318,7 +322,7 @@ class IEDOMStorageExtractor(BaseExtractor):
                                 "logical_path": logical_path,
                                 "extracted_path": str(out_path.relative_to(output_dir)),
                                 "user": user,
-                                "browser": "edge_legacy",
+                                "browser": detect_browser_from_path(logical_path),
                                 "partition_index": partition_index,
                                 "size_bytes": len(content),
                                 "md5": md5,
@@ -543,9 +547,40 @@ class IEDOMStorageExtractor(BaseExtractor):
 
                 # Look for storage items
                 for item in root.iter():
+                    # Try attributes first (alternative XML formats)
                     key = item.get("key") or item.get("name")
-                    value = item.text or item.get("value", "")
+                    # Fall back to child elements (Edge Legacy DOMStore format)
+                    if not key:
+                        key_elem = next(
+                            (e for tag in ("Key", "key", "Name", "name")
+                             if (e := item.find(tag)) is not None),
+                            None,
+                        )
+                        if key_elem is not None:
+                            key = key_elem.text
+
+                    if not key:
+                        continue
+
+                    value = (item.text or "").strip() or item.get("value", "")
+                    if not value:
+                        val_elem = next(
+                            (e for tag in ("Value", "value")
+                             if (e := item.find(tag)) is not None),
+                            None,
+                        )
+                        if val_elem is not None:
+                            value = val_elem.text or ""
+
                     origin = item.get("origin") or item.get("url", "")
+                    if not origin:
+                        origin_elem = next(
+                            (e for tag in ("Origin", "origin", "Url", "url")
+                             if (e := item.find(tag)) is not None),
+                            None,
+                        )
+                        if origin_elem is not None:
+                            origin = origin_elem.text or ""
 
                     if key:
                         try:

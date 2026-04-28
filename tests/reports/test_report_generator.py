@@ -9,6 +9,10 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from reports.generator import (
+    AppendixRenderPlan,
+    ChromiumBinary,
+    ExternalInvocation,
+    MIN_CHROMIUM_MARGIN_BOX_VERSION,
     ReportBuilder,
     ReportGenerator,
     ReportData,
@@ -153,6 +157,19 @@ class TestReportBuilder:
         assert result is builder  # Method chaining
         assert builder._data.title == "My Report"
 
+    def test_close_owned_db_connection_only_closes_owned_connections(self, db_conn):
+        """Owned builder connections should close; borrowed ones should remain open."""
+        builder = ReportBuilder(db_conn, evidence_id=1)
+        builder.close_owned_db_connection()
+        db_conn.execute("SELECT 1").fetchone()
+
+        owned_conn = sqlite3.connect(":memory:")
+        owned_builder = ReportBuilder(owned_conn, evidence_id=1).take_db_connection_ownership()
+        owned_builder.close_owned_db_connection()
+
+        with pytest.raises(sqlite3.ProgrammingError):
+            owned_conn.execute("SELECT 1")
+
     def test_set_case_info(self, db_conn):
         """Test setting case metadata."""
         builder = ReportBuilder(db_conn, evidence_id=1)
@@ -282,6 +299,42 @@ class TestReportBuilder:
         assert isinstance(data, ReportData)
         assert data.title == "Test"
 
+    def test_render_appendix_html_hides_toc_page_numbers_for_chromium(self, db_conn):
+        """Chromium appendix HTML should drop TOC page counters."""
+        builder = ReportBuilder(db_conn, evidence_id=1)
+        builder._data.appendix_modules.append(
+            {"title": "Images", "rendered_html": "<p>Body</p>"}
+        )
+
+        html = builder.render_appendix_html(renderer="chromium")
+
+        assert "target-counter(" not in html
+        assert 'colspan="3"' in html
+
+    def test_render_appendix_html_keeps_toc_page_numbers_for_weasyprint(self, db_conn):
+        """WeasyPrint appendix HTML should keep TOC page counters."""
+        builder = ReportBuilder(db_conn, evidence_id=1)
+        builder._data.appendix_modules.append(
+            {"title": "Images", "rendered_html": "<p>Body</p>"}
+        )
+
+        html = builder.render_appendix_html(renderer="weasyprint")
+
+        assert "target-counter(" in html
+        assert 'class="toc-page-num"' in html
+
+    def test_render_appendix_html_honors_hide_page_numbers_option(self, db_conn):
+        """Appendix footer page numbers can be disabled in the template."""
+        builder = ReportBuilder(db_conn, evidence_id=1)
+        builder._data.appendix_modules.append(
+            {"title": "Images", "rendered_html": "<p>Body</p>"}
+        )
+        builder.set_appendix_options(hide_page_numbers=True)
+
+        html = builder.render_appendix_html(renderer="chromium")
+
+        assert "@bottom-center" not in html
+
 
 class TestReportGenerator:
     """Test ReportGenerator class."""
@@ -297,9 +350,44 @@ class TestReportGenerator:
         # Should be True if weasyprint is installed
         assert isinstance(generator.can_generate_pdf, bool)
 
-    def test_preview_in_browser(self):
+    def test_plan_appendix_render_reprobes_each_time(self, monkeypatch):
+        """Appendix render planning should emit a fresh probe on each call."""
+        generator = ReportGenerator()
+        probe_calls = {"count": 0}
+        candidate = Path("/tmp/chromium")
+        event = ExternalInvocation(
+            task="chromium_probe",
+            command="chromium --version",
+            exit_code=0,
+            stdout=f"Chromium {MIN_CHROMIUM_MARGIN_BOX_VERSION}.0.0.0",
+            stderr=None,
+        )
+        binary = ChromiumBinary(
+            executable=candidate,
+            display_name="Chromium",
+            major_version=MIN_CHROMIUM_MARGIN_BOX_VERSION,
+        )
+        monkeypatch.setattr(generator, "_find_chromium_candidates", lambda: [candidate])
+
+        def fake_probe(path, **kwargs):
+            probe_calls["count"] += 1
+            return binary, event, None
+
+        monkeypatch.setattr(generator, "_probe_chromium_binary", fake_probe)
+
+        first = generator.plan_appendix_render()
+        second = generator.plan_appendix_render()
+
+        assert first.renderer == "chromium"
+        assert first.audit_events == (event,)
+        assert second.renderer == "chromium"
+        assert second.audit_events == (event,)
+        assert probe_calls["count"] == 2
+
+    def test_preview_in_browser(self, tmp_path):
         """Test preview creates temp file and opens browser."""
         generator = ReportGenerator()
+        generator.set_preview_root(tmp_path)
         html = "<html><body><h1>Test</h1></body></html>"
 
         with patch('webbrowser.open') as mock_open:
@@ -314,6 +402,266 @@ class TestReportGenerator:
             mock_open.assert_called_once()
             call_args = mock_open.call_args[0][0]
             assert call_args.startswith("file://")
+
+    def test_preview_in_browser_uses_distinct_temp_files(self, tmp_path):
+        """Back-to-back previews should not overwrite the same temp file."""
+        generator = ReportGenerator()
+        generator.set_preview_root(tmp_path)
+
+        with patch('webbrowser.open'):
+            first = generator.preview_in_browser("<html><body>report</body></html>")
+            second = generator.preview_in_browser("<html><body>appendix</body></html>")
+
+        assert first != second
+        assert first.read_text(encoding="utf-8") == "<html><body>report</body></html>"
+        assert second.read_text(encoding="utf-8") == "<html><body>appendix</body></html>"
+
+    def test_preview_in_browser_requires_workspace_root(self):
+        """Preview output must be rooted in the case workspace."""
+        generator = ReportGenerator()
+
+        with pytest.raises(ValueError, match="Preview output directory is not configured"):
+            generator.preview_in_browser("<html><body>report</body></html>")
+
+    def test_run_external_command_calls_audit_hooks(self):
+        """External command audit hooks should bracket subprocess execution."""
+        generator = ReportGenerator()
+        audit = {}
+
+        def start_cb(task, command):
+            audit["started"] = (task, command)
+            return 42
+
+        def finish_cb(token, event):
+            audit["finished"] = (token, event.task, event.exit_code)
+
+        event = generator._run_external_command(
+            "chromium_probe",
+            ["/bin/echo", "Chromium 131.0.0.0"],
+            audit_start_cb=start_cb,
+            audit_finish_cb=finish_cb,
+        )
+
+        assert event.exit_code == 0
+        assert audit["started"][0] == "chromium_probe"
+        assert audit["finished"] == (42, "chromium_probe", 0)
+
+    def test_plan_appendix_render_prefers_supported_chromium(self, monkeypatch):
+        """Supported Chromium should be preferred over WeasyPrint for appendices."""
+        generator = ReportGenerator()
+        candidate = Path("/tmp/chromium")
+        event = ExternalInvocation(
+            task="chromium_probe",
+            command="chromium --version",
+            exit_code=0,
+            stdout=f"Chromium {MIN_CHROMIUM_MARGIN_BOX_VERSION}.0.0.0",
+            stderr=None,
+        )
+        binary = ChromiumBinary(
+            executable=candidate,
+            display_name="Chromium",
+            major_version=MIN_CHROMIUM_MARGIN_BOX_VERSION,
+        )
+        monkeypatch.setattr(generator, "_find_chromium_candidates", lambda: [candidate])
+        monkeypatch.setattr(
+            generator,
+            "_probe_chromium_binary",
+            lambda path, **kwargs: (binary, event, None),
+        )
+
+        plan = generator.plan_appendix_render()
+
+        assert plan.renderer == "chromium"
+        assert plan.chromium_binary == binary
+        assert plan.note is None
+        assert plan.audit_events == (event,)
+
+    def test_plan_appendix_render_falls_back_to_weasyprint(self, monkeypatch):
+        """Unsupported Chromium should produce a WeasyPrint fallback note."""
+        generator = ReportGenerator()
+        generator._weasyprint_available = True
+        candidate = Path("/tmp/chromium")
+        event = ExternalInvocation(
+            task="chromium_probe",
+            command="chromium --version",
+            exit_code=0,
+            stdout="Chromium 130.0.0.0",
+            stderr=None,
+        )
+        monkeypatch.setattr(generator, "_find_chromium_candidates", lambda: [candidate])
+        monkeypatch.setattr(
+            generator,
+            "_probe_chromium_binary",
+            lambda path, **kwargs: (None, event, "Chromium 130 is too old"),
+        )
+
+        plan = generator.plan_appendix_render()
+
+        assert plan.renderer == "weasyprint"
+        assert "Chromium 130 is too old" in (plan.note or "")
+        assert "WeasyPrint fallback" in (plan.note or "")
+        assert plan.audit_events == (event,)
+
+    def test_generate_appendix_pdf_with_chromium(self, tmp_path, monkeypatch):
+        """Chromium appendix rendering should reuse the workspace HTML temp path."""
+        generator = ReportGenerator()
+        generator.set_preview_root(tmp_path)
+        plan = AppendixRenderPlan(
+            renderer="chromium",
+            chromium_binary=ChromiumBinary(
+                executable=Path("/usr/bin/chromium"),
+                display_name="Chromium",
+                major_version=MIN_CHROMIUM_MARGIN_BOX_VERSION,
+            ),
+        )
+
+        def fake_run(task, command, timeout_s=30, **kwargs):
+            for arg in command:
+                if arg.startswith("--print-to-pdf="):
+                    Path(arg.split("=", 1)[1]).write_bytes(b"%PDF-1.7 test")
+            return ExternalInvocation(
+                task=task,
+                command=" ".join(command),
+                exit_code=0,
+                stdout=None,
+                stderr=None,
+            )
+
+        monkeypatch.setattr(generator, "_run_external_command", fake_run)
+        output_path = tmp_path / "appendix.pdf"
+
+        result = generator.generate_appendix_pdf("<html><body>Appendix</body></html>", output_path, plan=plan)
+
+        assert result.renderer == "chromium"
+        assert result.used_fallback is False
+        assert output_path.exists()
+        html_files = list((tmp_path / "reports" / "previews").glob("appendix_render_*.html"))
+        assert html_files == []
+        assert len(result.audit_events) == 1
+
+    def test_generate_appendix_pdf_includes_internally_computed_plan_audit_events(self, tmp_path, monkeypatch):
+        """Implicit plan generation should preserve probe audit events."""
+        generator = ReportGenerator()
+        generator.set_preview_root(tmp_path)
+        probe_event = ExternalInvocation(
+            task="chromium_probe",
+            command="chromium --version",
+            exit_code=0,
+            stdout=f"Chromium {MIN_CHROMIUM_MARGIN_BOX_VERSION}.0.0.0",
+            stderr=None,
+        )
+        render_event = ExternalInvocation(
+            task="chromium_appendix_pdf",
+            command="chromium --headless",
+            exit_code=0,
+            stdout=None,
+            stderr=None,
+        )
+        plan = AppendixRenderPlan(
+            renderer="chromium",
+            chromium_binary=ChromiumBinary(
+                executable=Path("/usr/bin/chromium"),
+                display_name="Chromium",
+                major_version=MIN_CHROMIUM_MARGIN_BOX_VERSION,
+            ),
+            audit_events=(probe_event,),
+        )
+
+        def fake_plan(**kwargs):
+            return plan
+
+        def fake_run(task, command, timeout_s=30, **kwargs):
+            for arg in command:
+                if arg.startswith("--print-to-pdf="):
+                    Path(arg.split("=", 1)[1]).write_bytes(b"%PDF-1.7 test")
+            return render_event
+
+        monkeypatch.setattr(generator, "plan_appendix_render", fake_plan)
+        monkeypatch.setattr(generator, "_run_external_command", fake_run)
+
+        result = generator.generate_appendix_pdf("<html><body>Appendix</body></html>", tmp_path / "appendix.pdf")
+
+        assert result.audit_events == (probe_event, render_event)
+
+    def test_generate_appendix_pdf_falls_back_after_chromium_failure(self, tmp_path, monkeypatch):
+        """Chromium runtime failures should fall back to WeasyPrint when available."""
+        generator = ReportGenerator()
+        generator._weasyprint_available = True
+        generator.set_preview_root(tmp_path)
+        plan = AppendixRenderPlan(
+            renderer="chromium",
+            chromium_binary=ChromiumBinary(
+                executable=Path("/usr/bin/chromium"),
+                display_name="Chromium",
+                major_version=MIN_CHROMIUM_MARGIN_BOX_VERSION,
+            ),
+        )
+
+        def fake_run(task, command, timeout_s=30, **kwargs):
+            return ExternalInvocation(
+                task=task,
+                command=" ".join(command),
+                exit_code=1,
+                stdout=None,
+                stderr="render failed",
+            )
+
+        fallback_html = "<html><body>Fallback Appendix</body></html>"
+
+        def fake_generate_pdf(html_content, output_path):
+            assert html_content == fallback_html
+            Path(output_path).write_bytes(b"%PDF-1.7 fallback")
+            return True
+
+        monkeypatch.setattr(generator, "_run_external_command", fake_run)
+        monkeypatch.setattr(generator, "generate_pdf", fake_generate_pdf)
+        output_path = tmp_path / "appendix.pdf"
+
+        result = generator.generate_appendix_pdf(
+            "<html><body>Appendix</body></html>",
+            output_path,
+            plan=plan,
+            fallback_html_content=fallback_html,
+        )
+
+        assert result.renderer == "weasyprint"
+        assert result.used_fallback is True
+        assert "render failed" in (result.note or "")
+        assert output_path.exists()
+        assert len(result.audit_events) == 1
+
+    def test_generate_appendix_pdf_raises_with_audit_events_when_fallback_fails(self, tmp_path, monkeypatch):
+        """Chromium failure plus fallback failure should still preserve audit events."""
+        generator = ReportGenerator()
+        generator._weasyprint_available = True
+        generator.set_preview_root(tmp_path)
+        plan = AppendixRenderPlan(
+            renderer="chromium",
+            chromium_binary=ChromiumBinary(
+                executable=Path("/usr/bin/chromium"),
+                display_name="Chromium",
+                major_version=MIN_CHROMIUM_MARGIN_BOX_VERSION,
+            ),
+        )
+        render_event = ExternalInvocation(
+            task="chromium_appendix_pdf",
+            command="chromium --headless",
+            exit_code=1,
+            stdout=None,
+            stderr="render failed",
+        )
+
+        monkeypatch.setattr(generator, "_run_external_command", lambda *args, **kwargs: render_event)
+
+        def fake_generate_pdf(html_content, output_path):
+            raise RuntimeError("fallback failed")
+
+        monkeypatch.setattr(generator, "generate_pdf", fake_generate_pdf)
+
+        with pytest.raises(Exception, match="fallback also failed") as exc_info:
+            generator.generate_appendix_pdf("<html><body>Appendix</body></html>", tmp_path / "appendix.pdf", plan=plan)
+
+        assert getattr(exc_info.value, "audit_events", ()) == (render_event,)
 
     @pytest.mark.skipif(
         not ReportGenerator()._weasyprint_available,

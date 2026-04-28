@@ -91,6 +91,7 @@ from core.database import (
     delete_sessions_by_run,
     insert_urls,
 )
+from ...._shared.path_utils import normalize_evidence_path
 
 LOGGER = get_logger("extractors.browser.chromium.sessions")
 
@@ -336,6 +337,22 @@ class ChromiumSessionsExtractor(BaseExtractor):
                                 close_method()
                         except Exception as e:
                             LOGGER.debug("Error closing partition %d handle: %s", partition_index, e)
+
+        # Deduplicate manifest entries by (logical_path, partition_index)
+        seen_files = set()
+        unique_files = []
+        for f in manifest_data["files"]:
+            key = (f.get("logical_path", ""), f.get("partition_index", 0))
+            if key not in seen_files:
+                seen_files.add(key)
+                unique_files.append(f)
+        if len(unique_files) < len(manifest_data["files"]):
+            LOGGER.info(
+                "Deduplicated manifest: %d -> %d files",
+                len(manifest_data["files"]),
+                len(unique_files),
+            )
+        manifest_data["files"] = unique_files
 
         # Finish statistics (once, at the end)
         if stats:
@@ -731,8 +748,6 @@ class ChromiumSessionsExtractor(BaseExtractor):
 
         return files_by_partition
 
-        return session_files
-
     def _classify_session_file(self, path: str) -> str:
         """Classify session file type based on filename.
 
@@ -960,6 +975,7 @@ class ChromiumSessionsExtractor(BaseExtractor):
         profile = file_entry.get("profile", "Default")
         file_type = file_entry.get("file_type", "session")
         discovered_by = f"{self.metadata.name}:{self.metadata.version}:{run_id}"
+        normalized_logical_path = normalize_evidence_path(file_entry["logical_path"])
 
         LOGGER.debug(
             "SNSS parse result for %s: %d commands, %d tabs, %d windows, %d navigation entries",
@@ -981,11 +997,11 @@ class ChromiumSessionsExtractor(BaseExtractor):
                 "window_type": "normal",  # Could be enhanced with window.window_type
                 "session_type": file_type,
                 "run_id": run_id,
-                "source_path": file_entry["logical_path"],
+                "source_path": normalized_logical_path,
                 "discovered_by": discovered_by,
                 "partition_index": file_entry.get("partition_index"),
                 "fs_type": file_entry.get("fs_type"),
-                "logical_path": file_entry["logical_path"],
+                "logical_path": normalized_logical_path,
                 "forensic_path": file_entry.get("forensic_path"),
             }
             window_records.append(window_record)
@@ -1000,11 +1016,11 @@ class ChromiumSessionsExtractor(BaseExtractor):
                 "window_type": "normal",
                 "session_type": file_type,
                 "run_id": run_id,
-                "source_path": file_entry["logical_path"],
+                "source_path": normalized_logical_path,
                 "discovered_by": discovered_by,
                 "partition_index": file_entry.get("partition_index"),
                 "fs_type": file_entry.get("fs_type"),
-                "logical_path": file_entry["logical_path"],
+                "logical_path": normalized_logical_path,
                 "forensic_path": file_entry.get("forensic_path"),
             })
 
@@ -1050,11 +1066,11 @@ class ChromiumSessionsExtractor(BaseExtractor):
                 "group_id": tab.group_id,
                 "last_accessed_utc": last_accessed,
                 "run_id": run_id,
-                "source_path": file_entry["logical_path"],
+                "source_path": normalized_logical_path,
                 "discovered_by": discovered_by,
                 "partition_index": file_entry.get("partition_index"),
                 "fs_type": file_entry.get("fs_type"),
-                "logical_path": file_entry["logical_path"],
+                "logical_path": normalized_logical_path,
                 "forensic_path": file_entry.get("forensic_path"),
             }
             tab_records.append(tab_record)
@@ -1086,11 +1102,11 @@ class ChromiumSessionsExtractor(BaseExtractor):
                     "http_status_code": nav.http_status_code if nav.http_status_code else None,
                     # Provenance
                     "run_id": run_id,
-                    "source_path": file_entry["logical_path"],
+                    "source_path": normalized_logical_path,
                     "discovered_by": discovered_by,
                     "partition_index": file_entry.get("partition_index"),
                     "fs_type": file_entry.get("fs_type"),
-                    "logical_path": file_entry["logical_path"],
+                    "logical_path": normalized_logical_path,
                     "forensic_path": file_entry.get("forensic_path"),
                 }
                 history_records.append(history_record)
@@ -1175,7 +1191,7 @@ class ChromiumSessionsExtractor(BaseExtractor):
                 "scheme": parsed.scheme or None,
                 "discovered_by": discovered_by,
                 "run_id": run_id,
-                "source_path": file_entry["logical_path"],
+                "source_path": normalized_logical_path,
                 "context": f"session:{browser}:{profile}",
                 "first_seen_utc": tab.get("last_accessed_utc"),
             })
@@ -1193,7 +1209,7 @@ class ChromiumSessionsExtractor(BaseExtractor):
                 "scheme": parsed.scheme or None,
                 "discovered_by": discovered_by,
                 "run_id": run_id,
-                "source_path": file_entry["logical_path"],
+                "source_path": normalized_logical_path,
                 "context": f"session:{browser}:{profile}",
                 "first_seen_utc": hr.get("timestamp_utc"),
             })

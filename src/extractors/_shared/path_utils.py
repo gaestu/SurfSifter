@@ -20,6 +20,44 @@ from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Callable, Iterable, Iterator, List, Optional, Set, Union
 
 
+def normalize_evidence_path(path: Optional[Union[str, "Path"]]) -> Optional[str]:
+    """
+    Normalize an evidence logical path for consistent storage and joins.
+
+    Ensures:
+    - Backslashes converted to forward slashes
+    - Repeated slashes collapsed
+    - Single leading slash preserved
+    - Empty/None values returned unchanged
+
+    This enables reliable joins between artifact tables and file_list,
+    where file_list stores paths with a leading ``/``.
+
+    Args:
+        path: Evidence logical path (e.g., from partition filesystem)
+
+    Returns:
+        Normalized path with leading ``/``, or None/empty if input was None/empty
+    """
+    if not path:
+        return path
+
+    # Convert Path objects to string
+    result = str(path)
+
+    # Normalize separators
+    result = result.replace("\\", "/")
+
+    # Collapse repeated slashes (but preserve leading slash)
+    result = re.sub(r"/+", "/", result)
+
+    # Ensure leading slash for evidence paths
+    if not result.startswith("/"):
+        result = "/" + result
+
+    return result
+
+
 # Standard Windows environment variable mappings for browser paths
 WINDOWS_ENV_DEFAULTS = {
     "LOCALAPPDATA": "AppData/Local",
@@ -250,15 +288,16 @@ def enumerate_browser_profiles(
                     yield item
 
 
-def normalize_evidence_path(
+def _normalize_path_posix(
     path: Union[str, Path],
     to_posix: bool = True,
 ) -> str:
     """
-    Normalize a path from evidence for consistent handling.
+    Normalize a path from evidence for posix-style processing.
 
-    Evidence paths may use Windows or Unix conventions depending
-    on the source. This normalizes them for consistent processing.
+    Unlike ``normalize_evidence_path``, this does NOT ensure a leading
+    slash — it is intended for internal pattern matching where relative
+    paths are expected.
 
     Args:
         path: Path to normalize
@@ -268,7 +307,7 @@ def normalize_evidence_path(
         Normalized path string
 
     Example:
-        >>> normalize_evidence_path("Users\\john\\Documents")
+        >>> _normalize_path_posix("Users\\john\\Documents")
         "Users/john/Documents"
     """
     path_str = str(path)
@@ -307,7 +346,7 @@ def extract_username_from_path(path: str) -> Optional[str]:
         >>> extract_username_from_path("Users/john.doe/AppData/Local")
         "john.doe"
     """
-    path = normalize_evidence_path(path)
+    path = _normalize_path_posix(path)
 
     # Match Users/username pattern
     match = re.match(r"(?:.*?/)?Users/([^/]+)(?:/|$)", path, re.IGNORECASE)

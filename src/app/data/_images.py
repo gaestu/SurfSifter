@@ -135,6 +135,7 @@ class ImageQueryMixin(BaseDataAccess):
         extension: Optional[str] = None,
         hash_match: Optional[str] = None,
         url_text: Optional[str] = None,
+        cache_key_text: Optional[str] = None,
         min_size_bytes: Optional[int] = None,
         max_size_bytes: Optional[int] = None,
         limit: int = 100,
@@ -154,6 +155,7 @@ class ImageQueryMixin(BaseDataAccess):
             extension: File extension filter (e.g., 'jpg', 'gif', 'bmp')
             hash_match: Hash list name filter (only show images matching this list)
             url_text: Case-insensitive URL substring filter (matches cache_url)
+            cache_key_text: Case-insensitive cache key substring filter (matches cache_key)
             min_size_bytes: Minimum file size filter (Phase 3)
             max_size_bytes: Maximum file size filter (Phase 3)
             limit: Page size
@@ -238,6 +240,18 @@ class ImageQueryMixin(BaseDataAccess):
                 )
             """)
             params.append(f"%{url_text}%")
+
+        # Cache key text filter — case-insensitive LIKE on image_discoveries.cache_key
+        if cache_key_text:
+            where.append("""
+                EXISTS (
+                    SELECT 1 FROM image_discoveries d
+                    WHERE d.evidence_id = i.evidence_id
+                    AND d.image_id = i.id
+                    AND d.cache_key LIKE ?
+                )
+            """)
+            params.append(f"%{cache_key_text}%")
 
         # Removed GROUP_CONCAT - tags loaded on-demand via get_artifact_tags_str()
         # Alias first_discovered_by AS discovered_by, join v_image_sources for browser badge
@@ -510,6 +524,7 @@ class ImageQueryMixin(BaseDataAccess):
             "bulk_extractor_images": "bulk_extractor",
             "foremost_carver": "foremost_carver",
             "scalpel": "scalpel",
+            "swiftbeaver": "swiftbeaver",
             "image_carving": "",  # Legacy: rel_path is full path
             # Filesystem extractor
             "filesystem_images": "filesystem_images/extracted",

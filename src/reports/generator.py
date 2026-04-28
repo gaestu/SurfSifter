@@ -27,13 +27,19 @@ from __future__ import annotations
 
 import enum
 import logging
+import os
+import re
+import shlex
+import shutil
 import sqlite3
+import subprocess
+import sys
 import tempfile
 import webbrowser
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from jinja2 import Environment, FileSystemLoader
 
@@ -48,6 +54,9 @@ logger = logging.getLogger(__name__)
 
 # Template directory
 TEMPLATES_DIR = get_templates_dir()
+# Chromium 131 is the minimum version we rely on for the print-margin behavior
+# used by investigator-facing appendix page numbering.
+MIN_CHROMIUM_MARGIN_BOX_VERSION = 131
 
 
 class ReportMode(enum.Enum):
@@ -110,6 +119,64 @@ class ReportData:
             self.generation_date = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
 
 
+@dataclass(frozen=True)
+class ExternalInvocation:
+    """Captured external tool invocation for later audit logging."""
+
+    task: str
+    command: str
+    exit_code: int
+    stdout: Optional[str] = None
+    stderr: Optional[str] = None
+
+
+@dataclass(frozen=True)
+class ChromiumBinary:
+    """Detected Chromium-family executable with a supported version."""
+
+    executable: Path
+    display_name: str
+    major_version: int
+
+
+@dataclass(frozen=True)
+class AppendixRenderPlan:
+    """Resolved renderer choice for appendix PDF generation."""
+
+    renderer: str
+    chromium_binary: Optional[ChromiumBinary] = None
+    note: Optional[str] = None
+    audit_events: Tuple[ExternalInvocation, ...] = ()
+
+
+@dataclass(frozen=True)
+class PdfRenderResult:
+    """Structured result for a completed PDF render."""
+
+    renderer: str
+    output_path: Path
+    used_fallback: bool = False
+    note: Optional[str] = None
+    audit_events: Tuple[ExternalInvocation, ...] = ()
+
+
+class AppendixRenderError(RuntimeError):
+    """Appendix render failure carrying subprocess audit events."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        audit_events: Tuple[ExternalInvocation, ...] = (),
+    ) -> None:
+        super().__init__(message)
+        self.audit_events = audit_events
+
+
+AuditStartCallback = Callable[[str, str], Any]
+AuditFinishCallback = Callable[[Any, ExternalInvocation], None]
+
+
 class ReportBuilder:
     """Builds report data and renders to HTML using Jinja2 templates.
 
@@ -142,6 +209,7 @@ class ReportBuilder:
         self._translations = get_translations(locale)
         self._registry = ModuleRegistry()
         self._appendix_registry = AppendixRegistry()
+        self._owns_db_conn = False
 
         # Report data
         self._data = ReportData(locale=locale)
@@ -151,6 +219,18 @@ class ReportBuilder:
             loader=FileSystemLoader(TEMPLATES_DIR),
             autoescape=True,
         )
+
+    def take_db_connection_ownership(self) -> "ReportBuilder":
+        """Mark the builder's database connection for worker-owned cleanup."""
+        self._owns_db_conn = True
+        return self
+
+    def close_owned_db_connection(self) -> None:
+        """Close the builder-owned database connection when applicable."""
+        if not self._owns_db_conn:
+            return
+        self._db_conn.close()
+        self._owns_db_conn = False
 
     def set_locale(self, locale: str) -> "ReportBuilder":
         """Set the report locale.
@@ -624,11 +704,15 @@ class ReportBuilder:
         })
         return template.render(**ctx)
 
-    def render_appendix_html(self) -> str:
+    def render_appendix_html(self, renderer: str = "weasyprint") -> str:
         """Render the appendix as a standalone HTML document.
 
         The appendix document has its own title page, TOC, and page numbering
         starting at 1 with the format "Appendix — Page X of Y".
+
+        Args:
+            renderer: Target PDF renderer, used for renderer-specific appendix
+                features such as TOC page numbers.
 
         Returns:
             Complete HTML string for the appendix document
@@ -638,10 +722,17 @@ class ReportBuilder:
         ctx = self._get_common_template_context()
         ctx.update({
             "appendix_modules": self._data.appendix_modules,
+            "appendix_renderer": renderer,
+            "appendix_toc_page_numbers": renderer == "weasyprint",
+            "hide_appendix_page_numbers": self._data.hide_appendix_page_numbers,
         })
         return template.render(**ctx)
 
-    def render_html(self, mode: ReportMode = ReportMode.REPORT_ONLY) -> str | Tuple[str, str]:
+    def render_html(
+        self,
+        mode: ReportMode = ReportMode.REPORT_ONLY,
+        appendix_renderer: str = "weasyprint",
+    ) -> str | Tuple[str, str]:
         """Render the report to HTML in the specified mode.
 
         Args:
@@ -649,6 +740,7 @@ class ReportBuilder:
                 - REPORT_ONLY: report sections + author signature (no appendix)
                 - APPENDIX_ONLY: standalone appendix document
                 - COMPLETE: returns a tuple of (report_html, appendix_html)
+            appendix_renderer: Renderer to target for appendix HTML.
 
         Returns:
             For REPORT_ONLY / APPENDIX_ONLY: a single HTML string.
@@ -657,10 +749,10 @@ class ReportBuilder:
         if mode == ReportMode.REPORT_ONLY:
             return self.render_report_html(include_appendix=False)
         elif mode == ReportMode.APPENDIX_ONLY:
-            return self.render_appendix_html()
+            return self.render_appendix_html(renderer=appendix_renderer)
         else:  # COMPLETE
             report_html = self.render_report_html(include_appendix=False)
-            appendix_html = self.render_appendix_html()
+            appendix_html = self.render_appendix_html(renderer=appendix_renderer)
             return (report_html, appendix_html)
 
     def get_data(self) -> ReportData:
@@ -673,11 +765,12 @@ class ReportBuilder:
 
 
 class ReportGenerator:
-    """Generates PDF reports and provides preview functionality."""
+    """Generates PDF reports and appendix PDFs with renderer fallback."""
 
     def __init__(self):
         """Initialize the report generator."""
         self._weasyprint_available = False
+        self._preview_root: Optional[Path] = None
         self._check_weasyprint()
 
     def _check_weasyprint(self) -> None:
@@ -697,6 +790,245 @@ class ReportGenerator:
             True if WeasyPrint is available
         """
         return self._weasyprint_available
+
+    def set_preview_root(self, preview_root: Optional[Path]) -> None:
+        """Set the workspace-backed directory used for HTML previews."""
+        self._preview_root = preview_root
+
+    def _get_preview_dir(self) -> Path:
+        """Return the workspace-backed directory used for preview/render HTML."""
+        if self._preview_root is None:
+            raise ValueError("Preview output directory is not configured.")
+
+        preview_dir = self._preview_root / "reports" / "previews"
+        preview_dir.mkdir(parents=True, exist_ok=True)
+        return preview_dir
+
+    def _write_workspace_html(self, html_content: str, prefix: str) -> Path:
+        """Write HTML to the workspace-backed preview directory."""
+        preview_dir = self._get_preview_dir()
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            suffix=".html",
+            prefix=prefix,
+            dir=preview_dir,
+            delete=False,
+        ) as temp_handle:
+            temp_handle.write(html_content)
+            return Path(temp_handle.name)
+
+    def _find_chromium_candidates(self) -> List[Path]:
+        """Discover likely Chromium-family executables without invoking them."""
+        candidates: List[Path] = []
+        seen: set[Path] = set()
+
+        def _add_candidate(path_str: str) -> None:
+            if not path_str:
+                return
+            path = Path(path_str)
+            if not path.exists():
+                return
+            resolved = path.resolve()
+            if resolved in seen:
+                return
+            seen.add(resolved)
+            candidates.append(resolved)
+
+        for name in (
+            "chromium",
+            "chromium-browser",
+            "google-chrome",
+            "google-chrome-stable",
+            "brave-browser",
+            "microsoft-edge",
+            "msedge",
+        ):
+            resolved = shutil.which(name)
+            if resolved:
+                _add_candidate(resolved)
+
+        if sys.platform == "darwin":
+            for path_str in (
+                "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+                "/Applications/Chromium.app/Contents/MacOS/Chromium",
+                "/Applications/Brave Browser.app/Contents/MacOS/Brave Browser",
+                "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge",
+            ):
+                _add_candidate(path_str)
+        elif sys.platform.startswith("win"):
+            program_files = [
+                os.environ.get("ProgramFiles", ""),
+                os.environ.get("ProgramFiles(x86)", ""),
+                os.environ.get("LocalAppData", ""),
+            ]
+            suffixes = (
+                "Google/Chrome/Application/chrome.exe",
+                "Chromium/Application/chrome.exe",
+                "BraveSoftware/Brave-Browser/Application/brave.exe",
+                "Microsoft/Edge/Application/msedge.exe",
+            )
+            for base_dir in program_files:
+                for suffix in suffixes:
+                    _add_candidate(str(Path(base_dir) / suffix))
+
+        return candidates
+
+    def _run_external_command(
+        self,
+        task: str,
+        command: List[str],
+        *,
+        timeout_s: int = 30,
+        audit_start_cb: Optional[AuditStartCallback] = None,
+        audit_finish_cb: Optional[AuditFinishCallback] = None,
+    ) -> ExternalInvocation:
+        """Run an external command and capture the result for audit logging."""
+        command_str = shlex.join(command)
+        audit_token = audit_start_cb(task, command_str) if audit_start_cb is not None else None
+        event: Optional[ExternalInvocation] = None
+        try:
+            completed = subprocess.run(
+                command,
+                capture_output=True,
+                text=True,
+                errors="replace",
+                timeout=timeout_s,
+                check=False,
+            )
+            event = ExternalInvocation(
+                task=task,
+                command=command_str,
+                exit_code=completed.returncode,
+                stdout=(completed.stdout or "").strip() or None,
+                stderr=(completed.stderr or "").strip() or None,
+            )
+            return event
+        except subprocess.TimeoutExpired as exc:
+            event = ExternalInvocation(
+                task=task,
+                command=command_str,
+                exit_code=-1,
+                stdout=(exc.stdout or "").strip() or None,
+                stderr=(exc.stderr or "").strip() or f"Timed out after {timeout_s}s",
+            )
+            return event
+        except OSError as exc:
+            event = ExternalInvocation(
+                task=task,
+                command=command_str,
+                exit_code=-1,
+                stdout=None,
+                stderr=str(exc),
+            )
+            return event
+        finally:
+            if audit_finish_cb is not None and event is not None:
+                audit_finish_cb(audit_token, event)
+
+    def _probe_chromium_binary(
+        self,
+        executable: Path,
+        *,
+        audit_start_cb: Optional[AuditStartCallback] = None,
+        audit_finish_cb: Optional[AuditFinishCallback] = None,
+    ) -> Tuple[Optional[ChromiumBinary], ExternalInvocation, Optional[str]]:
+        """Return a supported Chromium binary, its probe audit event, and failure reason."""
+        event = self._run_external_command(
+            "chromium_probe",
+            [str(executable), "--version"],
+            timeout_s=10,
+            audit_start_cb=audit_start_cb,
+            audit_finish_cb=audit_finish_cb,
+        )
+        output = " ".join(
+            part for part in (event.stdout, event.stderr) if part
+        ).strip()
+        if event.exit_code != 0:
+            reason = output or f"Failed to probe Chromium executable at {executable}"
+            return None, event, reason
+
+        version_match = re.search(r"(\d+)(?:\.\d+){1,3}", output)
+        if not version_match:
+            return None, event, f"Could not determine Chromium version from: {output or executable.name}"
+
+        major_version = int(version_match.group(1))
+        display_name = re.sub(r"\s+\d+(?:\.\d+){1,3}.*$", "", output).strip() or executable.name
+        if major_version < MIN_CHROMIUM_MARGIN_BOX_VERSION:
+            reason = (
+                f"{display_name} {major_version} is too old for appendix page numbering "
+                f"(requires Chromium {MIN_CHROMIUM_MARGIN_BOX_VERSION}+)"
+            )
+            return None, event, reason
+
+        return (
+            ChromiumBinary(
+                executable=executable,
+                display_name=display_name,
+                major_version=major_version,
+            ),
+            event,
+            None,
+        )
+
+    def plan_appendix_render(
+        self,
+        *,
+        audit_start_cb: Optional[AuditStartCallback] = None,
+        audit_finish_cb: Optional[AuditFinishCallback] = None,
+    ) -> AppendixRenderPlan:
+        """Resolve the renderer for appendix PDFs.
+
+        Prefers Chromium when a supported executable is available, otherwise
+        falls back to WeasyPrint when installed.
+        """
+        audit_events: List[ExternalInvocation] = []
+        unsupported_reasons: List[str] = []
+
+        for candidate in self._find_chromium_candidates():
+            chromium_binary, event, reason = self._probe_chromium_binary(
+                candidate,
+                audit_start_cb=audit_start_cb,
+                audit_finish_cb=audit_finish_cb,
+            )
+            audit_events.append(event)
+            if chromium_binary is not None:
+                return AppendixRenderPlan(
+                    renderer="chromium",
+                    chromium_binary=chromium_binary,
+                    audit_events=tuple(audit_events),
+                )
+            if reason:
+                unsupported_reasons.append(reason)
+
+        fallback_note = None
+        if self._weasyprint_available:
+            if unsupported_reasons:
+                fallback_note = (
+                    f"{unsupported_reasons[0]}; using slower WeasyPrint fallback for the appendix."
+                )
+            else:
+                fallback_note = "Chromium renderer unavailable; using slower WeasyPrint fallback for the appendix."
+            return AppendixRenderPlan(
+                renderer="weasyprint",
+                note=fallback_note,
+                audit_events=tuple(audit_events),
+            )
+
+        if unsupported_reasons:
+            return AppendixRenderPlan(
+                renderer="unavailable",
+                note=unsupported_reasons[0],
+                audit_events=tuple(audit_events),
+            )
+        return AppendixRenderPlan(
+            renderer="unavailable",
+            note=(
+                "No supported appendix PDF renderer is available. Install WeasyPrint or a Chromium-family browser "
+                f"{MIN_CHROMIUM_MARGIN_BOX_VERSION}+."
+            ),
+            audit_events=tuple(audit_events),
+        )
 
     def generate_pdf(self, html_content: str, output_path: Path | str) -> bool:
         """Generate a PDF from HTML content.
@@ -731,6 +1063,115 @@ class ReportGenerator:
         except Exception as e:
             logger.error(f"Failed to generate PDF: {e}")
             raise
+
+    def generate_appendix_pdf(
+        self,
+        html_content: str,
+        output_path: Path | str,
+        plan: Optional[AppendixRenderPlan] = None,
+        fallback_html_content: Optional[str] = None,
+        *,
+        audit_start_cb: Optional[AuditStartCallback] = None,
+        audit_finish_cb: Optional[AuditFinishCallback] = None,
+    ) -> PdfRenderResult:
+        """Generate an appendix PDF, preferring Chromium when available."""
+        output_path = Path(output_path).resolve()
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        generated_plan = plan is None
+        plan = plan or self.plan_appendix_render(
+            audit_start_cb=audit_start_cb,
+            audit_finish_cb=audit_finish_cb,
+        )
+        inherited_audit_events = plan.audit_events if generated_plan else ()
+
+        if plan.renderer == "unavailable":
+            raise ImportError(plan.note or "Appendix PDF generation is unavailable.")
+
+        if plan.renderer != "chromium":
+            self.generate_pdf(html_content, output_path)
+            return PdfRenderResult(
+                renderer="weasyprint",
+                output_path=output_path,
+                used_fallback=bool(plan.note),
+                note=plan.note,
+                audit_events=inherited_audit_events,
+            )
+
+        html_path = self._write_workspace_html(html_content, "appendix_render_")
+        preview_dir = self._get_preview_dir()
+        render_event: Optional[ExternalInvocation] = None
+        try:
+            with tempfile.TemporaryDirectory(dir=preview_dir, prefix="chromium_profile_") as profile_dir:
+                staging_output = Path(profile_dir) / "appendix.pdf"
+                command = [
+                    str(plan.chromium_binary.executable),
+                    "--headless=new",
+                    "--disable-gpu",
+                    "--disable-dev-shm-usage",
+                    "--disable-extensions",
+                    "--no-pdf-header-footer",
+                    '--host-resolver-rules=MAP * ~NOTFOUND',
+                    f"--user-data-dir={profile_dir}",
+                    f"--print-to-pdf={staging_output}",
+                    "--virtual-time-budget=10000",
+                    html_path.as_uri(),
+                ]
+                render_event = self._run_external_command(
+                    "chromium_appendix_pdf",
+                    command,
+                    timeout_s=60,
+                    audit_start_cb=audit_start_cb,
+                    audit_finish_cb=audit_finish_cb,
+                )
+
+                if render_event.exit_code == 0 and staging_output.exists() and staging_output.stat().st_size > 0:
+                    staging_output.replace(output_path)
+                    logger.info(
+                        "Appendix PDF generated with %s %s: %s",
+                        plan.chromium_binary.display_name,
+                        plan.chromium_binary.major_version,
+                        output_path,
+                    )
+                    return PdfRenderResult(
+                        renderer="chromium",
+                        output_path=output_path,
+                        note=(
+                            f"Appendix rendered with {plan.chromium_binary.display_name} "
+                            f"{plan.chromium_binary.major_version}."
+                        ),
+                        audit_events=inherited_audit_events + (render_event,),
+                    )
+        finally:
+            html_path.unlink(missing_ok=True)
+
+        assert render_event is not None
+        failure_reason = render_event.stderr or render_event.stdout or (
+            f"Chromium appendix rendering failed for {plan.chromium_binary.executable}"
+        )
+        audit_events = inherited_audit_events + (render_event,)
+        if not self._weasyprint_available:
+            raise AppendixRenderError(
+                failure_reason,
+                audit_events=audit_events,
+            )
+
+        try:
+            self.generate_pdf(fallback_html_content or html_content, output_path)
+        except Exception as exc:
+            raise AppendixRenderError(
+                f"{failure_reason}; WeasyPrint fallback also failed: {exc}",
+                audit_events=audit_events,
+            ) from exc
+        fallback_note = (
+            f"Chromium appendix rendering failed ({failure_reason}); using slower WeasyPrint fallback."
+        )
+        return PdfRenderResult(
+            renderer="weasyprint",
+            output_path=output_path,
+            used_fallback=True,
+            note=fallback_note,
+            audit_events=audit_events,
+        )
 
     def generate_pdf_pair(
         self,
@@ -768,17 +1209,7 @@ class ReportGenerator:
         Returns:
             Path to the temporary HTML file
         """
-        # Create a temporary file that won't be auto-deleted
-        # (browser needs time to open it)
-        temp_dir = Path(tempfile.gettempdir()) / "web_analyzer_reports"
-        temp_dir.mkdir(exist_ok=True)
-
-        # Use timestamp for unique filename
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        temp_file = temp_dir / f"report_preview_{timestamp}.html"
-
-        # Write HTML to file
-        temp_file.write_text(html_content, encoding="utf-8")
+        temp_file = self._write_workspace_html(html_content, "report_preview_")
 
         # Open in default browser
         webbrowser.open(f"file://{temp_file}")

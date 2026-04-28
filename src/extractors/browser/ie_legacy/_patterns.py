@@ -127,7 +127,24 @@ IE_ARTIFACTS: Dict[str, Dict[str, List[str]]] = {
     # =========================================================================
     "history": {
         "ie": [
-            # IE history is stored in WebCache, no separate files
+            # Classic IE History.IE5 database files (pre-IE10)
+            "Users/*/AppData/Local/Microsoft/Windows/History/History.IE5/container.dat",
+            "Users/*/AppData/Local/Microsoft/Windows/History/History.IE5/index.dat",
+            "Users/*/AppData/Local/Microsoft/Windows/History/History.IE5/*/container.dat",
+            "Users/*/AppData/Local/Microsoft/Windows/History/History.IE5/*/index.dat",
+            "Users/*/AppData/Local/Microsoft/Windows/History/Low/History.IE5/container.dat",
+            "Users/*/AppData/Local/Microsoft/Windows/History/Low/History.IE5/index.dat",
+            "Users/*/AppData/Local/Microsoft/Windows/History/Low/History.IE5/*/container.dat",
+            "Users/*/AppData/Local/Microsoft/Windows/History/Low/History.IE5/*/index.dat",
+            # Legacy Temporary Internet Files path
+            "Users/*/AppData/Local/Microsoft/Windows/Temporary Internet Files/Content.IE5/container.dat",
+            "Users/*/AppData/Local/Microsoft/Windows/Temporary Internet Files/Content.IE5/index.dat",
+        ],
+        "ie_old_windows": [
+            "Windows.old/Users/*/AppData/Local/Microsoft/Windows/History/History.IE5/container.dat",
+            "Windows.old/Users/*/AppData/Local/Microsoft/Windows/History/History.IE5/index.dat",
+            "Windows.old/Users/*/AppData/Local/Microsoft/Windows/History/History.IE5/*/container.dat",
+            "Windows.old/Users/*/AppData/Local/Microsoft/Windows/History/History.IE5/*/index.dat",
         ],
         "edge_legacy": [
             # UWP package container files
@@ -249,8 +266,16 @@ IE_ARTIFACTS: Dict[str, Dict[str, List[str]]] = {
     # =========================================================================
     "dom_storage": {
         "ie": [
-            # IE DOMStore is in WebCache database (container-based)
-            # No separate files for IE
+            # IE file-based DOMStore (localStorage/sessionStorage)
+            "Users/*/AppData/Local/Microsoft/Windows/INetCache/IE/DOMStore/**/*",
+            "Users/*/AppData/Local/Microsoft/Windows/INetCache/Low/DOMStore/**/*",
+            # Older Windows paths
+            "Users/*/AppData/Local/Microsoft/Internet Explorer/DOMStore/**/*",
+            "Users/*/AppData/LocalLow/Microsoft/Internet Explorer/DOMStore/**/*",
+        ],
+        "ie_old_windows": [
+            "Windows.old/Users/*/AppData/Local/Microsoft/Windows/INetCache/IE/DOMStore/**/*",
+            "Windows.old/Users/*/AppData/Local/Microsoft/Windows/INetCache/Low/DOMStore/**/*",
         ],
         "edge_legacy": [
             # Edge Legacy file-based DOMStore

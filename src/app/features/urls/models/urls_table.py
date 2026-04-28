@@ -246,9 +246,47 @@ class UrlsTableModel(QAbstractTableModel):
         self.beginResetModel()
         self._rows = rows
         self._total_count = total_count
-        self._matches_cache.clear()
-        self._tags_cache.clear()
+        # Issue #47: Batch pre-load tags and matches for all URLs
+        self._batch_preload_tags_and_matches()
         self.endResetModel()
+
+    def _batch_preload_tags_and_matches(self) -> None:
+        """
+        Batch pre-load tags and matches for all URLs in the current page.
+
+        Issue #47: Eliminates N+1 query pattern by loading all tags and matches
+        in two batch queries instead of individual queries per visible row.
+        """
+        if not self.case_data or self.evidence_id is None or not self._rows:
+            self._tags_cache.clear()
+            self._matches_cache.clear()
+            return
+
+        # Extract all URL IDs from current rows
+        url_ids = [row["id"] for row in self._rows if row.get("id")]
+        if not url_ids:
+            self._tags_cache.clear()
+            self._matches_cache.clear()
+            return
+
+        evidence_id = int(self.evidence_id)
+
+        # Batch load tags (using existing batch method)
+        self._tags_cache = self.case_data.get_tag_strings_for_artifacts(
+            evidence_id, "url", url_ids
+        )
+
+        # Batch load matches (using new batch method)
+        self._matches_cache = {
+            url_id: matches if matches else "—"
+            for url_id, matches in self.case_data.get_url_matches_batch(
+                evidence_id, url_ids
+            ).items()
+        }
+        # Add "—" for URLs without any matches
+        for url_id in url_ids:
+            if url_id not in self._matches_cache:
+                self._matches_cache[url_id] = "—"
 
     def reload(self) -> None:
         if not self.case_data or self.evidence_id is None:
@@ -284,9 +322,9 @@ class UrlsTableModel(QAbstractTableModel):
             offset=self.page * self.page_size,
         )
 
-        # Clear matches and tags cache when reloading (new URLs may be visible)
-        self._matches_cache.clear()
-        self._tags_cache.clear()
+        # Issue #47: Batch pre-load tags and matches for all URLs in the page
+        # This eliminates N+1 query pattern (10K queries -> 2 queries per page)
+        self._batch_preload_tags_and_matches()
 
         self.endResetModel()
 
@@ -341,14 +379,24 @@ class UrlsTableModel(QAbstractTableModel):
             ),
         )
 
+        # Issue #47: Batch load all tags and matches upfront instead of N+1 queries
+        evidence_id = int(self.evidence_id)
+        all_url_ids = [row["id"] for row in rows_sorted if row.get("id")]
+        tags_batch = self.case_data.get_tag_strings_for_artifacts(
+            evidence_id, "url", all_url_ids
+        ) if all_url_ids else {}
+        matches_batch = self.case_data.get_url_matches_batch(
+            evidence_id, all_url_ids
+        ) if all_url_ids else {}
+
         with output_path.open("w", encoding="utf-8", newline="") as handle:
             writer = csv.writer(handle, quoting=csv.QUOTE_ALL, lineterminator="\r\n")
             writer.writerow(self.headers)
             for row in rows_sorted:
-                # Fetch matches and tags on-demand for CSV export
                 url_id = row.get("id")
-                matched_lists = self.case_data.get_url_matches(int(self.evidence_id), url_id) if url_id else ""
-                tags = self.case_data.get_artifact_tags_str(int(self.evidence_id), 'url', url_id) if url_id else ""
+                # Use batch-loaded tags and matches
+                tags = tags_batch.get(url_id, "") if url_id else ""
+                matched_lists = matches_batch.get(url_id, "") if url_id else ""
 
                 writer.writerow(
                     [
@@ -360,8 +408,8 @@ class UrlsTableModel(QAbstractTableModel):
                         row.get("last_seen_utc", ""),
                         row.get("source_path", ""),
                         row.get("occurrence_count") or 1,  # Occurrence count
-                        tags,  # on-demand tag loading
-                        matched_lists or "—",  # on-demand match loading
+                        tags,  # batch-loaded tags
+                        matched_lists or "—",  # batch-loaded matches
                     ]
                 )
 

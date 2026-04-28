@@ -37,6 +37,7 @@ EXPECTED_NAMES = {
     "filesystem_images",
     "foremost_carver",
     "scalpel",
+    "swiftbeaver",
     "system_registry",
     "system_jump_lists",
 }

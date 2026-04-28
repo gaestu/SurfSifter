@@ -177,6 +177,7 @@ class ImageFilters:
     extension: str = ""
     hash_match: str = ""  # Filter by hash list matches
     url_text: str = ""  # Case-insensitive URL substring filter
+    cache_key_text: str = ""  # Case-insensitive cache key substring filter
     min_size_bytes: Optional[int] = None
     max_size_bytes: Optional[int] = None
 
@@ -288,12 +289,25 @@ class ImagesTab(QWidget):
         self.url_filter_input.textChanged.connect(self._on_url_filter_text_changed)
         filter_layout.addWidget(self.url_filter_input, 1, 1, 1, 7)
 
+        # Cache Key text filter (row 2)
+        filter_layout.addWidget(QLabel("Cache Key"), 2, 0)
+        self.cache_key_filter_input = QLineEdit()
+        self.cache_key_filter_input.setPlaceholderText("Filter cache keys (contains...)")
+        self.cache_key_filter_input.setToolTip("Case-insensitive cache key substring filter on image discoveries")
+        self.cache_key_filter_input.setClearButtonEnabled(True)
+        self._cache_key_filter_timer = QTimer(self)
+        self._cache_key_filter_timer.setSingleShot(True)
+        self._cache_key_filter_timer.setInterval(400)
+        self._cache_key_filter_timer.timeout.connect(self._on_filters_changed)
+        self.cache_key_filter_input.textChanged.connect(self._on_cache_key_filter_text_changed)
+        filter_layout.addWidget(self.cache_key_filter_input, 2, 1, 1, 7)
+
         # Reset filters button
         self.reset_filters_button = QPushButton("↻ Reset")
         self.reset_filters_button.setToolTip("Reset all filters to defaults and reload images")
         self.reset_filters_button.clicked.connect(self._reset_filters)
         self.reset_filters_button.setMaximumWidth(80)
-        filter_layout.addWidget(self.reset_filters_button, 1, 8)
+        filter_layout.addWidget(self.reset_filters_button, 2, 8)
 
         layout.addLayout(filter_layout)
 
@@ -798,6 +812,10 @@ class ImagesTab(QWidget):
         """Debounce URL filter text changes."""
         self._url_filter_timer.start()
 
+    def _on_cache_key_filter_text_changed(self, text: str) -> None:
+        """Debounce cache key filter text changes."""
+        self._cache_key_filter_timer.start()
+
     def _on_filters_changed(self) -> None:
         # Process pending events to prevent UI lockup when changing filters quickly
         QApplication.processEvents()
@@ -807,6 +825,7 @@ class ImagesTab(QWidget):
         self.filters.extension = self.extension_combo.currentData() or ""
         self.filters.hash_match = self.hash_match_combo.currentData() or ""
         self.filters.url_text = self.url_filter_input.text().strip()
+        self.filters.cache_key_text = self.cache_key_filter_input.text().strip()
 
         # Phase 3: Size filter
         size_data = self.size_combo.currentData()
@@ -831,6 +850,7 @@ class ImagesTab(QWidget):
             extension=self.filters.extension,
             hash_match=self.filters.hash_match,
             url_text=self.filters.url_text,
+            cache_key_text=self.filters.cache_key_text,
             min_size_bytes=self.filters.min_size_bytes,
             max_size_bytes=self.filters.max_size_bytes,
         )
@@ -861,11 +881,15 @@ class ImagesTab(QWidget):
             self.filters.extension = ""
             self.filters.hash_match = ""
             self.filters.url_text = ""
+            self.filters.cache_key_text = ""
             self.filters.min_size_bytes = None
             self.filters.max_size_bytes = None
 
             # Clear URL filter text
             self.url_filter_input.clear()
+
+            # Clear cache key filter text
+            self.cache_key_filter_input.clear()
 
             # Clear thumbnail cache to force reload
             self.model._thumb_cache.clear()
@@ -878,6 +902,7 @@ class ImagesTab(QWidget):
                 extension="",
                 hash_match="",
                 url_text="",
+                cache_key_text="",
                 min_size_bytes=None,
                 max_size_bytes=None,
             )

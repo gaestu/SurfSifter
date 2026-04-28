@@ -39,12 +39,6 @@ try:
 except Exception:
     logger = logging.getLogger(__name__)
 
-try:
-    from core.logging import get_logger
-    logger = get_logger("extractors.system.file_list.sleuthkit_generator")
-except Exception:
-    logger = logging.getLogger(__name__)
-
 
 # Indexes to drop before bulk insert and recreate after
 # NOTE: idx_file_list_unique_path is NOT included because it's required for

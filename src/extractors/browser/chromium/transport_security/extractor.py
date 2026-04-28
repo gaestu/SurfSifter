@@ -758,6 +758,9 @@ class ChromiumTransportSecurityExtractor(BaseExtractor):
         if warning_collector and isinstance(data, dict):
             unknown_keys = set(data.keys()) - KNOWN_TOP_LEVEL_KEYS
             for key in unknown_keys:
+                # Skip dict-valued keys — likely hashed-host entries (mapping format)
+                if isinstance(data[key], dict):
+                    continue
                 warning_collector.add_warning(
                     warning_type="json_unknown_key",
                     category="json",
@@ -817,6 +820,57 @@ class ChromiumTransportSecurityExtractor(BaseExtractor):
                 "forensic_path": file_entry.get("forensic_path"),
             }
             records.append(record)
+
+        # Fallback: hashed-host mapping format (Chromium uses this layout too)
+        # Top-level keys that are not in KNOWN_TOP_LEVEL_KEYS and whose values
+        # are dicts are treated as hashed-host → STS-entry mappings.
+        if not records and isinstance(data, dict):
+            for key, value in data.items():
+                if key in KNOWN_TOP_LEVEL_KEYS:
+                    continue
+                if not isinstance(value, dict):
+                    continue
+
+                # Check for unknown entry keys (consistent with sts-list path)
+                if warning_collector:
+                    unknown_entry_keys = set(value.keys()) - KNOWN_STS_ENTRY_KEYS
+                    for ukey in unknown_entry_keys:
+                        warning_collector.add_warning(
+                            warning_type="json_unknown_key",
+                            category="json",
+                            severity="info",
+                            artifact_type="transport_security",
+                            source_file=file_entry["logical_path"],
+                            item_name=f"mapping[].{ukey}",
+                            item_value=str(type(value[ukey]).__name__),
+                        )
+
+                # key is the hashed host, value is the STS entry
+                record = {
+                    "browser": browser,
+                    "profile": profile,
+                    "hashed_host": key,
+                    "sts_observed": _parse_timestamp(value.get("sts_observed")),
+                    "expiry": _parse_timestamp(value.get("expiry")),
+                    "mode": value.get("mode", "force-https"),
+                    "include_subdomains": 1 if value.get("sts_include_subdomains", False) else 0,
+                    "decoded_host": None,
+                    "decode_method": None,
+                    "run_id": run_id,
+                    "source_path": file_entry["logical_path"],
+                    "discovered_by": discovered_by,
+                    "partition_index": file_entry.get("partition_index"),
+                    "fs_type": file_entry.get("fs_type"),
+                    "logical_path": file_entry["logical_path"],
+                    "forensic_path": file_entry.get("forensic_path"),
+                }
+                records.append(record)
+
+            if records:
+                LOGGER.info(
+                    "Parsed %d HSTS entries from hashed-host mapping format in %s",
+                    len(records), file_entry["logical_path"],
+                )
 
         # Deduplicate within file (keep last occurrence per hashed_host)
         if records:

@@ -1,0 +1,127 @@
+<style>
+.appendix-af-table {
+    width: 100%;
+    table-layout: fixed;
+    border-collapse: collapse;
+}
+.appendix-af-table th,
+.appendix-af-table td {
+    padding: 3px 5px;
+    font-size: 0.85em;
+    line-height: 1.2;
+    border: 1px solid #ddd;
+    vertical-align: top;
+    word-break: break-word;
+    overflow-wrap: break-word;
+}
+.appendix-af-table th {
+    background-color: #f5f5f5;
+    text-align: left;
+    font-weight: 600;
+}
+.appendix-af-table td.af-time,
+.appendix-af-table td.af-browser,
+.appendix-af-table td.af-count {
+    white-space: nowrap;
+}
+.appendix-af-table .af-count {
+    text-align: center;
+}
+.appendix-af-table .af-time .af-date {
+    display: block;
+}
+.appendix-af-table .af-time .af-clock {
+    display: block;
+    color: #555;
+}
+.appendix-af-empty {
+    color: #888;
+    font-style: italic;
+}
+</style>
+
+{% macro render_time(value) -%}
+    {%- set parts = (value or '').split(' ', 1) -%}
+    {%- if parts | length == 2 -%}
+        <span class="af-date">{{ parts[0] }}</span><span class="af-clock">{{ parts[1] }}</span>
+    {%- else -%}
+        {{ value }}
+    {%- endif -%}
+{%- endmacro %}
+
+{% macro header_row() -%}
+<tr>
+    <th>{{ t.field_name | default('Field Name') }}</th>
+    {% if show_value %}
+    <th>{{ t.value | default('Value') }}</th>
+    {% endif %}
+    {% if not group_by_browser and show_browser %}
+    <th class="af-browser" style="width: 12%;">{{ t.browser | default('Browser') }}</th>
+    {% endif %}
+    {% if show_profile %}
+    <th>{{ t.profile | default('Profile') }}</th>
+    {% endif %}
+    {% if show_count %}
+    <th class="af-count" style="width: 9%;">{{ t.use_count | default('Use Count') }}</th>
+    {% endif %}
+    {% if show_first_used %}
+    <th class="af-time" style="width: 16%;">{{ t.first_used | default('First Used') }}</th>
+    {% endif %}
+    {% if show_last_used %}
+    <th class="af-time" style="width: 16%;">{{ t.last_used | default('Last Used') }}</th>
+    {% endif %}
+</tr>
+{%- endmacro %}
+
+{% macro entry_row(entry) -%}
+<tr>
+    <td>{{ entry.name }}</td>
+    {% if show_value %}
+    <td>{{ entry.value }}</td>
+    {% endif %}
+    {% if not group_by_browser and show_browser %}
+    <td class="af-browser">{{ entry.browser }}</td>
+    {% endif %}
+    {% if show_profile %}
+    <td>{{ entry.profile }}</td>
+    {% endif %}
+    {% if show_count %}
+    <td class="af-count">{{ entry.count }}</td>
+    {% endif %}
+    {% if show_first_used %}
+    <td class="af-time">{{ render_time(entry.first_used) }}</td>
+    {% endif %}
+    {% if show_last_used %}
+    <td class="af-time">{{ render_time(entry.last_used) }}</td>
+    {% endif %}
+</tr>
+{%- endmacro %}
+
+{% if total_count == 0 %}
+<p class="appendix-af-empty">
+    {{ t.no_autofill_found | default('No autofill entries found matching the filter criteria.') }}
+</p>
+{% else %}
+    {% if group_by_browser and grouped %}
+        {% for group in grouped %}
+            <h4 class="appendix-subheader">{{ group.browser }} ({{ group.entries | length }})</h4>
+            <table class="appendix-af-table">
+                <thead>{{ header_row() }}</thead>
+                <tbody>
+                    {% for entry in group.entries %}
+                        {{ entry_row(entry) }}
+                    {% endfor %}
+                </tbody>
+            </table>
+        {% endfor %}
+    {% else %}
+        <table class="appendix-af-table">
+            <thead>{{ header_row() }}</thead>
+            <tbody>
+                {% for entry in entries %}
+                    {{ entry_row(entry) }}
+                {% endfor %}
+            </tbody>
+        </table>
+    {% endif %}
+{% endif %}

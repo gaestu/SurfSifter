@@ -60,6 +60,7 @@ from ..database import (
 )
 from ..generator import ReportBuilder, ReportGenerator, ReportMode
 from ..appendix import AppendixRegistry
+from core.database import create_process_log, finalize_process_log
 
 
 class ReportTabWidget(QWidget):
@@ -500,12 +501,26 @@ class ReportTabWidget(QWidget):
         # Add stretch to push buttons to the right
         layout.addStretch()
 
-        # Preview button
-        self._preview_btn = QPushButton("👁️ Preview")
+        # Preview buttons
+        self._preview_btn = QPushButton("👁️ Report Preview")
         self._preview_btn.setToolTip("Preview report in web browser")
-        self._preview_btn.setMinimumWidth(120)
+        self._preview_btn.setMinimumWidth(140)
         self._preview_btn.clicked.connect(self._on_preview)
         layout.addWidget(self._preview_btn)
+
+        self._preview_appendix_btn = QPushButton("👁️📎 Appendix Preview")
+        self._preview_appendix_btn.setToolTip("Preview appendix in web browser")
+        self._preview_appendix_btn.setMinimumWidth(140)
+        self._preview_appendix_btn.clicked.connect(self._on_preview_appendix)
+        layout.addWidget(self._preview_appendix_btn)
+
+        self._preview_complete_btn = QPushButton("👁️📄📎 Complete Preview")
+        self._preview_complete_btn.setToolTip(
+            "Preview both report and appendix in web browser (opens two tabs)"
+        )
+        self._preview_complete_btn.setMinimumWidth(160)
+        self._preview_complete_btn.clicked.connect(self._on_preview_complete)
+        layout.addWidget(self._preview_complete_btn)
 
         # Report-only PDF button
         self._create_report_pdf_btn = QPushButton("📄 Report PDF")
@@ -587,6 +602,7 @@ class ReportTabWidget(QWidget):
         evidence_label = self._evidence_label
         investigator = self._investigator
         db_conn = self._db_conn
+        db_path = self._get_db_path(db_conn)
         evidence_id = self._evidence_id
         workspace_path = self._workspace_path
 
@@ -617,12 +633,20 @@ class ReportTabWidget(QWidget):
             hide_appendix_page_numbers = False
 
         def _factory() -> ReportBuilder:
+            worker_conn = db_conn
+            owns_conn = False
+            if db_path:
+                worker_conn = sqlite3.connect(db_path, check_same_thread=False)
+                worker_conn.row_factory = sqlite3.Row
+                owns_conn = True
             builder = ReportBuilder(
-                db_conn,
+                worker_conn,
                 evidence_id,
                 case_folder=workspace_path,
                 locale=locale,
             )
+            if owns_conn:
+                builder.take_db_connection_ownership()
             builder.set_title(title)
             builder.set_date_format(date_format)
             builder.set_case_info(
@@ -658,6 +682,20 @@ class ReportTabWidget(QWidget):
 
         return _factory
 
+    def _get_db_path(self, conn: Optional[sqlite3.Connection]) -> Optional[str]:
+        """Return the filesystem path for a SQLite connection when available."""
+        if conn is None:
+            return None
+        try:
+            database_rows = conn.execute("PRAGMA database_list").fetchall()
+            for row in database_rows:
+                path_value = row[2] if not isinstance(row, sqlite3.Row) else row["file"]
+                if path_value:
+                    return path_value
+        except sqlite3.Error:
+            return None
+        return None
+
     def _on_preview(self) -> None:
         """Handle Preview button click - open report in browser."""
         html = self._build_report_html(ReportMode.REPORT_ONLY)
@@ -665,7 +703,72 @@ class ReportTabWidget(QWidget):
             return
 
         try:
-            self._generator.preview_in_browser(html)
+            self._open_preview_with_audit(html, "report")
+        except Exception as e:
+            QMessageBox.critical(
+                self,
+                "Preview Error",
+                f"Failed to open preview: {e}"
+            )
+
+    def _open_preview_with_audit(self, html_content: str, preview_kind: str) -> None:
+        """Open a browser preview and record the external invocation."""
+        if self._db_conn is None or self._evidence_id is None:
+            raise ValueError("Preview audit context is not configured.")
+
+        log_id = create_process_log(
+            self._db_conn,
+            self._evidence_id,
+            "report_preview",
+            f"Open {preview_kind} preview in default browser",
+        )
+
+        try:
+            preview_path = self._generator.preview_in_browser(html_content)
+        except Exception as exc:
+            finalize_process_log(
+                self._db_conn,
+                log_id,
+                exit_code=1,
+                stdout=None,
+                stderr=str(exc),
+            )
+            raise
+
+        finalize_process_log(
+            self._db_conn,
+            log_id,
+            exit_code=0,
+            stdout=str(preview_path),
+            stderr=None,
+        )
+
+    def _on_preview_appendix(self) -> None:
+        """Handle Appendix Preview button click - open appendix in browser."""
+        html = self._build_report_html(ReportMode.APPENDIX_ONLY)
+        if html is None:
+            return
+
+        try:
+            self._open_preview_with_audit(html, "appendix")
+        except Exception as e:
+            QMessageBox.critical(
+                self,
+                "Preview Error",
+                f"Failed to open preview: {e}"
+            )
+
+    def _on_preview_complete(self) -> None:
+        """Handle Complete Preview button click - open report and appendix."""
+        html = self._build_report_html(ReportMode.COMPLETE)
+        if html is None:
+            return
+
+        report_html, appendix_html = html
+
+        try:
+            self._open_preview_with_audit(report_html, "report")
+            self._open_preview_with_audit(appendix_html, "appendix")
         except Exception as e:
             QMessageBox.critical(
                 self,
@@ -675,8 +778,8 @@ class ReportTabWidget(QWidget):
 
     # ── Helpers for PDF generation ────────────────────────────────────
 
-    def _check_weasyprint(self) -> bool:
-        """Check WeasyPrint availability and show warning if missing.
+    def _check_report_pdf_generation(self) -> bool:
+        """Check report PDF availability and show warning if missing.
 
         Returns:
             True if WeasyPrint is available.
@@ -688,6 +791,29 @@ class ReportTabWidget(QWidget):
                 "WeasyPrint is not installed. Please install it with:\n\n"
                 "pip install weasyprint\n\n"
                 "Note: WeasyPrint requires additional system dependencies."
+            )
+            return False
+        return True
+
+    def _check_appendix_pdf_generation(self) -> bool:
+        """Check appendix PDF availability and show warning if missing."""
+        if self._generator.can_generate_pdf:
+            return True
+
+        if self._db_conn is None or self._evidence_id is None:
+            QMessageBox.warning(
+                self,
+                "Appendix PDF Generation Unavailable",
+                "Appendix PDF generation requires an evidence audit context when Chromium rendering is needed.\n\n"
+                "Select an evidence item or install WeasyPrint and try again."
+            )
+            return False
+        if self._get_db_path(self._db_conn) is None:
+            QMessageBox.warning(
+                self,
+                "Appendix PDF Generation Unavailable",
+                "Appendix PDF generation requires a file-backed evidence database for audit logging when Chromium "
+                "rendering is needed.\n\nInstall WeasyPrint or reopen the case and try again."
             )
             return False
         return True
@@ -760,6 +886,7 @@ class ReportTabWidget(QWidget):
 
         rpath = Path(report_path) if report_path else None
         apath = Path(appendix_path) if appendix_path else None
+        audit_db_path = self._get_db_path(self._db_conn)
 
         task = ReportBuildTask(
             builder_factory=factory,
@@ -767,6 +894,8 @@ class ReportTabWidget(QWidget):
             mode=mode,
             report_path=rpath,
             appendix_path=apath,
+            audit_db_path=Path(audit_db_path) if audit_db_path else None,
+            audit_evidence_id=self._evidence_id,
         )
 
         # Keep a reference so it isn't garbage-collected
@@ -808,6 +937,8 @@ class ReportTabWidget(QWidget):
             return
 
         msg = "PDF(s) saved to:\n" + "\n".join(paths)
+        if data.get("appendix_note"):
+            msg += "\n\nAppendix renderer note:\n" + data["appendix_note"]
         QMessageBox.information(self, "PDF Created", msg)
         for p in paths:
             QDesktopServices.openUrl(QUrl.fromLocalFile(p))
@@ -825,7 +956,7 @@ class ReportTabWidget(QWidget):
 
     def _on_create_report_pdf(self) -> None:
         """Generate report-only PDF (no appendix)."""
-        if not self._check_weasyprint():
+        if not self._check_report_pdf_generation():
             return
         file_path = self._ask_save_path(
             "Save Report PDF", self._default_pdf_path()
@@ -836,7 +967,7 @@ class ReportTabWidget(QWidget):
 
     def _on_create_appendix_pdf(self) -> None:
         """Generate appendix-only PDF."""
-        if not self._check_weasyprint():
+        if not self._check_appendix_pdf_generation():
             return
         file_path = self._ask_save_path(
             "Save Appendix PDF", self._default_pdf_path("_Appendix")
@@ -847,7 +978,7 @@ class ReportTabWidget(QWidget):
 
     def _on_create_complete_pdf(self) -> None:
         """Generate both report and appendix PDFs at once."""
-        if not self._check_weasyprint():
+        if not self._check_report_pdf_generation():
             return
         report_path = self._ask_save_path(
             "Save Report PDF (appendix will be saved alongside)",
@@ -1302,6 +1433,7 @@ class ReportTabWidget(QWidget):
             path: Path to case workspace directory (will save to path/reports/)
         """
         self._workspace_path = path
+        self._generator.set_preview_root(path)
 
     def set_default_settings(
         self,

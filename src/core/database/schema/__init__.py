@@ -66,6 +66,7 @@ from .definitions import (
     TOP_SITES_SCHEMA,
     URL_MATCHES_SCHEMA,
     URLS_SCHEMA,
+    BROWSER_INDICATORS_SCHEMA,
 )
 
 __all__ = [
@@ -128,4 +129,5 @@ __all__ = [
     "TOP_SITES_SCHEMA",
     "URL_MATCHES_SCHEMA",
     "URLS_SCHEMA",
+    "BROWSER_INDICATORS_SCHEMA",
 ]

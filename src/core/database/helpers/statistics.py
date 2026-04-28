@@ -6,10 +6,42 @@ Moved to database/helpers/ during refactor
 """
 from __future__ import annotations
 
+import json
+import logging
 from typing import Any, Dict, List, TYPE_CHECKING
 
 if TYPE_CHECKING:
     from core.statistics_collector import ExtractorRunStats
+
+LOGGER = logging.getLogger(__name__)
+
+
+def _compute_json_total(
+    json_data: Any,
+    fallback_keys: tuple[str, ...] = ("records", "files"),
+) -> int:
+    """Parse a statistics JSON field and compute a total count.
+
+    Priority:
+    1. If a key from *fallback_keys* exists, use its value directly.
+    2. Otherwise sum all numeric values in the dict.
+    """
+    try:
+        d = json.loads(json_data) if isinstance(json_data, str) else json_data
+        if not d:
+            return 0
+        for key in fallback_keys:
+            if key in d:
+                v = d[key]
+                return int(v) if isinstance(v, (int, float)) else 0
+        return sum(v for v in d.values() if isinstance(v, (int, float)))
+    except (json.JSONDecodeError, TypeError, AttributeError):
+        return 0
+
+
+def _escape_like(value: str) -> str:
+    """Escape SQL LIKE metacharacters for safe use in parameterised queries."""
+    return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
 
 
 def upsert_extractor_statistics(db_manager, stats: "ExtractorRunStats") -> None:
@@ -175,8 +207,6 @@ def sync_process_log_from_statistics(
 
     Added for process_log/extractor_statistics audit sync
     """
-    import json
-
     conn = db_manager.get_evidence_conn(evidence_id, evidence_label)
 
     # Get statistics for this extractor
@@ -186,40 +216,8 @@ def sync_process_log_from_statistics(
     if not stats:
         return False
 
-    # Parse ingested JSON and compute total
-    # Priority: use 'records' key if present (represents actual DB rows inserted)
-    # Otherwise sum other count fields (excluding duplicates like urls/images if records exists)
-    ingested_json = stats.get("ingested", "{}")
-    try:
-        ingested_dict = json.loads(ingested_json) if isinstance(ingested_json, str) else ingested_json
-        if ingested_dict:
-            # Use 'records' if present (this is the canonical count of DB rows inserted)
-            if "records" in ingested_dict:
-                total_ingested = ingested_dict["records"]
-            else:
-                # Fallback: sum all values
-                total_ingested = sum(ingested_dict.values())
-        else:
-            total_ingested = 0
-    except (json.JSONDecodeError, TypeError):
-        total_ingested = 0
-
-    # Parse discovered JSON and compute total (same logic)
-    discovered_json = stats.get("discovered", "{}")
-    try:
-        discovered_dict = json.loads(discovered_json) if isinstance(discovered_json, str) else discovered_json
-        if discovered_dict:
-            if "records" in discovered_dict:
-                total_discovered = discovered_dict["records"]
-            elif "files" in discovered_dict:
-                # For extraction phase, 'files' is the canonical count
-                total_discovered = discovered_dict["files"]
-            else:
-                total_discovered = sum(discovered_dict.values())
-        else:
-            total_discovered = 0
-    except (json.JSONDecodeError, TypeError):
-        total_discovered = 0
+    total_ingested = _compute_json_total(stats.get("ingested", "{}"), ("records",))
+    total_discovered = _compute_json_total(stats.get("discovered", "{}"), ("records", "files"))
 
     run_id = stats.get("run_id")
     if not run_id:
@@ -227,15 +225,72 @@ def sync_process_log_from_statistics(
 
     # Update process_log entries for this extractor run
     # Match by run_id and extractor_name (or task containing extractor_name)
+    escaped_name = _escape_like(extractor_name)
     cursor = conn.execute("""
         UPDATE process_log
         SET records_extracted = ?,
             records_ingested = ?
         WHERE evidence_id = ?
           AND run_id = ?
-          AND (extractor_name = ? OR task LIKE ?)
+          AND (extractor_name = ? OR task LIKE ? ESCAPE '\\')
     """, (total_discovered, total_ingested, evidence_id, run_id,
-          extractor_name, f"%{extractor_name}%"))
+          extractor_name, f"%{escaped_name}%"))
 
     conn.commit()
+    return cursor.rowcount > 0
+
+
+def sync_process_log_counters(
+    evidence_conn,
+    evidence_id: int,
+    extractor_name: str,
+) -> bool:
+    """
+    Sync process_log records from extractor_statistics using evidence_conn directly.
+
+    Variant of sync_process_log_from_statistics that works without db_manager,
+    suitable for use in the extraction orchestrator.
+
+    Args:
+        evidence_conn: SQLite connection to evidence database
+        evidence_id: Evidence ID
+        extractor_name: Extractor name to sync
+
+    Returns:
+        True if sync succeeded, False if no matching records found
+    """
+    # Get statistics directly from evidence_conn
+    try:
+        cursor = evidence_conn.execute(
+            "SELECT * FROM extractor_statistics WHERE evidence_id = ? AND extractor_name = ?",
+            (evidence_id, extractor_name),
+        )
+        row = cursor.fetchone()
+        if not row:
+            return False
+        columns = [desc[0] for desc in cursor.description]
+        stats = dict(zip(columns, row))
+    except Exception as exc:
+        LOGGER.debug("Failed to read extractor_statistics for %s: %s", extractor_name, exc)
+        return False
+
+    total_ingested = _compute_json_total(stats.get("ingested", "{}"), ("records",))
+    total_discovered = _compute_json_total(stats.get("discovered", "{}"), ("records", "files"))
+
+    run_id = stats.get("run_id")
+    if not run_id:
+        return False
+
+    escaped_name = _escape_like(extractor_name)
+    cursor = evidence_conn.execute("""
+        UPDATE process_log
+        SET records_extracted = ?,
+            records_ingested = ?
+        WHERE evidence_id = ?
+          AND run_id = ?
+          AND (extractor_name = ? OR task LIKE ? ESCAPE '\\')
+    """, (total_discovered, total_ingested, evidence_id, run_id,
+          extractor_name, f"%{escaped_name}%"))
+
+    evidence_conn.commit()
     return cursor.rowcount > 0

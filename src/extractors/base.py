@@ -96,6 +96,17 @@ class BaseExtractor(ABC):
         """
         pass
 
+    @property
+    def downstream_extractors(self) -> List[str]:
+        """
+        Return list of extractor names whose ingestion should be triggered
+        after this extractor's extraction succeeds.
+
+        Override in extractors that produce output consumed by ingest-only extractors.
+        Default returns empty list (no downstream dependencies).
+        """
+        return []
+
     @abstractmethod
     def can_run_extraction(self, evidence_fs) -> tuple[bool, str]:
         """
