@@ -708,7 +708,7 @@ class SwiftbeaverExtractor(BaseExtractor):
                     parse_errors += 1
                     continue
                 carved_path = (run_dir / CARVED_DIR / file_path_value).resolve()
-                if not carved_path.is_relative_to(run_dir.resolve()):
+                if not carved_path.is_relative_to((run_dir / CARVED_DIR).resolve()):
                     LOGGER.warning("Path traversal rejected: %s", file_path_value)
                     continue
                 if not carved_path.exists():

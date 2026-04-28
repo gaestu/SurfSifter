@@ -126,7 +126,7 @@ class TestCanRunIngestion:
         assert can_run is False
 
     def test_valid_with_carved_jsonl(self, extractor, run_dir, tmp_path):
-        _write_jsonl(run_dir / METADATA_DIR / CARVED_FILES_JSONL, [{"file_path": "carved/img.jpg"}])
+        _write_jsonl(run_dir / METADATA_DIR / CARVED_FILES_JSONL, [{"file_path": "img.jpg"}])
         can_run, reason = extractor.can_run_ingestion(tmp_path)
         assert can_run is True
 
@@ -386,7 +386,7 @@ class TestJsonlParsing:
         """Verify carved_files.jsonl entries are parsed correctly."""
         carved_entries = [
             {
-                "file_path": "carved/img001.jpg",
+                "file_path": "jpeg/img001.jpg",
                 "file_type": "jpeg",
                 "size": 8192,
                 "md5": "d41d8cd98f00b204e9800998ecf8427e",
@@ -396,7 +396,7 @@ class TestJsonlParsing:
                 "validated": True,
             },
             {
-                "file_path": "carved/img002.png",
+                "file_path": "png/img002.png",
                 "file_type": "png",
                 "size": 16384,
                 "md5": "abc123",
@@ -407,9 +407,9 @@ class TestJsonlParsing:
             },
         ]
 
-        # Create the actual carved files
+        # Create the actual carved files (paths are relative to carved/)
         for entry in carved_entries:
-            f = run_dir / entry["file_path"]
+            f = run_dir / CARVED_DIR / entry["file_path"]
             f.parent.mkdir(parents=True, exist_ok=True)
             f.write_bytes(b"\x00" * entry["size"])
 
@@ -430,13 +430,13 @@ class TestJsonlParsing:
     def test_min_size_filtering(self, extractor, run_dir, mock_callbacks):
         """Verify images below min_size_bytes are skipped."""
         entries = [
-            {"file_path": "carved/small.jpg", "file_type": "jpeg", "size": 100},
-            {"file_path": "carved/large.jpg", "file_type": "jpeg", "size": 8192,
+            {"file_path": "jpeg/small.jpg", "file_type": "jpeg", "size": 100},
+            {"file_path": "jpeg/large.jpg", "file_type": "jpeg", "size": 8192,
              "md5": "abc", "sha256": "def", "global_start": 0, "global_end": 8192},
         ]
 
         for entry in entries:
-            f = run_dir / entry["file_path"]
+            f = run_dir / CARVED_DIR / entry["file_path"]
             f.parent.mkdir(parents=True, exist_ok=True)
             f.write_bytes(b"\x00" * entry["size"])
 
@@ -448,7 +448,7 @@ class TestJsonlParsing:
 
         mock_result = Mock()
         mock_result.error = None
-        mock_result.path = run_dir / "carved" / "large.jpg"
+        mock_result.path = run_dir / CARVED_DIR / "jpeg" / "large.jpg"
         mock_result.sha256 = "def"
         mock_result.md5 = "abc"
         mock_result.size_bytes = 8192
@@ -481,15 +481,16 @@ class TestJsonlParsing:
         """Verify malformed JSONL lines are skipped without crashing."""
         jsonl_path = run_dir / METADATA_DIR / CARVED_FILES_JSONL
         with open(jsonl_path, "w") as f:
-            f.write('{"file_path": "carved/valid.jpg", "file_type": "jpeg", "size": 8192, "md5": "a", "sha256": "b", "global_start": 0, "global_end": 8192}\n')
+            f.write('{"file_path": "jpeg/valid.jpg", "file_type": "jpeg", "size": 8192, "md5": "a", "sha256": "b", "global_start": 0, "global_end": 8192}\n')
             f.write("not json at all\n")
             f.write('{"incomplete": true\n')
             f.write("\n")  # blank line
-            f.write('{"file_path": "carved/valid2.jpg", "file_type": "png", "size": 16384, "md5": "c", "sha256": "d", "global_start": 8192, "global_end": 24576}\n')
+            f.write('{"file_path": "png/valid2.jpg", "file_type": "png", "size": 16384, "md5": "c", "sha256": "d", "global_start": 8192, "global_end": 24576}\n')
 
         # Create the carved files
-        for name, size in [("valid.jpg", 8192), ("valid2.jpg", 16384)]:
-            f = run_dir / CARVED_DIR / name
+        for rel, size in [("jpeg/valid.jpg", 8192), ("png/valid2.jpg", 16384)]:
+            f = run_dir / CARVED_DIR / rel
+            f.parent.mkdir(parents=True, exist_ok=True)
             f.write_bytes(b"\x00" * size)
 
         mock_conn = Mock()
@@ -497,7 +498,7 @@ class TestJsonlParsing:
 
         mock_result1 = Mock()
         mock_result1.error = None
-        mock_result1.path = run_dir / CARVED_DIR / "valid.jpg"
+        mock_result1.path = run_dir / CARVED_DIR / "jpeg" / "valid.jpg"
         mock_result1.sha256 = "b"
         mock_result1.md5 = "a"
         mock_result1.size_bytes = 8192
@@ -505,7 +506,7 @@ class TestJsonlParsing:
 
         mock_result2 = Mock()
         mock_result2.error = None
-        mock_result2.path = run_dir / CARVED_DIR / "valid2.jpg"
+        mock_result2.path = run_dir / CARVED_DIR / "png" / "valid2.jpg"
         mock_result2.sha256 = "d"
         mock_result2.md5 = "c"
         mock_result2.size_bytes = 16384
@@ -672,7 +673,7 @@ class TestImageIngestion:
         """Verify pre-computed hashes from SwiftBeaver are passed through."""
         entries = [
             {
-                "file_path": "carved/img.jpg",
+                "file_path": "jpeg/img.jpg",
                 "file_type": "jpeg",
                 "size": 8192,
                 "md5": "computed_md5",
@@ -682,7 +683,8 @@ class TestImageIngestion:
             }
         ]
         _write_jsonl(run_dir / METADATA_DIR / CARVED_FILES_JSONL, entries)
-        carved_file = run_dir / CARVED_DIR / "img.jpg"
+        carved_file = run_dir / CARVED_DIR / "jpeg" / "img.jpg"
+        carved_file.parent.mkdir(parents=True, exist_ok=True)
         carved_file.write_bytes(b"\x00" * 8192)
 
         mock_conn = Mock()
@@ -723,7 +725,7 @@ class TestImageIngestion:
         """Verify entries referencing missing carved files are skipped."""
         entries = [
             {
-                "file_path": "carved/missing.jpg",
+                "file_path": "jpeg/missing.jpg",
                 "file_type": "jpeg",
                 "size": 8192,
                 "md5": "a",
