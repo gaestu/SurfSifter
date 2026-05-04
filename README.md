@@ -197,7 +197,7 @@ For more details check the wiki.
 **Linux (Debian/Ubuntu):**
 ```bash
 sudo apt-get install libewf-dev libtsk-dev build-essential python3-dev \
-  libpango-1.0-0 libcairo2 libgdk-pixbuf2.0-0 shared-mime-info
+  libpango-1.0-0 libcairo2 libgdk-pixbuf-2.0-0 shared-mime-info
 ```
 
 For packaged-binary installs on Ubuntu/Fedora, prefer:
