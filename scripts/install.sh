@@ -2,8 +2,14 @@
 
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+SCRIPT_PATH="${BASH_SOURCE[0]-}"
+if [[ -n "${SCRIPT_PATH}" ]]; then
+  SCRIPT_DIR="$(cd "$(dirname "${SCRIPT_PATH}")" && pwd)"
+  PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+else
+  SCRIPT_DIR="$(pwd -P)"
+  PROJECT_ROOT="${SURFSIFTER_PROJECT_ROOT:-${SCRIPT_DIR}}"
+fi
 TMP_DIR="$(mktemp -d)"
 trap 'rm -rf "${TMP_DIR}"' EXIT
 
@@ -212,7 +218,15 @@ arch_token() {
 }
 
 ubuntu_runtime_packages() {
-  echo "libcairo2 libpango-1.0-0 libgdk-pixbuf2.0-0 shared-mime-info libxcb-cursor0 libxcb-xinerama0 libxkbcommon0 libegl1 libgl1"
+  local gdk_pixbuf_pkg="libgdk-pixbuf-2.0-0"
+  if have_cmd apt-cache && ! apt-cache show "${gdk_pixbuf_pkg}" >/dev/null 2>&1; then
+    if apt-cache show libgdk-pixbuf2.0-0 >/dev/null 2>&1; then
+      gdk_pixbuf_pkg="libgdk-pixbuf2.0-0"
+    elif apt-cache show libgdk-pixbuf-xlib-2.0-0 >/dev/null 2>&1; then
+      gdk_pixbuf_pkg="libgdk-pixbuf-xlib-2.0-0"
+    fi
+  fi
+  echo "libcairo2 libpango-1.0-0 ${gdk_pixbuf_pkg} shared-mime-info libxcb-cursor0 libxcb-xinerama0 libxkbcommon0 libegl1 libgl1"
 }
 
 ubuntu_tool_packages() {
@@ -229,21 +243,20 @@ fedora_tool_packages() {
 
 install_runtime_deps() {
   local pkgs=""
-  case "${DISTRO}" in
-    ubuntu) pkgs="$(ubuntu_runtime_packages)" ;;
-    fedora) pkgs="$(fedora_runtime_packages)" ;;
-  esac
-
-  if [[ -z "${pkgs}" ]]; then
-    return
-  fi
-
   log "Installing runtime dependencies for ${DISTRO}."
   need_privileges
   if [[ "${DISTRO}" == "ubuntu" ]]; then
     run_priv apt-get update
+    pkgs="$(ubuntu_runtime_packages)"
+    if [[ -z "${pkgs}" ]]; then
+      return
+    fi
     run_priv apt-get install -y ${pkgs}
   else
+    pkgs="$(fedora_runtime_packages)"
+    if [[ -z "${pkgs}" ]]; then
+      return
+    fi
     run_priv dnf install -y ${pkgs}
   fi
 }
