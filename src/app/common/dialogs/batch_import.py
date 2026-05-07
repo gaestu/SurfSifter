@@ -9,17 +9,23 @@ from typing import List, Optional
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QPalette
 from PySide6.QtWidgets import (
+    QButtonGroup,
     QCheckBox,
+    QComboBox,
     QDialog,
     QDialogButtonBox,
+    QFormLayout,
     QGroupBox,
     QHBoxLayout,
     QLabel,
+    QLineEdit,
     QListWidget,
     QListWidgetItem,
+    QMessageBox,
     QProgressBar,
     QPushButton,
     QRadioButton,
+    QTextEdit,
     QVBoxLayout,
     QWidget,
 )
@@ -39,13 +45,21 @@ class BatchHashListImportDialog(QDialog):
         files: List[Path],
         existing_names: set,
         parent: Optional[QWidget] = None,
+        *,
+        list_label: str = "hash list",
+        window_title: str = "Batch Import Hash Lists",
+        show_rebuild_db: bool = True,
+        show_url_metadata: bool = False,
     ) -> None:
         super().__init__(parent)
-        self.setWindowTitle("Batch Import Hash Lists")
+        self.setWindowTitle(window_title)
         self.setMinimumSize(600, 500)
 
         self.files = files
         self.existing_names = existing_names
+        self.list_label = list_label
+        self.show_rebuild_db = show_rebuild_db
+        self.show_url_metadata = show_url_metadata
         self._conflict_count = 0
 
         self._build_ui()
@@ -56,7 +70,7 @@ class BatchHashListImportDialog(QDialog):
         layout = QVBoxLayout()
 
         # Header
-        self.header_label = QLabel(f"Found {len(self.files)} hash list files")
+        self.header_label = QLabel(f"Found {len(self.files)} {self.list_label} files")
         self.header_label.setStyleSheet("font-weight: bold; font-size: 14px;")
         layout.addWidget(self.header_label)
 
@@ -105,14 +119,66 @@ class BatchHashListImportDialog(QDialog):
         policy_group.setLayout(policy_layout)
         layout.addWidget(policy_group)
 
+        if self.show_url_metadata:
+            metadata_group = QGroupBox("Shared URL List Metadata")
+            form_layout = QFormLayout()
+
+            category_layout = QHBoxLayout()
+            self.category_combo = QComboBox()
+            self.category_combo.addItems([
+                "Gambling",
+                "Gaming",
+                "Social Media",
+                "Adult Content",
+                "Malicious",
+                "Excluded",
+                "Custom",
+            ])
+            self.category_combo.setCurrentText("Custom")
+            self.category_combo.currentTextChanged.connect(self._on_category_changed)
+            category_layout.addWidget(self.category_combo)
+
+            self.custom_category_edit = QLineEdit()
+            self.custom_category_edit.setPlaceholderText("Enter custom category")
+            category_layout.addWidget(self.custom_category_edit)
+            form_layout.addRow("Category:", category_layout)
+
+            self.description_edit = QTextEdit()
+            self.description_edit.setPlaceholderText(
+                "Enter a description for generated URL-list metadata"
+            )
+            self.description_edit.setMaximumHeight(70)
+            form_layout.addRow("Description:", self.description_edit)
+
+            pattern_group = QGroupBox("Pattern Type")
+            pattern_layout = QVBoxLayout()
+            self.wildcard_radio = QRadioButton("Wildcard Patterns (* and ? supported)")
+            self.wildcard_radio.setChecked(True)
+            pattern_layout.addWidget(self.wildcard_radio)
+            self.regex_radio = QRadioButton("Regular Expressions")
+            pattern_layout.addWidget(self.regex_radio)
+            self.pattern_button_group = QButtonGroup(self)
+            self.pattern_button_group.addButton(self.wildcard_radio, 0)
+            self.pattern_button_group.addButton(self.regex_radio, 1)
+            pattern_group.setLayout(pattern_layout)
+
+            metadata_layout = QVBoxLayout()
+            metadata_layout.addLayout(form_layout)
+            metadata_layout.addWidget(pattern_group)
+            metadata_group.setLayout(metadata_layout)
+            layout.addWidget(metadata_group)
+
         # Rebuild hash DB checkbox
-        self.rebuild_checkbox = QCheckBox("Rebuild hash database after import")
-        self.rebuild_checkbox.setChecked(True)
-        self.rebuild_checkbox.setToolTip(
-            "Rebuild the SQLite hash database for fast matching.\n"
-            "Required for hash matching to work with new lists."
-        )
-        layout.addWidget(self.rebuild_checkbox)
+        if self.show_rebuild_db:
+            self.rebuild_checkbox = QCheckBox("Rebuild hash database after import")
+            self.rebuild_checkbox.setChecked(True)
+            self.rebuild_checkbox.setToolTip(
+                "Rebuild the SQLite hash database for fast matching.\n"
+                "Required for hash matching to work with new lists."
+            )
+            layout.addWidget(self.rebuild_checkbox)
+        else:
+            self.rebuild_checkbox = None
 
         # Dialog buttons
         button_box = QDialogButtonBox()
@@ -121,7 +187,7 @@ class BatchHashListImportDialog(QDialog):
         self.import_btn.setEnabled(False)
 
         button_box.rejected.connect(self.reject)
-        button_box.accepted.connect(self.accept)
+        button_box.accepted.connect(self._on_accept)
 
         layout.addWidget(button_box)
         self.setLayout(layout)
@@ -132,15 +198,18 @@ class BatchHashListImportDialog(QDialog):
 
         for file_path in self.files:
             name = file_path.stem
-            size_kb = file_path.stat().st_size / 1024
+            try:
+                size_text = f"{file_path.lstat().st_size / 1024:.1f} KB"
+            except OSError:
+                size_text = "size unavailable"
 
             # Check for conflict
             is_conflict = name in self.existing_names
             if is_conflict:
                 self._conflict_count += 1
-                display_text = f"⚠ {file_path.name}  →  {name}    EXISTS ({size_kb:.1f} KB)"
+                display_text = f"⚠ {file_path.name}  →  {name}    EXISTS ({size_text})"
             else:
-                display_text = f"    {file_path.name}  →  {name}    ({size_kb:.1f} KB)"
+                display_text = f"    {file_path.name}  →  {name}    ({size_text})"
 
             item = QListWidgetItem(display_text)
             item.setFlags(item.flags() | Qt.ItemIsUserCheckable)
@@ -172,6 +241,38 @@ class BatchHashListImportDialog(QDialog):
             item = self.file_list.item(i)
             item.setCheckState(Qt.Unchecked)
         self._update_import_button()
+
+    def _on_category_changed(self, category: str) -> None:
+        """Toggle custom category entry visibility."""
+        if not self.show_url_metadata:
+            return
+        is_custom = category == "Custom"
+        self.custom_category_edit.setVisible(is_custom)
+        if is_custom:
+            self.custom_category_edit.setFocus()
+
+    def _on_accept(self) -> None:
+        """Validate URL metadata when present, then accept."""
+        if self.show_url_metadata:
+            if not self.get_category():
+                QMessageBox.warning(
+                    self,
+                    "Validation Error",
+                    "Category is required.",
+                )
+                self.custom_category_edit.setFocus()
+                return
+
+            if not self.get_description():
+                QMessageBox.warning(
+                    self,
+                    "Validation Error",
+                    "Description is required.",
+                )
+                self.description_edit.setFocus()
+                return
+
+        self.accept()
 
     def _on_item_changed(self, item: QListWidgetItem) -> None:
         """Handle item checkbox change."""
@@ -211,7 +312,46 @@ class BatchHashListImportDialog(QDialog):
 
     def should_rebuild_db(self) -> bool:
         """Check if hash DB should be rebuilt after import."""
-        return self.rebuild_checkbox.isChecked()
+        return bool(self.rebuild_checkbox and self.rebuild_checkbox.isChecked())
+
+    def get_category(self) -> str:
+        """Get the shared URL-list category."""
+        if not self.show_url_metadata:
+            return ""
+        category = self.category_combo.currentText()
+        if category == "Custom":
+            return self.custom_category_edit.text().strip()
+        return category
+
+    def get_description(self) -> str:
+        """Get the shared URL-list description."""
+        if not self.show_url_metadata:
+            return ""
+        return self.description_edit.toPlainText().strip()
+
+    def is_regex(self) -> bool:
+        """Return True when URL-list regex mode is selected."""
+        return bool(self.show_url_metadata and self.regex_radio.isChecked())
+
+
+class BatchUrlListImportDialog(BatchHashListImportDialog):
+    """Preview and configure batch URL list import."""
+
+    def __init__(
+        self,
+        files: List[Path],
+        existing_names: set,
+        parent: Optional[QWidget] = None,
+    ) -> None:
+        super().__init__(
+            files,
+            existing_names,
+            parent,
+            list_label="URL list",
+            window_title="Batch Import URL Lists",
+            show_rebuild_db=False,
+            show_url_metadata=True,
+        )
 
 
 class BatchImportProgressDialog(QDialog):
@@ -227,9 +367,11 @@ class BatchImportProgressDialog(QDialog):
         self,
         total_files: int,
         parent: Optional[QWidget] = None,
+        *,
+        title: str = "Importing Hash Lists",
     ) -> None:
         super().__init__(parent)
-        self.setWindowTitle("Importing Hash Lists")
+        self.setWindowTitle(title)
         self.setMinimumWidth(400)
         self.setModal(True)
         # Prevent closing via X button during import

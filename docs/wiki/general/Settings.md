@@ -76,6 +76,13 @@ Each list type supports:
 - **Delete** — remove a list.
 - **Install Predefined Lists** — load built-in reference lists from the `reference_lists/` directory.
 
+Hash Lists and URL Lists also support **Import Folder**:
+- The selected folder is scanned for `.txt` files directly inside that folder only; nested folders are not imported.
+- Each `.txt` file is imported as a separate list using the file stem as the list name.
+- Existing-name conflicts can be handled with **Skip** (default), **Overwrite**, or **Rename (_1, _2)**.
+- URL List folder import asks once for shared category, description, and wildcard/regex pattern mode. These values are written as metadata for plain text URL lists.
+- URL List files that already contain SurfSifter URL-list metadata keep their existing metadata where practical.
+
 ## Sandbox settings
 Controls for the secure URL preview feature (right-click → "Open in Sandbox Browser"):
 - **Prefer external browser** — use Firejail-sandboxed external browser instead of built-in WebEngine (Linux only; requires Firejail).

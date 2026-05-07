@@ -909,6 +909,11 @@ class PreferencesDialog(QDialog):
         self.add_urllist_btn.clicked.connect(self._add_urllist)
         buttons_layout.addWidget(self.add_urllist_btn)
 
+        self.import_urllist_folder_btn = QPushButton("📁 Import Folder")
+        self.import_urllist_folder_btn.setToolTip("Import all .txt URL lists from a folder")
+        self.import_urllist_folder_btn.clicked.connect(self._import_urllist_folder)
+        buttons_layout.addWidget(self.import_urllist_folder_btn)
+
         self.view_urllist_btn = QPushButton("View")
         self.view_urllist_btn.setEnabled(False)
         self.view_urllist_btn.clicked.connect(self._view_urllist)
@@ -1137,7 +1142,8 @@ class PreferencesDialog(QDialog):
             self._import_task = None
 
         def on_cancelled() -> None:
-            self._import_task.cancel()
+            if self._import_task is not None:
+                self._import_task.cancel()
 
         # Connect signals
         self._import_task.signals.progress.connect(on_progress)
@@ -1151,6 +1157,124 @@ class PreferencesDialog(QDialog):
         QThreadPool.globalInstance().start(self._import_task)
 
         # Show progress dialog (non-blocking)
+        progress_dialog.exec()
+
+    def _import_urllist_folder(self) -> None:
+        """Import all URL lists from a selected folder."""
+        from PySide6.QtCore import QThreadPool
+        from app.common.dialogs import BatchUrlListImportDialog, BatchImportProgressDialog
+        from app.services.workers import BatchUrlListImportTask, BatchUrlListImportConfig
+
+        folder = QFileDialog.getExistingDirectory(
+            self,
+            "Select Folder with URL Lists",
+            "",
+            QFileDialog.ShowDirsOnly
+        )
+
+        if not folder:
+            return
+
+        folder_path = Path(folder)
+        files = sorted(folder_path.glob("*.txt"))
+
+        if not files:
+            QMessageBox.information(
+                self,
+                "No Files Found",
+                "No .txt files found in the selected folder."
+            )
+            return
+
+        existing = set(self.ref_manager.list_available()["urllists"])
+
+        preview_dialog = BatchUrlListImportDialog(files, existing, self)
+        if preview_dialog.exec() != QDialog.Accepted:
+            return
+
+        selected_files = preview_dialog.get_selected_files()
+        if not selected_files:
+            return
+
+        progress_dialog = BatchImportProgressDialog(
+            len(selected_files),
+            self,
+            title="Importing URL Lists",
+        )
+
+        config = BatchUrlListImportConfig(
+            files=tuple(selected_files),
+            conflict_policy=preview_dialog.get_conflict_policy(),
+            category=preview_dialog.get_category(),
+            description=preview_dialog.get_description(),
+            is_regex=preview_dialog.is_regex(),
+        )
+
+        self._import_task = BatchUrlListImportTask(config)
+
+        def on_progress(percent: int, message: str) -> None:
+            pass
+
+        def on_file_progress(current: int, total: int, filename: str) -> None:
+            progress_dialog.update_progress(current, filename)
+
+        def on_result(result: dict) -> None:
+            progress_dialog.set_complete()
+
+            imported = result.get("imported", 0)
+            overwritten = result.get("overwritten", 0)
+            renamed = result.get("renamed", 0)
+            skipped = result.get("skipped", 0)
+            errors = result.get("errors", 0)
+            cancelled = result.get("cancelled", 0)
+
+            summary_parts = []
+            if imported > 0:
+                summary_parts.append(f"{imported} imported")
+            if overwritten > 0:
+                summary_parts.append(f"{overwritten} overwritten")
+            if renamed > 0:
+                summary_parts.append(f"{renamed} renamed")
+            if skipped > 0:
+                summary_parts.append(f"{skipped} skipped")
+            if errors > 0:
+                summary_parts.append(f"{errors} errors")
+            if cancelled > 0:
+                summary_parts.append(f"{cancelled} cancelled")
+
+            summary = ", ".join(summary_parts) if summary_parts else "No files processed"
+
+            QMessageBox.information(
+                self,
+                "Import Complete",
+                summary
+            )
+
+            self._refresh_url_lists()
+
+        def on_error(error: str, tb: str) -> None:
+            progress_dialog.close()
+            QMessageBox.critical(
+                self,
+                "Import Error",
+                f"Import failed: {error}"
+            )
+
+        def on_finished() -> None:
+            self._import_task = None
+
+        def on_cancelled() -> None:
+            if self._import_task is not None:
+                self._import_task.cancel()
+
+        self._import_task.signals.progress.connect(on_progress)
+        self._import_task.signals.file_progress.connect(on_file_progress)
+        self._import_task.signals.result.connect(on_result)
+        self._import_task.signals.error.connect(on_error)
+        self._import_task.signals.finished.connect(on_finished)
+        progress_dialog.cancelled.connect(on_cancelled)
+
+        QThreadPool.globalInstance().start(self._import_task)
         progress_dialog.exec()
 
     def _add_filelist(self) -> None:

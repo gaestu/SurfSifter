@@ -1175,6 +1175,96 @@ class BatchHashListImportTask(BaseTask):
         }
 
 
+# -----------------------------------------------------------------------------
+# Batch URL List Import Task
+# -----------------------------------------------------------------------------
+
+
+class BatchUrlListImportSignals(TaskSignals):
+    """Signals for batch URL list import progress."""
+    # current_index, total_count, current_filename
+    file_progress = Signal(int, int, str)
+
+
+@dataclass(frozen=True)
+class BatchUrlListImportConfig:
+    """Configuration for batch URL list import."""
+    files: Tuple[Path, ...]
+    conflict_policy: str
+    category: str
+    description: str
+    is_regex: bool = False
+
+
+class BatchUrlListImportTask(BaseTask):
+    """Background task for batch URL list import."""
+
+    def __init__(self, config: BatchUrlListImportConfig) -> None:
+        super().__init__()
+        self.config = config
+        self.signals = BatchUrlListImportSignals()
+        self._results: List[Any] = []
+
+    def get_results(self) -> List[Any]:
+        """Get import results after task completes."""
+        return self._results
+
+    def run_task(self) -> Dict[str, Any]:
+        from core.matching import ReferenceListManager, ConflictPolicy
+
+        ref_manager = ReferenceListManager()
+
+        policy_map = {
+            "skip": ConflictPolicy.SKIP,
+            "overwrite": ConflictPolicy.OVERWRITE,
+            "rename": ConflictPolicy.RENAME,
+        }
+        conflict_policy = policy_map.get(self.config.conflict_policy, ConflictPolicy.SKIP)
+
+        def progress_cb(current: int, total: int, filename: str) -> None:
+            self.report_progress(
+                int(100 * current / total) if total > 0 else 0,
+                f"Importing {filename}..."
+            )
+            try:
+                self.signals.file_progress.emit(current, total, filename)
+            except RuntimeError:
+                pass
+
+        def cancel_cb() -> bool:
+            return self._cancelled
+
+        self._results = ref_manager.import_urllist_batch(
+            files=list(self.config.files),
+            conflict_policy=conflict_policy,
+            category=self.config.category,
+            description=self.config.description,
+            is_regex=self.config.is_regex,
+            progress_callback=progress_cb,
+            cancel_check=cancel_cb,
+        )
+
+        imported = sum(1 for r in self._results if r.status == "imported")
+        overwritten = sum(1 for r in self._results if r.status == "overwritten")
+        renamed = sum(1 for r in self._results if r.status == "renamed")
+        skipped = sum(1 for r in self._results if r.status == "skipped")
+        errors = sum(1 for r in self._results if r.status == "error")
+        cancelled = sum(1 for r in self._results if r.status == "cancelled")
+
+        self.report_progress(100, "Complete")
+
+        return {
+            "imported": imported,
+            "overwritten": overwritten,
+            "renamed": renamed,
+            "skipped": skipped,
+            "errors": errors,
+            "cancelled": cancelled,
+            "total": len(self.config.files),
+            "results": self._results,
+        }
+
+
 # =============================================================================
 # Extract & Ingest Worker (moved from features/extraction/workers.py )
 # =============================================================================
