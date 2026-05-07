@@ -1176,6 +1176,7 @@ class ChromiumSessionsExtractor(BaseExtractor):
         """
         from urllib.parse import urlparse
 
+        normalized_logical_path = normalize_evidence_path(file_entry["logical_path"])
         url_data = []
 
         # Collect from current tabs

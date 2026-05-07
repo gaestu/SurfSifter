@@ -69,6 +69,76 @@ class TestManifestDeduplication:
         assert result[0]["size_bytes"] == 100
 
 
+class TestCollectUrlData:
+    """Regression tests for _collect_url_data NameError bug (issue #55)."""
+
+    @staticmethod
+    def _make_extractor():
+        from extractors.browser.chromium.sessions.extractor import ChromiumSessionsExtractor
+        return ChromiumSessionsExtractor.__new__(ChromiumSessionsExtractor)
+
+    def test_collect_url_data_no_name_error(self):
+        """_collect_url_data must not raise NameError for normalized_logical_path."""
+        extractor = self._make_extractor()
+        file_entry = {
+            "logical_path": "Users/x1/AppData/Local/Microsoft/Edge/User Data/Default/Sessions/Session_123",
+            "browser": "edge",
+            "profile": "Default",
+            "partition_index": 0,
+            "fs_type": "NTFS",
+            "forensic_path": None,
+        }
+        tab_records = [
+            {"url": "https://example.com", "last_accessed_utc": "2024-01-01T00:00:00Z"},
+        ]
+        history_records = [
+            {"url": "https://news.example.org/article/1", "timestamp_utc": "2024-01-01T00:01:00Z"},
+        ]
+        # Must not raise NameError
+        result = extractor._collect_url_data(
+            tab_records, history_records, "edge", "Default", "run-abc", "test:1.0:run-abc", file_entry
+        )
+        assert len(result) == 2
+        for row in result:
+            assert "source_path" in row
+            assert row["source_path"] is not None
+            assert "normalized_logical_path" not in row
+
+    def test_collect_url_data_skips_chrome_internal_urls(self):
+        """Internal Chrome/browser URLs are filtered out."""
+        extractor = self._make_extractor()
+        file_entry = {
+            "logical_path": "Users/x1/Sessions/Tabs_456",
+            "browser": "chrome",
+            "profile": "Default",
+            "partition_index": 0,
+            "fs_type": "NTFS",
+            "forensic_path": None,
+        }
+        tab_records = [
+            {"url": "chrome://newtab/"},
+            {"url": "about:blank"},
+            {"url": "https://valid.example.com"},
+        ]
+        result = extractor._collect_url_data(tab_records, [], "chrome", "Default", "run-1", "t:1:run-1", file_entry)
+        assert len(result) == 1
+        assert result[0]["url"] == "https://valid.example.com"
+
+    def test_collect_url_data_empty_records(self):
+        """Empty tab and history records produce empty URL list."""
+        extractor = self._make_extractor()
+        file_entry = {
+            "logical_path": "Users/x1/Sessions/Session_789",
+            "browser": "chrome",
+            "profile": "Default",
+            "partition_index": 0,
+            "fs_type": "NTFS",
+            "forensic_path": None,
+        }
+        result = extractor._collect_url_data([], [], "chrome", "Default", "run-2", "t:1:run-2", file_entry)
+        assert result == []
+
+
 class TestDiscoverFilesReturn:
     """Verify _discover_files_multi_partition has no dead code after final return."""
 
