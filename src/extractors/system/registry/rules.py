@@ -700,7 +700,7 @@ def target_to_dict(target: RegistryTarget) -> Dict[str, Any]:
         target: RegistryTarget object
 
     Returns:
-        Dictionary matching the old YAML rule format
+        Dictionary matching the legacy rule format
     """
     return {
         "name": target.name,

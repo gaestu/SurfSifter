@@ -130,9 +130,8 @@ def test_load_timeline_config(timeline_config):
 
 
 def test_default_config_fallback():
-    """Test that config is returned even with invalid path (always returns hardcoded config)."""
-    fake_rules_dir = Path("/nonexistent")
-    config = timelines_module.load_timeline_config(fake_rules_dir)
+    """Test that config is returned from the hardcoded default configuration."""
+    config = timelines_module.load_timeline_config()
 
     assert config is not None
     assert "browser_history" in config.sources

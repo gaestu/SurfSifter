@@ -456,7 +456,6 @@ class MainWindow(QMainWindow):
         extraction_tab = ExtractionTab(
             evidence_id,
             self.case_data,
-            self.app_config.rules_dir,
             self.tool_registry,  # Pass tool registry for tool availability checking
         )
         extraction_tab.extraction_started.connect(self._on_extraction_started)
@@ -1366,7 +1365,6 @@ class MainWindow(QMainWindow):
         dialog = PreferencesDialog(
             self.settings,
             self.settings_file.parent,
-            self.app_config.rules_dir,
             self.tool_registry,  # Pass tool registry for enhanced tools tab
             initial_tab=initial_tab,
             parent=self,

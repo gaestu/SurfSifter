@@ -79,7 +79,7 @@ def expand_windows_env_vars(
     Expand Windows-style environment variables in a path.
 
     Handles %LOCALAPPDATA%, %APPDATA%, %USERPROFILE%, etc.
-    Common in browser path patterns from YAML rules.
+    Common in browser path patterns.
 
     Args:
         path: Path string with %VAR% style variables

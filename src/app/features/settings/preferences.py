@@ -29,12 +29,7 @@ from PySide6.QtWidgets import (
 
 from app.config.settings import AppSettings, GeneralSettings, NetworkSettings, ToolPaths, ReportSettings
 from core.tool_discovery import get_tool_version
-from core.subprocess_env import clean_subprocess_env
-import json
 import shutil
-import subprocess
-import yaml
-from jsonschema import Draft202012Validator, ValidationError
 
 if TYPE_CHECKING:
     from core.tool_registry import ToolRegistry
@@ -47,7 +42,6 @@ class PreferencesDialog(QDialog):
         self,
         settings: AppSettings,
         config_dir: Optional[Path] = None,
-        rules_dir: Optional[Path] = None,
         tool_registry: Optional['ToolRegistry'] = None,  #
         initial_tab: Optional[str] = None,
         parent: Optional[QWidget] = None,
@@ -56,7 +50,6 @@ class PreferencesDialog(QDialog):
         self.setWindowTitle("Preferences")
         self._original = settings
         self._config_dir = Path(config_dir) if config_dir else None
-        self._rules_dir = Path(rules_dir) if rules_dir else None
         self._tool_registry = tool_registry  #
         self._initial_tab = initial_tab
         self._tool_line_edits: Dict[str, QLineEdit] = {}
@@ -69,7 +62,6 @@ class PreferencesDialog(QDialog):
         self._build_file_lists_tab()  #
         self._build_hash_lists_tab()  #
         self._build_url_lists_tab()  #
-        self._build_rules_tab()
         self._build_reports_tab(settings)  #
         self._build_text_blocks_tab()  #
 
@@ -208,304 +200,6 @@ class PreferencesDialog(QDialog):
 
         widget.setLayout(form)
         self.tabs.addTab(widget, "Network")
-
-    # Rules ---------------------------------------------------------------
-
-    def _build_rules_tab(self) -> None:
-        """Build the Rules tab showing loaded rule files with validation."""
-        widget = QWidget()
-        layout = QVBoxLayout()
-
-        # Instructions
-        info_label = QLabel(
-            "Rule files define extraction targets, carvers, and detectors. "
-            "Select a rule to validate or open in your editor."
-        )
-        info_label.setWordWrap(True)
-        layout.addWidget(info_label)
-
-        # List of rule files
-        self.rules_list = QListWidget()
-        self.rules_list.currentItemChanged.connect(self._on_rule_selected)
-        layout.addWidget(self.rules_list)
-
-        # Buttons
-        buttons_layout = QHBoxLayout()
-
-        self.validate_rule_button = QPushButton("Validate Selected")
-        self.validate_rule_button.setEnabled(False)
-        self.validate_rule_button.clicked.connect(self._validate_selected_rule)
-        buttons_layout.addWidget(self.validate_rule_button)
-
-        self.validate_all_button = QPushButton("Validate All")
-        self.validate_all_button.clicked.connect(self._validate_all_rules)
-        buttons_layout.addWidget(self.validate_all_button)
-
-        self.open_editor_button = QPushButton("Open in Editor")
-        self.open_editor_button.setEnabled(False)
-        self.open_editor_button.clicked.connect(self._open_rule_in_editor)
-        buttons_layout.addWidget(self.open_editor_button)
-
-        self.refresh_button = QPushButton("Refresh")
-        self.refresh_button.clicked.connect(self._refresh_rules_list)
-        buttons_layout.addWidget(self.refresh_button)
-
-        buttons_layout.addStretch()
-        layout.addLayout(buttons_layout)
-
-        # Validation output
-        validation_label = QLabel("Validation Output:")
-        layout.addWidget(validation_label)
-
-        self.validation_output = QTextEdit()
-        self.validation_output.setReadOnly(True)
-        self.validation_output.setMaximumHeight(150)
-        layout.addWidget(self.validation_output)
-
-        widget.setLayout(layout)
-        self.tabs.addTab(widget, "Rules")
-
-        # Load rules list initially
-        self._refresh_rules_list()
-
-    def _refresh_rules_list(self) -> None:
-        """Refresh the list of rule files."""
-        self.rules_list.clear()
-        self.validation_output.clear()
-
-        if not self._rules_dir or not self._rules_dir.exists():
-            self.validation_output.setPlainText(
-                "Rules directory not found: {path}".format(
-                    path=str(self._rules_dir) if self._rules_dir else "None"
-                )
-            )
-            return
-
-        # Find all YAML rule files
-        rule_files = sorted(
-            {path for suffix in ("*.yml", "*.yaml") for path in self._rules_dir.rglob(suffix)}
-        )
-
-        if not rule_files:
-            self.validation_output.setPlainText(
-                "No rule files found in {path}".format(path=str(self._rules_dir))
-            )
-            return
-
-        for rule_file in rule_files:
-            relative_path = rule_file.relative_to(self._rules_dir)
-            item = QListWidgetItem(str(relative_path))
-            item.setData(1, rule_file)  # Store full path in user role
-            self.rules_list.addItem(item)
-
-        self.validation_output.setPlainText(
-            "Found {count} rule file(s).".format(count=len(rule_files))
-        )
-
-    def _on_rule_selected(self, current: Optional[QListWidgetItem], previous: Optional[QListWidgetItem]) -> None:  # noqa: ARG002
-        """Enable/disable buttons based on selection."""
-        has_selection = current is not None
-        self.validate_rule_button.setEnabled(has_selection)
-        self.open_editor_button.setEnabled(has_selection)
-
-    def _validate_selected_rule(self) -> None:
-        """Validate the selected rule file against the JSON schema."""
-        current_item = self.rules_list.currentItem()
-        if not current_item:
-            return
-
-        rule_file = Path(current_item.data(1))
-        self._validate_rule_file(rule_file)
-
-    def _validate_all_rules(self) -> None:
-        """Validate all loaded rule files against the JSON schema."""
-        if not self._rules_dir or not self._rules_dir.exists():
-            self.validation_output.setPlainText(
-                "Rules directory not found."
-            )
-            return
-
-        self.validation_output.clear()
-        output_lines = ["Validating all rules...\n"]
-
-        # Load schema
-        schema_path = self._rules_dir.parent / "docs" / "rules.schema.json"
-        if not schema_path.exists():
-            output_lines.append(
-                "ERROR: Schema file not found at {path}".format(path=str(schema_path))
-            )
-            self.validation_output.setPlainText("\n".join(output_lines))
-            return
-
-        try:
-            schema = json.loads(schema_path.read_text(encoding="utf-8"))
-            validator = Draft202012Validator(schema)
-        except Exception as exc:
-            output_lines.append(
-                "ERROR: Failed to load schema: {error}".format(error=str(exc))
-            )
-            self.validation_output.setPlainText("\n".join(output_lines))
-            return
-
-        # Validate each rule file
-        rule_files = sorted(
-            {path for suffix in ("*.yml", "*.yaml") for path in self._rules_dir.rglob(suffix)}
-        )
-
-        errors_found = 0
-        for rule_file in rule_files:
-            relative_path = rule_file.relative_to(self._rules_dir)
-            try:
-                raw_text = rule_file.read_text(encoding="utf-8")
-                document = yaml.safe_load(raw_text) or {}
-
-                # Collect all validation errors
-                validation_errors = list(validator.iter_errors(document))
-
-                if validation_errors:
-                    errors_found += 1
-                    output_lines.append(f"\n❌ {relative_path}: {len(validation_errors)} error(s)")
-                    for error in validation_errors[:3]:  # Show first 3 errors
-                        path_str = " → ".join(str(p) for p in error.path) if error.path else "root"
-                        output_lines.append(f"  • {path_str}: {error.message}")
-                    if len(validation_errors) > 3:
-                        output_lines.append(f"  ... and {len(validation_errors) - 3} more error(s)")
-                else:
-                    output_lines.append(f"✓ {relative_path}")
-
-            except yaml.YAMLError as exc:
-                errors_found += 1
-                output_lines.append(f"\n❌ {relative_path}: YAML parsing error")
-                output_lines.append(f"  {str(exc)}")
-            except Exception as exc:
-                errors_found += 1
-                output_lines.append(f"\n❌ {relative_path}: {str(exc)}")
-
-        # Summary
-        output_lines.append(f"\n{'-' * 50}")
-        if errors_found == 0:
-            output_lines.append("✓ All {count} rule file(s) validated successfully!".format(count=len(rule_files)))
-        else:
-            output_lines.append(
-                "❌ {errors} file(s) with errors out of {total}".format(
-                    errors=errors_found, total=len(rule_files)
-                )
-            )
-
-        self.validation_output.setPlainText("\n".join(output_lines))
-
-    def _validate_rule_file(self, rule_file: Path) -> None:
-        """Validate a single rule file and display results."""
-        self.validation_output.clear()
-
-        if not rule_file.exists():
-            self.validation_output.setPlainText(
-                "ERROR: Rule file not found: {path}".format(path=str(rule_file))
-            )
-            return
-
-        # Load schema
-        schema_path = self._rules_dir.parent / "docs" / "rules.schema.json" if self._rules_dir else None
-        if not schema_path or not schema_path.exists():
-            self.validation_output.setPlainText(
-                "ERROR: Schema file not found at {path}".format(
-                    path=str(schema_path) if schema_path else "Unknown"
-                )
-            )
-            return
-
-        try:
-            schema = json.loads(schema_path.read_text(encoding="utf-8"))
-            validator = Draft202012Validator(schema)
-        except Exception as exc:
-            self.validation_output.setPlainText(
-                "ERROR: Failed to load schema:\n{error}".format(error=str(exc))
-            )
-            return
-
-        # Validate rule file
-        try:
-            raw_text = rule_file.read_text(encoding="utf-8")
-            document = yaml.safe_load(raw_text) or {}
-
-            # Collect all validation errors
-            validation_errors = list(validator.iter_errors(document))
-
-            output_lines = [
-                "Validating: {path}".format(
-                    path=rule_file.relative_to(self._rules_dir) if self._rules_dir else rule_file.name
-                ),
-                ""
-            ]
-
-            if validation_errors:
-                output_lines.append("❌ {count} validation error(s) found:\n".format(count=len(validation_errors)))
-                for idx, error in enumerate(validation_errors, 1):
-                    path_str = " → ".join(str(p) for p in error.path) if error.path else "root"
-                    output_lines.append(f"{idx}. Path: {path_str}")
-                    output_lines.append(f"   Error: {error.message}")
-                    if error.validator:
-                        output_lines.append(f"   Validator: {error.validator}")
-                    output_lines.append("")
-            else:
-                output_lines.append("✓ Rule file is valid!")
-
-                # Show summary
-                targets_count = len(document.get("targets", []))
-                detectors_count = len(document.get("detectors", []))
-                signatures_count = len(document.get("signatures", []))
-                output_lines.append("")
-                output_lines.append("Summary:")
-                output_lines.append(f"  • {targets_count} target(s)")
-                output_lines.append(f"  • {detectors_count} detector(s)")
-                output_lines.append(f"  • {signatures_count} signature(s)")
-
-            self.validation_output.setPlainText("\n".join(output_lines))
-
-        except yaml.YAMLError as exc:
-            self.validation_output.setPlainText(
-                "❌ YAML parsing error:\n{error}".format(error=str(exc))
-            )
-        except Exception as exc:
-            self.validation_output.setPlainText(
-                "❌ Error:\n{error}".format(error=str(exc))
-            )
-
-    def _open_rule_in_editor(self) -> None:
-        """Open the selected rule file in the system's default editor."""
-        current_item = self.rules_list.currentItem()
-        if not current_item:
-            return
-
-        rule_file = Path(current_item.data(1))
-
-        if not rule_file.exists():
-            QMessageBox.warning(
-                self,
-                "File Not Found",
-                "Rule file not found: {path}".format(path=str(rule_file))
-            )
-            return
-
-        # Try to open with system default editor
-        try:
-            # Use xdg-open on Linux, open on macOS, start on Windows
-            import sys
-            if sys.platform.startswith('linux'):
-                subprocess.Popen(['xdg-open', str(rule_file)], env=clean_subprocess_env())
-            elif sys.platform == 'darwin':
-                subprocess.Popen(['open', str(rule_file)], env=clean_subprocess_env())
-            elif sys.platform == 'win32':
-                subprocess.Popen(['start', '', str(rule_file)], shell=True, env=clean_subprocess_env())
-            else:
-                # Fallback: use Qt's openUrl
-                QDesktopServices.openUrl(QUrl.fromLocalFile(str(rule_file)))
-        except Exception as exc:
-            QMessageBox.warning(
-                self,
-                "Error Opening File",
-                "Failed to open file in editor:\n{error}".format(error=str(exc))
-            )
 
     # Reports --------------------------------------------------
 

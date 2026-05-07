@@ -22,13 +22,13 @@ def test_preferences_has_text_blocks_tab(qtbot, tmp_path, monkeypatch: pytest.Mo
     dialog = PreferencesDialog(
         AppSettings(),
         config_dir=tmp_path,
-        rules_dir=tmp_path,
         tool_registry=None,
     )
     qtbot.addWidget(dialog)
 
     tab_names = [dialog.tabs.tabText(i) for i in range(dialog.tabs.count())]
     assert "Text Blocks" in tab_names
+    assert "Rules" not in tab_names
 
 
 @pytest.mark.gui_offscreen

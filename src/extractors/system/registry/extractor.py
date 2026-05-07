@@ -219,7 +219,7 @@ class SystemRegistryExtractor(BaseExtractor):
 
         Workflow:
             1. Read manifest.json to identify exported hives
-            2. Apply registry_offline.yml rules to local hive files
+            2. Apply Python-defined registry rules to local hive files
             3. Insert findings to os_indicators table
         """
         from .ingestion import run_registry_ingestion

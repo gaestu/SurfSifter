@@ -41,9 +41,6 @@ Controls for the built-in download manager (used by the Downloads tab):
 - **Max download size** — per-file size limit in bytes (default: 200 MB).
 - **Allowed content types** — MIME type patterns permitted for download (default includes `image/*`, `video/*`, `audio/*`, `application/pdf`, Office document types, archive formats, `text/plain`, `text/html`).
 
-### Rules
-- **Rule file** — path to a YAML rule file for registry analysis. The file is validated against a JSONSchema (Draft 2020-12) on save. Invalid rules are rejected with error details.
-
 ### Reports
 Default values for PDF report generation. These serve as pre-filled defaults when creating new reports:
 - **Author name** and **Function** (e.g., "Forensic Analyst")

@@ -319,7 +319,6 @@ class TimelineBuildConfig:
     case_root: Path
     db_path: Path
     evidence_id: int
-    rules_dir: Optional[Path] = None  # Deprecated: ignored since
     db_manager: Optional[DatabaseManager] = None
 
 
@@ -347,7 +346,6 @@ class TimelineBuildTask(BaseTask):
 
         self.report_progress(0, "Loading timeline configuration...")
 
-        # Config is now hardcoded, rules_dir is ignored
         config = load_timeline_config()
 
         self.report_progress(10, "Opening evidence database...")
