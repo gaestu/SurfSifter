@@ -157,17 +157,6 @@ EXTRACTOR_SECTIONS: List[ExtractorSection] = [
         "auto_populate": False,
     },
     {
-        "name": "Carvers",
-        "icon": "🔍",
-        "extractors": [
-            "bulk_extractor",
-            "foremost_carver",
-            "scalpel",
-        ],
-        "collapsed": True,
-        "auto_populate": False,
-    },
-    {
         "name": "Advanced Forensics (Experimental)",
         "icon": "🧪",
         "extractors": [
