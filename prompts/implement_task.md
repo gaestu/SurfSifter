@@ -35,7 +35,7 @@ Discipline:
 Add deterministic tests for any new behavior or bug fix.
 
 ### 4. Docs
-Update `docs/wiki/`, `planning/wip/`, or `README.md` only if user-facing behavior changed.
+Update `docs/wiki/`, `planning/wip/`, or `README.md` only if user-facing behavior changed. Check if the `CHANGELOG.md` needs a Entry in Unreleased and add one if needed.
 
 ### 5. Specialist Review (parallel)
 
