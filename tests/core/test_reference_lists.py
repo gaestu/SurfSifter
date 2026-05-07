@@ -2,12 +2,14 @@
 Tests for reference lists manager and matcher.
 """
 import sqlite3
+from hashlib import sha256
 from pathlib import Path
 
 import pytest
 
+import core.matching.manager as matching_manager
 from core.database import DatabaseManager
-from core.matching import ReferenceListManager, ReferenceListMatcher
+from core.matching import ConflictPolicy, ReferenceListManager, ReferenceListMatcher
 
 
 @pytest.fixture
@@ -65,6 +67,16 @@ def test_ref_manager_directories_created(ref_manager):
     """Test that reference list directories are created."""
     assert ref_manager.hashlists_dir.exists()
     assert ref_manager.filelists_dir.exists()
+
+
+def test_ref_manager_no_create_mode_does_not_create_directories(tmp_path):
+    """Read-only reference list access must not create config directories."""
+    base_path = tmp_path / "reference_lists"
+
+    manager = ReferenceListManager(base_path=base_path, create_dirs=False)
+
+    assert manager.hashlists_dir == base_path / "hashlists"
+    assert not base_path.exists()
 
 
 def test_create_hashlist(ref_manager):
@@ -153,6 +165,61 @@ def test_load_hashlist(ref_manager):
     assert "a1b2c3d4e5f6" in loaded  # Normalized to lowercase
 
 
+def test_load_hashlist_with_version_uses_file_bytes(ref_manager):
+    """Hash-list version is the SHA-256 of the exact text file bytes."""
+    contents = b"# test\nDEADBEEF\n"
+    ref_manager.hashlists_dir.mkdir(parents=True, exist_ok=True)
+    (ref_manager.hashlists_dir / "versioned.txt").write_bytes(contents)
+
+    hashes, version = ref_manager.load_hashlist_with_version("versioned")
+
+    assert hashes == {"deadbeef"}
+    assert version == sha256(contents).hexdigest()
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "",
+        "   ",
+        "../escape",
+        "nested/name",
+        "nested\\name",
+        "bad\nname",
+        "bad\u202ename",
+        "bad\u200bname",
+        "fullwidth\uff0fslash",
+    ],
+)
+def test_load_hashlist_with_version_rejects_unsafe_names(ref_manager, name):
+    """Hash-list loading rejects names that could escape or spoof paths."""
+    with pytest.raises(ValueError):
+        ref_manager.load_hashlist_with_version(name)
+
+
+def test_load_hashlist_with_version_allows_empty_stored_list(ref_manager):
+    """Stored empty hash lists can be loaded and viewed without import validation."""
+    ref_manager.hashlists_dir.mkdir(parents=True, exist_ok=True)
+    (ref_manager.hashlists_dir / "empty.txt").write_bytes(b"")
+
+    hashes, version = ref_manager.load_hashlist_with_version("empty")
+
+    assert hashes == set()
+    assert version == sha256(b"").hexdigest()
+    assert ref_manager.read_list_text("hashlist", "empty") == ""
+
+
+def test_load_hashlist_with_version_rejects_symlinks(ref_manager, tmp_path):
+    """Hash-list loading keeps the existing no-follow symlink protection."""
+    target = tmp_path / "target.txt"
+    target.write_text("deadbeef\n", encoding="utf-8")
+    symlink = ref_manager.hashlists_dir / "linked.txt"
+    symlink.symlink_to(target)
+
+    with pytest.raises(ValueError, match="Symlinked files"):
+        ref_manager.load_hashlist_with_version("linked")
+
+
 def test_load_filelist_wildcard(ref_manager):
     """Test loading a file list with wildcards."""
     # Create file list
@@ -229,6 +296,294 @@ def test_import_list(ref_manager, tmp_path):
     assert "imported" in ref_manager.list_available()["hashlists"]
     hashes = ref_manager.load_hashlist("imported")
     assert len(hashes) == 2
+
+
+def test_import_urllist_batch_generates_metadata(ref_manager, tmp_path):
+    """URL batch import should generate metadata for plain text files."""
+    first = tmp_path / "gambling.txt"
+    second = tmp_path / "social.txt"
+    first.write_text("*.casino.example\nexample.net/path\n", encoding="utf-8")
+    second.write_text("# comment\nsocial.example\n", encoding="utf-8")
+
+    results = ref_manager.import_urllist_batch(
+        [first, second],
+        category="Investigation",
+        description="Shared URL patterns",
+        is_regex=True,
+    )
+
+    assert [result.status for result in results] == ["imported", "imported"]
+    assert "gambling" in ref_manager.list_available()["urllists"]
+    assert "social" in ref_manager.list_available()["urllists"]
+
+    content = (ref_manager.urllists_dir / "gambling.txt").read_text(encoding="utf-8")
+    assert "# NAME: gambling" in content
+    assert "# CATEGORY: Investigation" in content
+    assert "# DESCRIPTION: Shared URL patterns" in content
+    assert "# TYPE: urllist" in content
+    assert "# REGEX: true" in content
+    assert "*.casino.example" in content
+
+    patterns, is_regex = ref_manager.load_urllist("gambling")
+    assert patterns == ["*.casino.example", "example.net/path"]
+    assert is_regex is True
+
+
+def test_import_urllist_batch_normalizes_multiline_metadata(ref_manager, tmp_path):
+    """Generated metadata values should stay on comment lines."""
+    source = tmp_path / "multiline.txt"
+    source.write_text("*.example\n", encoding="utf-8")
+
+    results = ref_manager.import_urllist_batch(
+        [source],
+        category="Category",
+        description="Line one\nLine two",
+        is_regex=True,
+    )
+
+    assert results[0].status == "imported"
+    metadata = ref_manager.get_metadata("urllist", "multiline")
+    assert metadata["DESCRIPTION"] == "Line one Line two"
+    assert metadata["REGEX"] == "true"
+
+    patterns, is_regex = ref_manager.load_urllist("multiline")
+    assert patterns == ["*.example"]
+    assert is_regex is True
+
+
+def test_import_urllist_batch_preserves_existing_metadata(ref_manager, tmp_path):
+    """Existing SurfSifter URL-list headers should be copied through."""
+    source = tmp_path / "preserved.txt"
+    source.write_text(
+        "# NAME: Original Name\n"
+        "# CATEGORY: Existing\n"
+        "# DESCRIPTION: Existing description\n"
+        "# TYPE: urllist\n"
+        "# REGEX: false\n"
+        "\n"
+        "*.preserved.example\n",
+        encoding="utf-8",
+    )
+
+    results = ref_manager.import_urllist_batch(
+        [source],
+        category="Generated",
+        description="Generated description",
+        is_regex=True,
+    )
+
+    assert results[0].status == "imported"
+    content = (ref_manager.urllists_dir / "preserved.txt").read_text(encoding="utf-8")
+    assert "# NAME: Original Name" in content
+    assert "# CATEGORY: Existing" in content
+    assert "# DESCRIPTION: Existing description" in content
+    assert "# REGEX: false" in content
+    assert "Generated description" not in content
+
+
+def test_import_urllist_batch_skip_conflict(ref_manager, tmp_path):
+    """Skip policy should leave an existing URL list untouched."""
+    ref_manager.create_list(
+        "urllist",
+        "conflict",
+        {"NAME": "Existing", "TYPE": "urllist", "REGEX": "false"},
+        ["existing.example"],
+    )
+    source = tmp_path / "conflict.txt"
+    source.write_text("new.example\n", encoding="utf-8")
+
+    results = ref_manager.import_urllist_batch(
+        [source],
+        conflict_policy=ConflictPolicy.SKIP,
+        category="Category",
+        description="Description",
+    )
+
+    assert results[0].status == "skipped"
+    patterns, _ = ref_manager.load_urllist("conflict")
+    assert patterns == ["existing.example"]
+
+
+def test_import_urllist_batch_overwrite_conflict(ref_manager, tmp_path):
+    """Overwrite policy should replace an existing URL list."""
+    ref_manager.create_list(
+        "urllist",
+        "conflict",
+        {"NAME": "Existing", "TYPE": "urllist", "REGEX": "false"},
+        ["existing.example"],
+    )
+    source = tmp_path / "conflict.txt"
+    source.write_text("new.example\n", encoding="utf-8")
+
+    results = ref_manager.import_urllist_batch(
+        [source],
+        conflict_policy=ConflictPolicy.OVERWRITE,
+        category="Category",
+        description="Description",
+    )
+
+    assert results[0].status == "overwritten"
+    patterns, _ = ref_manager.load_urllist("conflict")
+    assert patterns == ["new.example"]
+
+
+def test_import_urllist_batch_rename_conflict(ref_manager, tmp_path):
+    """Rename policy should suffix imported URL list names."""
+    ref_manager.create_list(
+        "urllist",
+        "conflict",
+        {"NAME": "Existing", "TYPE": "urllist", "REGEX": "false"},
+        ["existing.example"],
+    )
+    source = tmp_path / "conflict.txt"
+    source.write_text("renamed.example\n", encoding="utf-8")
+
+    results = ref_manager.import_urllist_batch(
+        [source],
+        conflict_policy=ConflictPolicy.RENAME,
+        category="Category",
+        description="Description",
+    )
+
+    assert results[0].status == "renamed"
+    assert results[0].dest_name == "conflict_1"
+    patterns, _ = ref_manager.load_urllist("conflict_1")
+    assert patterns == ["renamed.example"]
+
+
+def test_import_urllist_batch_reports_invalid_utf8(ref_manager, tmp_path):
+    """Invalid UTF-8 should be reported without aborting the batch."""
+    bad = tmp_path / "bad.txt"
+    good = tmp_path / "good.txt"
+    bad.write_bytes(b"\xff\xfe\x00")
+    good.write_text("good.example\n", encoding="utf-8")
+
+    results = ref_manager.import_urllist_batch(
+        [bad, good],
+        category="Category",
+        description="Description",
+    )
+
+    assert [result.status for result in results] == ["error", "imported"]
+    assert "Invalid UTF-8 encoding" in (results[0].error or "")
+    assert "good" in ref_manager.list_available()["urllists"]
+
+
+def test_import_urllist_batch_reports_empty_or_comment_only(ref_manager, tmp_path):
+    """Empty/comment-only URL lists should be reported as invalid."""
+    empty = tmp_path / "empty.txt"
+    comments = tmp_path / "comments.txt"
+    empty.write_text("", encoding="utf-8")
+    comments.write_text("# only comments\n\n# still comments\n", encoding="utf-8")
+
+    results = ref_manager.import_urllist_batch(
+        [empty, comments],
+        category="Category",
+        description="Description",
+    )
+
+    assert [result.status for result in results] == ["error", "error"]
+    assert results[0].error == "File is empty"
+    assert "No valid URL patterns found" in (results[1].error or "")
+
+
+def test_import_urllist_batch_rejects_unsafe_stem(ref_manager, tmp_path):
+    """Unsafe URL-list filenames should be rejected before destination paths are built."""
+    source = tmp_path / "bad\u202ename.txt"
+    source.write_text("bad.example\n", encoding="utf-8")
+
+    results = ref_manager.import_urllist_batch(
+        [source],
+        category="Category",
+        description="Description",
+    )
+
+    assert results[0].status == "error"
+    assert "Invalid reference list name" in (results[0].error or "")
+    assert not (ref_manager.urllists_dir / "bad\u202ename.txt").exists()
+
+
+def test_import_urllist_batch_rejects_oversized_file(ref_manager, tmp_path, monkeypatch):
+    """Oversized URL lists should be rejected before import."""
+    monkeypatch.setattr(matching_manager, "MAX_URLLIST_SIZE", 4)
+    source = tmp_path / "large.txt"
+    source.write_text("large.example\n", encoding="utf-8")
+
+    results = ref_manager.import_urllist_batch(
+        [source],
+        category="Category",
+        description="Description",
+    )
+
+    assert results[0].status == "error"
+    assert "File too large" in (results[0].error or "")
+    assert "large" not in ref_manager.list_available()["urllists"]
+
+
+def test_import_urllist_batch_rejects_symlink(ref_manager, tmp_path):
+    """Symlinked URL-list inputs should not be followed or copied."""
+    target = tmp_path / "outside.txt"
+    target.write_text("secret.example\n", encoding="utf-8")
+    source = tmp_path / "linked.txt"
+    source.symlink_to(target)
+
+    results = ref_manager.import_urllist_batch(
+        [source],
+        category="Category",
+        description="Description",
+    )
+
+    assert results[0].status == "error"
+    assert "Symlinked files are not supported" in (results[0].error or "")
+    assert "linked" not in ref_manager.list_available()["urllists"]
+
+
+def test_import_urllist_batch_replaces_destination_symlink_without_following(ref_manager, tmp_path):
+    """Overwrite should replace a destination symlink without writing through it."""
+    source = tmp_path / "safe.txt"
+    source.write_text("safe.example\n", encoding="utf-8")
+    outside = tmp_path / "outside.txt"
+    outside.write_text("unchanged\n", encoding="utf-8")
+    dest = ref_manager.urllists_dir / "safe.txt"
+    dest.symlink_to(outside)
+
+    results = ref_manager.import_urllist_batch(
+        [source],
+        conflict_policy=ConflictPolicy.OVERWRITE,
+        category="Category",
+        description="Description",
+    )
+
+    assert results[0].status == "overwritten"
+    assert outside.read_text(encoding="utf-8") == "unchanged\n"
+    assert not dest.is_symlink()
+    assert "safe.example" in dest.read_text(encoding="utf-8")
+
+
+def test_import_hashlist_batch_rejects_symlink(ref_manager, tmp_path):
+    """Symlinked hash-list inputs should not be followed or copied."""
+    target = tmp_path / "outside_hashes.txt"
+    target.write_text("d41d8cd98f00b204e9800998ecf8427e\n", encoding="utf-8")
+    source = tmp_path / "linked_hashes.txt"
+    source.symlink_to(target)
+
+    results = ref_manager.import_hashlist_batch([source])
+
+    assert results[0].status == "error"
+    assert "Symlinked files are not supported" in (results[0].error or "")
+    assert "linked_hashes" not in ref_manager.list_available()["hashlists"]
+
+
+def test_import_hashlist_batch_rejects_unsafe_stem(ref_manager, tmp_path):
+    """Unsafe hash-list filenames should be rejected before destination paths are built."""
+    source = tmp_path / "bad\u202ename.txt"
+    source.write_text("d41d8cd98f00b204e9800998ecf8427e\n", encoding="utf-8")
+
+    results = ref_manager.import_hashlist_batch([source])
+
+    assert results[0].status == "error"
+    assert "Invalid reference list name" in (results[0].error or "")
+    assert not (ref_manager.hashlists_dir / "bad\u202ename.txt").exists()
 
 
 def test_delete_list(ref_manager):

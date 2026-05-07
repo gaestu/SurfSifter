@@ -35,7 +35,6 @@ class AppConfig:
 
     base_dir: Path
     tool_paths: Dict[str, Path]
-    rules_dir: Path
     logs_dir: Path
     logging: LoggingConfig = field(default_factory=LoggingConfig)
     extraction: ExtractionConfig = field(default_factory=ExtractionConfig)
@@ -44,7 +43,6 @@ class AppConfig:
         """Serialize the configuration into a JSON string for manifest outputs."""
         data = {
             "tool_paths": {name: str(path) for name, path in self.tool_paths.items()},
-            "rules_dir": str(self.rules_dir),
             "logs_dir": str(self.logs_dir),
         }
         return json.dumps(data, indent=2, sort_keys=True)
@@ -71,8 +69,6 @@ def load_app_config(base_dir: Path) -> AppConfig:
     tool_paths: Dict[str, Path] = {}
     for tool_name, path_str in tool_paths_cfg.items():
         tool_paths[tool_name] = Path(path_str)
-
-    rules_dir = base_dir / "rules"
 
     # Logs must go to a persistent, writable location — not the ephemeral
     # _MEIPASS temp directory used by PyInstaller.
@@ -105,7 +101,6 @@ def load_app_config(base_dir: Path) -> AppConfig:
     return AppConfig(
         base_dir=base_dir,
         tool_paths=tool_paths,
-        rules_dir=rules_dir,
         logs_dir=logs_dir,
         logging=logging_config,
         extraction=extraction_config,

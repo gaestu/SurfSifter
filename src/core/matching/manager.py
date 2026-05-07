@@ -12,11 +12,17 @@ Supports three types of reference lists:
 from __future__ import annotations
 
 import logging
+import hashlib
+import os
+import re
 import shutil
+import stat
+import tempfile
+import unicodedata
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
-from typing import Callable, Dict, List, Optional, Set, Tuple
+from typing import Callable, Dict, IO, List, Optional, Set, Tuple
 
 __all__ = [
     "ReferenceListManager",
@@ -24,12 +30,16 @@ __all__ = [
     "ImportResult",
     "install_predefined_lists",
     "MAX_HASHLIST_SIZE",
+    "MAX_URLLIST_SIZE",
 ]
 
 logger = logging.getLogger(__name__)
 
 # Maximum file size for hash list import (100 MB)
 MAX_HASHLIST_SIZE = 100 * 1024 * 1024
+
+# Maximum file size for URL list import (100 MB)
+MAX_URLLIST_SIZE = 100 * 1024 * 1024
 
 
 class ConflictPolicy(Enum):
@@ -51,12 +61,13 @@ class ImportResult:
 class ReferenceListManager:
     """Manage reference lists (hash lists, file name lists, and URL lists)."""
 
-    def __init__(self, base_path: Optional[Path] = None):
+    def __init__(self, base_path: Optional[Path] = None, *, create_dirs: bool = True):
         """
         Initialize reference list manager.
 
         Args:
             base_path: Custom base path (default: ~/.config/surfsifter/reference_lists)
+            create_dirs: Create missing reference-list directories when True.
         """
         if base_path is None:
             primary = Path.home() / ".config" / "surfsifter" / "reference_lists"
@@ -73,10 +84,10 @@ class ReferenceListManager:
         self.filelists_dir = self.base_path / "filelists"
         self.urllists_dir = self.base_path / "urllists"
 
-        # Create directories if they don't exist
-        self.hashlists_dir.mkdir(parents=True, exist_ok=True)
-        self.filelists_dir.mkdir(parents=True, exist_ok=True)
-        self.urllists_dir.mkdir(parents=True, exist_ok=True)
+        if create_dirs:
+            self.hashlists_dir.mkdir(parents=True, exist_ok=True)
+            self.filelists_dir.mkdir(parents=True, exist_ok=True)
+            self.urllists_dir.mkdir(parents=True, exist_ok=True)
 
         logger.info(f"Reference lists base path: {self.base_path}")
 
@@ -97,22 +108,41 @@ class ReferenceListManager:
         Raises:
             FileNotFoundError: If hash list doesn't exist
         """
-        list_path = self.hashlists_dir / f"{name}.txt"
+        hashes, _version = self.load_hashlist_with_version(name)
+        return hashes
+
+    def load_hashlist_with_version(self, name: str) -> Tuple[Set[str], str]:
+        """
+        Load a hash list from one file snapshot and return its SHA-256 version.
+
+        Args:
+            name: Hash list name (without .txt extension)
+
+        Returns:
+            Tuple of normalized hash set and SHA-256 of the file bytes.
+
+        Raises:
+            FileNotFoundError: If hash list doesn't exist
+            UnicodeDecodeError: If the hash list is not UTF-8 text
+        """
+        list_path = self._get_list_path("hashlist", name)
         if not list_path.exists():
             raise FileNotFoundError(f"Hash list not found: {name}")
 
+        contents = self._read_hashlist_bytes(list_path)
+        version = hashlib.sha256(contents).hexdigest()
+
         hashes = set()
-        with open(list_path, "r", encoding="utf-8") as f:
-            for line in f:
-                line = line.strip()
-                # Skip comments and empty lines
-                if not line or line.startswith("#"):
-                    continue
-                # Normalize to lowercase for case-insensitive matching
-                hashes.add(line.lower())
+        for line in contents.decode("utf-8").splitlines():
+            line = line.strip()
+            # Skip comments and empty lines
+            if not line or line.startswith("#"):
+                continue
+            # Normalize to lowercase for case-insensitive matching
+            hashes.add(line.lower())
 
         logger.info(f"Loaded {len(hashes)} hashes from '{name}'")
-        return hashes
+        return hashes, version
 
     def load_filelist(self, name: str) -> Tuple[List[str], bool]:
         """
@@ -129,7 +159,7 @@ class ReferenceListManager:
         Raises:
             FileNotFoundError: If file list doesn't exist
         """
-        list_path = self.filelists_dir / f"{name}.txt"
+        list_path = self._get_list_path("filelist", name)
         if not list_path.exists():
             raise FileNotFoundError(f"File list not found: {name}")
 
@@ -141,7 +171,7 @@ class ReferenceListManager:
         if metadata.get("REGEX", "false").lower() in ("true", "yes", "1"):
             is_regex = True
 
-        with open(list_path, "r", encoding="utf-8") as f:
+        with self._open_hashlist_text(list_path) as f:
             for line in f:
                 line = line.strip()
                 # Skip comments and empty lines
@@ -167,7 +197,7 @@ class ReferenceListManager:
         Raises:
             FileNotFoundError: If URL list doesn't exist
         """
-        list_path = self.urllists_dir / f"{name}.txt"
+        list_path = self._get_list_path("urllist", name)
         if not list_path.exists():
             raise FileNotFoundError(f"URL list not found: {name}")
 
@@ -179,7 +209,7 @@ class ReferenceListManager:
         if metadata.get("REGEX", "false").lower() in ("true", "yes", "1"):
             is_regex = True
 
-        with open(list_path, "r", encoding="utf-8") as f:
+        with self._open_urllist_text(list_path) as f:
             for line in f:
                 line = line.strip()
                 # Skip comments and empty lines
@@ -202,15 +232,9 @@ class ReferenceListManager:
             Dictionary with keys 'hashlists', 'filelists', 'urllists',
             values are list names (without .txt)
         """
-        hashlists = [
-            f.stem for f in self.hashlists_dir.glob("*.txt") if f.is_file()
-        ]
-        filelists = [
-            f.stem for f in self.filelists_dir.glob("*.txt") if f.is_file()
-        ]
-        urllists = [
-            f.stem for f in self.urllists_dir.glob("*.txt") if f.is_file()
-        ]
+        hashlists = self._list_safe_stems(self.hashlists_dir)
+        filelists = self._list_safe_stems(self.filelists_dir)
+        urllists = self._list_safe_stems(self.urllists_dir)
 
         return {
             "hashlists": sorted(hashlists),
@@ -238,7 +262,11 @@ class ReferenceListManager:
             raise FileNotFoundError(f"{list_type} not found: {name}")
 
         metadata = {}
-        with open(list_path, "r", encoding="utf-8") as f:
+        if list_type == "urllist":
+            opener = self._open_urllist_text
+        else:
+            opener = self._open_hashlist_text
+        with opener(list_path) as f:
             for line in f:
                 line = line.strip()
                 # Stop at first non-comment line
@@ -273,8 +301,24 @@ class ReferenceListManager:
             raise FileNotFoundError(f"Source file not found: {source_path}")
 
         dest_path = self._get_list_path(list_type, name)
-        shutil.copy2(source_path, dest_path)
+        if list_type == "hashlist":
+            self._atomic_copy(source_path, dest_path)
+        elif list_type == "urllist":
+            self._atomic_copy_urllist(source_path, dest_path)
+        else:
+            shutil.copy2(source_path, dest_path)
         logger.info(f"Imported {list_type} '{name}' from {source_path}")
+
+    def read_list_text(self, list_type: str, name: str) -> str:
+        """Read a stored reference list with validation and no-follow checks."""
+        list_path = self._get_list_path(list_type, name)
+        if list_type == "hashlist":
+            return self._read_hashlist_bytes(list_path).decode("utf-8")
+        if list_type == "filelist":
+            return self._read_filelist_bytes(list_path).decode("utf-8")
+        if list_type == "urllist":
+            return self._read_urllist_bytes(list_path).decode("utf-8")
+        raise ValueError(f"Invalid list_type: {list_type}")
 
     def create_list(
         self,
@@ -419,6 +463,16 @@ class ReferenceListManager:
 
             # Derive name from filename (without extension)
             base_name = file_path.stem
+            try:
+                base_name = self.validate_list_name(base_name)
+            except ValueError as e:
+                results.append(ImportResult(
+                    source_path=file_path,
+                    dest_name=base_name,
+                    status="error",
+                    error=str(e),
+                ))
+                continue
 
             # Validate file
             is_valid, error_msg = self._validate_hashlist_file(file_path)
@@ -452,9 +506,8 @@ class ReferenceListManager:
                 dest_name = base_name
                 status = "imported"
 
-            # Perform import with atomic copy
-            dest_path = self.hashlists_dir / f"{dest_name}.txt"
             try:
+                dest_path = self._get_list_path("hashlist", dest_name)
                 self._atomic_copy(file_path, dest_path)
                 results.append(ImportResult(
                     source_path=file_path,
@@ -484,20 +537,187 @@ class ReferenceListManager:
 
         return results
 
+    def import_urllist_batch(
+        self,
+        files: List[Path],
+        conflict_policy: ConflictPolicy = ConflictPolicy.SKIP,
+        category: str = "Custom",
+        description: str = "",
+        is_regex: bool = False,
+        progress_callback: Optional[Callable[[int, int, str], None]] = None,
+        cancel_check: Optional[Callable[[], bool]] = None,
+    ) -> List[ImportResult]:
+        """
+        Import multiple URL list files.
+
+        Plain text inputs receive generated URL-list metadata. Inputs that
+        already declare SurfSifter URL-list metadata are copied as-is.
+
+        Args:
+            files: List of file paths to import
+            conflict_policy: How to handle name collisions (SKIP, OVERWRITE, RENAME)
+            category: Shared category for generated metadata
+            description: Shared description for generated metadata
+            is_regex: Shared regex flag for generated metadata
+            progress_callback: Optional callback(current, total, filename) for progress
+            cancel_check: Optional callback() -> bool to check if cancelled
+
+        Returns:
+            List of ImportResult for each file
+        """
+        results: List[ImportResult] = []
+        total = len(files)
+
+        for idx, file_path in enumerate(files):
+            if cancel_check and cancel_check():
+                logger.info(f"URL-list batch import cancelled at file {idx + 1}/{total}")
+                for remaining in files[idx:]:
+                    results.append(ImportResult(
+                        source_path=remaining,
+                        dest_name=remaining.stem,
+                        status="cancelled",
+                    ))
+                break
+
+            if progress_callback:
+                progress_callback(idx + 1, total, file_path.name)
+
+            base_name = file_path.stem
+            try:
+                base_name = self.validate_list_name(base_name)
+            except ValueError as e:
+                results.append(ImportResult(
+                    source_path=file_path,
+                    dest_name=base_name,
+                    status="error",
+                    error=str(e),
+                ))
+                continue
+
+            is_valid, error_msg = self._validate_urllist_file(file_path)
+            if not is_valid:
+                results.append(ImportResult(
+                    source_path=file_path,
+                    dest_name=base_name,
+                    status="error",
+                    error=error_msg,
+                ))
+                continue
+
+            exists = self.check_exists("urllist", base_name)
+            if exists:
+                if conflict_policy == ConflictPolicy.SKIP:
+                    results.append(ImportResult(
+                        source_path=file_path,
+                        dest_name=base_name,
+                        status="skipped",
+                    ))
+                    continue
+                elif conflict_policy == ConflictPolicy.RENAME:
+                    dest_name = self.generate_unique_name("urllist", base_name)
+                    status = "renamed"
+                else:
+                    dest_name = base_name
+                    status = "overwritten"
+            else:
+                dest_name = base_name
+                status = "imported"
+
+            try:
+                dest_path = self._get_list_path("urllist", dest_name)
+                if self._has_urllist_metadata(file_path):
+                    self._atomic_copy_urllist(file_path, dest_path)
+                else:
+                    self._atomic_write_urllist(
+                        file_path,
+                        dest_path,
+                        name=dest_name,
+                        category=category,
+                        description=description,
+                        is_regex=is_regex,
+                    )
+                results.append(ImportResult(
+                    source_path=file_path,
+                    dest_name=dest_name,
+                    status=status,
+                ))
+                logger.debug(f"Imported URL list '{dest_name}' from {file_path}")
+            except Exception as e:
+                results.append(ImportResult(
+                    source_path=file_path,
+                    dest_name=dest_name,
+                    status="error",
+                    error=str(e),
+                ))
+                logger.error(f"Failed to import URL list {file_path}: {e}")
+
+        imported = sum(1 for r in results if r.status in ("imported", "overwritten", "renamed"))
+        skipped = sum(1 for r in results if r.status == "skipped")
+        errors = sum(1 for r in results if r.status == "error")
+        cancelled = sum(1 for r in results if r.status == "cancelled")
+
+        logger.info(
+            f"URL-list batch import complete: {imported} imported, {skipped} skipped, "
+            f"{errors} errors, {cancelled} cancelled"
+        )
+
+        return results
+
     # -------------------------------------------------------------------------
     # Private Helper Methods
     # -------------------------------------------------------------------------
 
+    def _list_safe_stems(self, directory: Path) -> List[str]:
+        """List regular, non-symlink .txt reference-list stems with safe names."""
+        stems: List[str] = []
+        for path in directory.glob("*.txt"):
+            if path.is_symlink() or not path.is_file():
+                continue
+            try:
+                stems.append(self.validate_list_name(path.stem))
+            except ValueError:
+                logger.warning("Ignoring unsafe reference list name: %s", path.name)
+        return stems
+
     def _get_list_path(self, list_type: str, name: str) -> Path:
         """Get the file path for a reference list."""
+        safe_name = self.validate_list_name(name)
         if list_type == "hashlist":
-            return self.hashlists_dir / f"{name}.txt"
+            list_dir = self.hashlists_dir
         elif list_type == "filelist":
-            return self.filelists_dir / f"{name}.txt"
+            list_dir = self.filelists_dir
         elif list_type == "urllist":
-            return self.urllists_dir / f"{name}.txt"
+            list_dir = self.urllists_dir
         else:
             raise ValueError(f"Invalid list_type: {list_type}")
+
+        path = list_dir / f"{safe_name}.txt"
+        try:
+            base_resolved = self.base_path.resolve(strict=False)
+            list_dir_resolved = list_dir.resolve(strict=False)
+            list_dir_resolved.relative_to(base_resolved)
+            path.parent.resolve(strict=False).relative_to(list_dir_resolved)
+        except ValueError as exc:
+            raise ValueError(f"Invalid reference list path: {name!r}") from exc
+        return path
+
+    @staticmethod
+    def validate_list_name(name: str) -> str:
+        """Validate a reference-list name before turning it into a path."""
+        if not isinstance(name, str):
+            raise ValueError("Reference list name must be text")
+        name = unicodedata.normalize("NFKC", name)
+        if not name or not name.strip():
+            raise ValueError("Reference list name cannot be empty")
+        if name in {".", ".."} or ".." in name:
+            raise ValueError(f"Invalid reference list name: {name!r}")
+        if Path(name).is_absolute() or "/" in name or "\\" in name:
+            raise ValueError(f"Invalid reference list name: {name!r}")
+        if any(ord(char) < 32 or ord(char) == 127 for char in name):
+            raise ValueError("Reference list name contains control characters")
+        if not re.fullmatch(r"[A-Za-z0-9._\- ]+", name):
+            raise ValueError(f"Invalid reference list name: {name!r}")
+        return name
 
     def _validate_hashlist_file(self, path: Path) -> Tuple[bool, Optional[str]]:
         """
@@ -506,51 +726,259 @@ class ReferenceListManager:
         Returns:
             Tuple of (is_valid, error_message)
         """
-        # Check file exists
-        if not path.exists():
-            return False, f"File not found: {path}"
-
-        if not path.is_file():
-            return False, f"Not a file: {path}"
-
-        # Check file size
         try:
-            size = path.stat().st_size
-            if size > MAX_HASHLIST_SIZE:
-                return False, f"File too large: {size / (1024*1024):.1f} MB (max 100 MB)"
-            if size == 0:
-                return False, "File is empty"
-        except OSError as e:
-            return False, f"Cannot read file stats: {e}"
-
-        # Check UTF-8 encoding and content
-        try:
-            has_content = False
-            with open(path, "r", encoding="utf-8") as f:
+            with self._open_hashlist_text(path) as f:
+                has_content = False
                 for line in f:
                     line = line.strip()
                     if line and not line.startswith("#"):
                         has_content = True
                         break
-            if not has_content:
-                return False, "No valid hash entries found (only comments or empty lines)"
+                if not has_content:
+                    return False, "No valid hash entries found (only comments or empty lines)"
+        except FileNotFoundError:
+            return False, f"File not found: {path}"
+        except IsADirectoryError:
+            return False, f"Not a file: {path}"
         except UnicodeDecodeError as e:
             return False, f"Invalid UTF-8 encoding: {e}"
+        except ValueError as e:
+            return False, str(e)
         except OSError as e:
             return False, f"Cannot read file: {e}"
 
         return True, None
 
-    def _atomic_copy(self, src: Path, dest: Path) -> None:
-        """Copy file atomically using temp file + rename."""
-        temp_dest = dest.with_suffix(dest.suffix + ".tmp")
+    def _validate_urllist_file(self, path: Path) -> Tuple[bool, Optional[str]]:
+        """
+        Validate a URL list file before import.
+
+        URL list entries are patterns, so this intentionally does not perform
+        URL syntax validation.
+        """
         try:
-            shutil.copy2(src, temp_dest)
-            temp_dest.rename(dest)
+            with self._open_urllist_text(path) as f:
+                has_content = False
+                for line in f:
+                    line = line.strip()
+                    if line and not line.startswith("#"):
+                        has_content = True
+                        break
+                if not has_content:
+                    return False, "No valid URL patterns found (only comments or empty lines)"
+        except FileNotFoundError:
+            return False, f"File not found: {path}"
+        except IsADirectoryError:
+            return False, f"Not a file: {path}"
+        except UnicodeDecodeError as e:
+            return False, f"Invalid UTF-8 encoding: {e}"
+        except ValueError as e:
+            return False, str(e)
+        except OSError as e:
+            return False, f"Cannot read file: {e}"
+
+        return True, None
+
+    def _has_urllist_metadata(self, path: Path) -> bool:
+        """Return True when a source file declares SurfSifter URL-list metadata."""
+        metadata: Dict[str, str] = {}
+        with self._open_urllist_text(path) as f:
+            for line in f:
+                line = line.strip()
+                if not line.startswith("#"):
+                    break
+                if ":" in line:
+                    key, value = line[1:].split(":", 1)
+                    metadata[key.strip().upper()] = value.strip()
+
+        return metadata.get("TYPE", "").lower() == "urllist"
+
+    def _atomic_write_urllist(
+        self,
+        source_path: Path,
+        dest_path: Path,
+        name: str,
+        category: str,
+        description: str,
+        is_regex: bool,
+    ) -> None:
+        """Write a URL list with generated metadata using temp file + rename."""
+        temp_name: Optional[str] = None
+        try:
+            with tempfile.NamedTemporaryFile(
+                "w",
+                encoding="utf-8",
+                delete=False,
+                dir=dest_path.parent,
+                prefix=f".{dest_path.name}.",
+                suffix=".tmp",
+            ) as f:
+                temp_name = f.name
+                f.write(f"# NAME: {self._metadata_value(name)}\n")
+                f.write(f"# CATEGORY: {self._metadata_value(category)}\n")
+                f.write(f"# DESCRIPTION: {self._metadata_value(description)}\n")
+                f.write("# TYPE: urllist\n")
+                f.write(f"# REGEX: {'true' if is_regex else 'false'}\n")
+                f.write("\n")
+                with self._open_urllist_text(source_path) as source:
+                    for line in source:
+                        entry = line.strip()
+                        if entry and not entry.startswith("#"):
+                            f.write(f"{entry}\n")
+            Path(temp_name).replace(dest_path)
         except Exception:
-            if temp_dest.exists():
+            if temp_name and Path(temp_name).exists():
                 try:
-                    temp_dest.unlink()
+                    Path(temp_name).unlink()
+                except OSError:
+                    pass
+            raise
+
+    @staticmethod
+    def _metadata_value(value: str) -> str:
+        """Normalize metadata values to one line; colons remain allowed in values."""
+        return " ".join(str(value).splitlines())
+
+    def _open_urllist_text(self, path: Path) -> IO[str]:
+        """Open a URL-list source as a regular UTF-8 file without following symlinks."""
+        fd = self._open_urllist_binary_fd(path)
+        try:
+            return os.fdopen(fd, "r", encoding="utf-8")
+        except Exception:
+            os.close(fd)
+            raise
+
+    def _open_hashlist_text(self, path: Path) -> IO[str]:
+        """Open a hash-list source as a regular UTF-8 file without following symlinks."""
+        fd = self._open_hashlist_binary_fd(path)
+        try:
+            return os.fdopen(fd, "r", encoding="utf-8")
+        except Exception:
+            os.close(fd)
+            raise
+
+    def _open_urllist_binary_fd(self, path: Path) -> int:
+        """Open a URL-list source fd with no-follow semantics and size checks."""
+        return self._open_regular_binary_fd(path, MAX_URLLIST_SIZE)
+
+    def _open_hashlist_binary_fd(self, path: Path) -> int:
+        """Open a hash-list source fd with no-follow semantics and size checks."""
+        return self._open_regular_binary_fd(path, MAX_HASHLIST_SIZE)
+
+    def _read_hashlist_bytes(self, path: Path) -> bytes:
+        fd = self._open_regular_binary_fd(path, MAX_HASHLIST_SIZE, allow_empty=True)
+        return self._read_regular_bytes(fd, MAX_HASHLIST_SIZE)
+
+    def _read_filelist_bytes(self, path: Path) -> bytes:
+        fd = self._open_regular_binary_fd(path, MAX_HASHLIST_SIZE, allow_empty=True)
+        return self._read_regular_bytes(fd, MAX_HASHLIST_SIZE)
+
+    def _read_urllist_bytes(self, path: Path) -> bytes:
+        fd = self._open_regular_binary_fd(path, MAX_URLLIST_SIZE, allow_empty=True)
+        return self._read_regular_bytes(fd, MAX_URLLIST_SIZE)
+
+    def _read_regular_bytes(self, fd: int, max_size: int) -> bytes:
+        """Read an fd in bounded chunks so growth after open cannot exceed limits."""
+        chunks: List[bytes] = []
+        total = 0
+        with os.fdopen(fd, "rb") as handle:
+            while True:
+                chunk = handle.read(1024 * 1024)
+                if not chunk:
+                    break
+                total += len(chunk)
+                if total > max_size:
+                    raise ValueError(
+                        f"File too large: {total / (1024*1024):.1f} MB (max 100 MB)"
+                    )
+                chunks.append(chunk)
+        return b"".join(chunks)
+
+    def _open_regular_binary_fd(self, path: Path, max_size: int, *, allow_empty: bool = False) -> int:
+        """Open a source fd with no-follow semantics and stable regular-file checks."""
+        if path.is_symlink():
+            raise ValueError(f"Symlinked files are not supported: {path}")
+
+        flags = os.O_RDONLY
+        if hasattr(os, "O_NOFOLLOW"):
+            flags |= os.O_NOFOLLOW
+
+        try:
+            fd = os.open(path, flags)
+        except OSError as e:
+            if path.is_symlink():
+                raise ValueError(f"Symlinked files are not supported: {path}") from e
+            raise
+
+        try:
+            source_stat = os.fstat(fd)
+            path_stat = path.lstat()
+            # Keep source imports inside the user-selected regular file even if
+            # the import folder changes concurrently between path checks and open.
+            if stat.S_ISLNK(path_stat.st_mode):
+                raise ValueError(f"Symlinked files are not supported: {path}")
+            if (
+                source_stat.st_dev != path_stat.st_dev
+                or source_stat.st_ino != path_stat.st_ino
+            ):
+                raise ValueError(f"File changed during import validation: {path}")
+            if not stat.S_ISREG(source_stat.st_mode):
+                raise ValueError(f"Not a file: {path}")
+            if source_stat.st_size > max_size:
+                raise ValueError(
+                    f"File too large: {source_stat.st_size / (1024*1024):.1f} MB (max 100 MB)"
+                )
+            if source_stat.st_size == 0 and not allow_empty:
+                raise ValueError("File is empty")
+            return fd
+        except Exception:
+            os.close(fd)
+            raise
+
+    def _atomic_copy_urllist(self, src: Path, dest: Path) -> None:
+        """Copy a URL-list source without following symlinks using temp file + replace."""
+        temp_name: Optional[str] = None
+        try:
+            source_fd = self._open_urllist_binary_fd(src)
+            with os.fdopen(source_fd, "rb") as source:
+                with tempfile.NamedTemporaryFile(
+                    "wb",
+                    delete=False,
+                    dir=dest.parent,
+                    prefix=f".{dest.name}.",
+                    suffix=".tmp",
+                ) as temp:
+                    temp_name = temp.name
+                    shutil.copyfileobj(source, temp)
+            Path(temp_name).replace(dest)
+        except Exception:
+            if temp_name and Path(temp_name).exists():
+                try:
+                    Path(temp_name).unlink()
+                except OSError:
+                    pass
+            raise
+
+    def _atomic_copy(self, src: Path, dest: Path) -> None:
+        """Copy file atomically using temp file + replace."""
+        temp_name: Optional[str] = None
+        try:
+            source_fd = self._open_hashlist_binary_fd(src)
+            with os.fdopen(source_fd, "rb") as source:
+                with tempfile.NamedTemporaryFile(
+                    "wb",
+                    delete=False,
+                    dir=dest.parent,
+                    prefix=f".{dest.name}.",
+                    suffix=".tmp",
+                ) as temp:
+                    temp_name = temp.name
+                    shutil.copyfileobj(source, temp)
+            Path(temp_name).replace(dest)
+        except Exception:
+            if temp_name and Path(temp_name).exists():
+                try:
+                    Path(temp_name).unlink()
                 except OSError:
                     pass
             raise

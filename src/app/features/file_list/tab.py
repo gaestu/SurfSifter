@@ -312,7 +312,7 @@ class FileListTab(QWidget):
         self.db_manager = DatabaseManager(self.case_folder, case_db_path=case_db_path)
 
         # Initialize reference list manager
-        self.ref_manager = ReferenceListManager()
+        self.ref_manager = ReferenceListManager(create_dirs=False)
 
         # Cache evidence label to avoid repeated queries
         self._evidence_label_cache: Optional[str] = None

@@ -567,7 +567,7 @@ class TimelineTab(QWidget):
             )
             return
 
-        # Timeline config is now hardcoded, no rules_dir needed
+        # Timeline config is hardcoded.
         config = TimelineBuildConfig(
             case_root=self.case_data.case_folder,
             db_path=self.case_data.db_path,

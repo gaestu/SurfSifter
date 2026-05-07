@@ -7,7 +7,6 @@ Configuration is now hardcoded (no external YAML dependency).
 from __future__ import annotations
 
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Any, Dict
 
 from core.logging import get_logger
@@ -281,20 +280,13 @@ def get_timeline_config() -> TimelineConfig:
     return DEFAULT_TIMELINE_CONFIG
 
 
-def load_timeline_config(rules_dir: Path = None) -> TimelineConfig:
+def load_timeline_config() -> TimelineConfig:
     """
     Load timeline configuration.
 
-    This is a backward-compatible function that ignores the rules_dir parameter
-    and returns the hardcoded default configuration.
-
-    Args:
-        rules_dir: Ignored (kept for backward compatibility)
+    Returns the hardcoded default configuration.
 
     Returns:
         TimelineConfig with all source mappings and fusion parameters.
     """
-    # Configuration is now hardcoded, rules_dir is ignored
-    if rules_dir is not None:
-        LOGGER.debug("load_timeline_config: rules_dir parameter ignored (config is hardcoded)")
     return DEFAULT_TIMELINE_CONFIG

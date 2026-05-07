@@ -50,6 +50,7 @@ Update only if user-facing behavior changed:
 - `docs/wiki/` for extractors, features, reports, general guides
 - `planning/wip/` for behavioral spec changes
 - `README.md` for new commands / flags / setup
+- `CHANGELOG.md` Check if the CHANGELOG.md needs a Entry in Unreleased and add one if needed.
 
 ### 6. Specialist Review (parallel)
 

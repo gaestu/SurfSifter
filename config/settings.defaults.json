@@ -2,9 +2,6 @@
   "general": {
     "thumbnail_size": 180
   },
-  "hash": {
-    "db_path": ""
-  },
   "network": {
     "allowed_content_types": [
       "image/*",

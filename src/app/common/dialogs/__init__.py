@@ -53,6 +53,7 @@ from .image_preview import (
 # Batch import dialogs
 from .batch_import import (
     BatchHashListImportDialog,
+    BatchUrlListImportDialog,
     BatchImportProgressDialog,
 )
 
@@ -112,6 +113,7 @@ __all__ = [
     "MAX_IMAGE_AUTO_LOAD_SIZE",
     # Batch import
     "BatchHashListImportDialog",
+    "BatchUrlListImportDialog",
     "BatchImportProgressDialog",
     # Extraction
     "BulkExtractorReuseDialog",
@@ -132,4 +134,3 @@ __all__ = [
     # Tag & Match summary
     "TagMatchSummaryDialog",
 ]
-

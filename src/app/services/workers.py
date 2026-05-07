@@ -23,7 +23,6 @@ from core.database import (
     create_process_log,
     finalize_process_log,
     insert_download_audit,
-    insert_hash_matches,
 )
 from core.database import DatabaseManager, slugify_label
 from app.services.net_download import DownloadRequest, download_items, sanitize_filename
@@ -83,10 +82,6 @@ class DownloadTaskSignals(TaskSignals):
     # Extended signal with download_id and md5 for database persistence
     # Args: item_id, ok, path, error, bytes_written, sha256, content_type, duration_s, download_id, md5
     item_finished = Signal(int, bool, str, str, int, str, str, float, int, str)
-
-
-class HashLookupSignals(TaskSignals):
-    progress = Signal(int, int)
 
 
 class BaseTask(QRunnable):
@@ -324,7 +319,6 @@ class TimelineBuildConfig:
     case_root: Path
     db_path: Path
     evidence_id: int
-    rules_dir: Optional[Path] = None  # Deprecated: ignored since
     db_manager: Optional[DatabaseManager] = None
 
 
@@ -352,7 +346,6 @@ class TimelineBuildTask(BaseTask):
 
         self.report_progress(0, "Loading timeline configuration...")
 
-        # Config is now hardcoded, rules_dir is ignored
         config = load_timeline_config()
 
         self.report_progress(10, "Opening evidence database...")
@@ -418,189 +411,6 @@ def start_task(task: BaseTask, pool: Optional[QThreadPool] = None) -> None:
 
 class TaskCancelled(Exception):
     """Raised when a task is cancelled cooperatively."""
-
-
-class HashLookupTask(BaseTask):
-    """
-    Task for looking up image hashes against a hash database.
-
-    Phase 4: Updated to support both:
-    - Legacy schema: images(md5, note)
-    - New schema: hash_entries(hash_md5, hash_sha256, note) + hash_lists
-    """
-
-    def __init__(
-        self,
-        case_db_path: Path,
-        hash_db_path: Path,
-        evidence_id: int,
-        image_ids: List[int],
-        db_manager: Optional[DatabaseManager] = None,
-    ) -> None:
-        super().__init__()
-        self.signals = HashLookupSignals()
-        self.case_db_path = case_db_path
-        self.hash_db_path = hash_db_path
-        self.evidence_id = evidence_id
-        self.image_ids = image_ids
-        self.db_manager = db_manager
-
-    def _detect_schema(self, hash_conn: sqlite3.Connection) -> str:
-        """Detect hash database schema type."""
-        cursor = hash_conn.execute(
-            "SELECT name FROM sqlite_master WHERE type='table' AND name='hash_entries'"
-        )
-        if cursor.fetchone():
-            return "new"  # Phase 4 schema
-        return "legacy"  # Old schema with images(md5, note)
-
-    def _lookup_legacy(
-        self, hash_conn: sqlite3.Connection, md5_value: str, sha256_value: Optional[str]
-    ) -> Optional[Dict[str, Any]]:
-        """Look up hash using legacy schema: images(md5, note)."""
-        hash_row = hash_conn.execute(
-            "SELECT note FROM images WHERE md5 = ?",
-            (md5_value,),
-        ).fetchone()
-        if hash_row:
-            note = hash_row["note"] if "note" in hash_row.keys() else ""
-            return {
-                "db_md5": md5_value,
-                "note": note,
-                "list_name": self.hash_db_path.name,
-                "list_version": None,
-                "hash_sha256": None,
-            }
-        return None
-
-    def _lookup_new(
-        self, hash_conn: sqlite3.Connection, md5_value: str, sha256_value: Optional[str]
-    ) -> Optional[Dict[str, Any]]:
-        """Look up hash using new schema: hash_entries + hash_lists."""
-        # Build query for MD5 or SHA256 match
-        conditions = []
-        params = []
-
-        if md5_value:
-            conditions.append("he.hash_md5 = ?")
-            params.append(md5_value.lower())
-        if sha256_value:
-            conditions.append("he.hash_sha256 = ?")
-            params.append(sha256_value.lower())
-
-        if not conditions:
-            return None
-
-        sql = f"""
-            SELECT he.hash_md5, he.hash_sha256, he.note,
-                   hl.name as list_name, hl.source_file_hash as list_version
-            FROM hash_entries he
-            JOIN hash_lists hl ON he.list_id = hl.id
-            WHERE {' OR '.join(conditions)}
-            LIMIT 1
-        """
-
-        hash_row = hash_conn.execute(sql, params).fetchone()
-        if hash_row:
-            return {
-                "db_md5": hash_row["hash_md5"] or md5_value,
-                "note": hash_row["note"] or "",
-                "list_name": hash_row["list_name"],
-                "list_version": hash_row["list_version"],
-                "hash_sha256": hash_row["hash_sha256"],
-            }
-        return None
-
-    def run_task(self) -> List[Tuple[int, str, str]]:
-        if not self.hash_db_path.exists():
-            raise RuntimeError("Hash database not found")
-        if not self.image_ids:
-            return []
-        manager = self.db_manager or DatabaseManager(
-            self.case_db_path.parent,
-            case_db_path=self.case_db_path,
-        )
-        case_conn = manager.get_case_conn()
-        case_conn.row_factory = sqlite3.Row
-        hash_conn = sqlite3.connect(self.hash_db_path)
-        hash_conn.row_factory = sqlite3.Row
-
-        # Detect schema type
-        schema_type = self._detect_schema(hash_conn)
-
-        label_row = case_conn.execute(
-            "SELECT label FROM evidences WHERE id = ?",
-            (self.evidence_id,),
-        ).fetchone()
-        label = label_row["label"] if label_row else None
-        evidence_conn = manager.get_evidence_conn(self.evidence_id, label)
-        persisted: List[Dict[str, Any]] = []
-        matches: List[Tuple[int, str, str]] = []
-        log_id = create_process_log(
-            evidence_conn,
-            self.evidence_id,
-            "hash_lookup",
-            f"images={len(self.image_ids)} schema={schema_type}",
-        )
-        try:
-            total = len(self.image_ids)
-            self.signals.progress.emit(0, total)
-            for idx, image_id in enumerate(self.image_ids, start=1):
-                self.raise_if_cancelled()
-                self.signals.progress.emit(idx - 1, total)
-
-                # Get image hashes (MD5 and SHA256 if available)
-                image_row = evidence_conn.execute(
-                    "SELECT id, md5, sha256 FROM images WHERE id = ?",
-                    (image_id,),
-                ).fetchone()
-                if not image_row:
-                    continue
-                md5_value = image_row["md5"]
-                sha256_value = image_row["sha256"] if "sha256" in image_row.keys() else None
-
-                if not md5_value and not sha256_value:
-                    continue
-
-                # Look up hash
-                if schema_type == "new":
-                    match = self._lookup_new(hash_conn, md5_value, sha256_value)
-                else:
-                    match = self._lookup_legacy(hash_conn, md5_value, sha256_value)
-
-                if match:
-                    persisted.append({
-                        "image_id": image_id,
-                        "db_name": self.hash_db_path.name,
-                        "db_md5": match["db_md5"],
-                        "note": match["note"],
-                        "list_name": match.get("list_name"),
-                        "list_version": match.get("list_version"),
-                        "hash_sha256": match.get("hash_sha256"),
-                    })
-                    matches.append((image_id, match["db_md5"], match["note"] or ""))
-
-            if persisted:
-                insert_hash_matches(evidence_conn, self.evidence_id, persisted)
-            finalize_process_log(
-                evidence_conn,
-                log_id,
-                exit_code=0,
-                stdout=f"matches={len(matches)} schema={schema_type}",
-                stderr="",
-            )
-            self.signals.progress.emit(total, total)
-            return matches
-        except TaskCancelled:
-            finalize_process_log(evidence_conn, log_id, exit_code=1, stdout="", stderr="cancelled")
-            raise
-        except Exception as exc:
-            finalize_process_log(evidence_conn, log_id, exit_code=1, stdout="", stderr=str(exc))
-            raise
-        finally:
-            evidence_conn.close()
-            case_conn.close()
-            hash_conn.close()
 
 
 @dataclass
@@ -1090,7 +900,6 @@ class BatchHashListImportConfig:
     """Configuration for batch hash list import."""
     files: Tuple[Path, ...]  # Use tuple for frozen dataclass
     conflict_policy: str  # "skip", "overwrite", "rename"
-    rebuild_db: bool = True
 
 
 class BatchHashListImportTask(BaseTask):
@@ -1107,7 +916,7 @@ class BatchHashListImportTask(BaseTask):
         return self._results
 
     def run_task(self) -> Dict[str, Any]:
-        from core.matching import ReferenceListManager, ConflictPolicy, ImportResult, rebuild_hash_db
+        from core.matching import ReferenceListManager, ConflictPolicy
 
         ref_manager = ReferenceListManager()
 
@@ -1147,20 +956,6 @@ class BatchHashListImportTask(BaseTask):
         errors = sum(1 for r in self._results if r.status == "error")
         cancelled = sum(1 for r in self._results if r.status == "cancelled")
 
-        # Rebuild hash DB if requested and at least one file was imported
-        rebuild_success = False
-        rebuild_count = 0
-        if self.config.rebuild_db and imported > 0 and not self._cancelled:
-            self.report_progress(95, "Rebuilding hash database...")
-            try:
-                hash_db_path = ref_manager.base_path / "hash_database.sqlite"
-                rebuild_count = rebuild_hash_db(ref_manager.hashlists_dir, hash_db_path)
-                rebuild_success = True
-            except Exception as e:
-                from core.logging import get_logger
-                logger = get_logger("app.workers")
-                logger.error(f"Failed to rebuild hash database: {e}")
-
         self.report_progress(100, "Complete")
 
         return {
@@ -1170,8 +965,96 @@ class BatchHashListImportTask(BaseTask):
             "cancelled": cancelled,
             "total": len(self.config.files),
             "results": self._results,
-            "rebuild_success": rebuild_success,
-            "rebuild_count": rebuild_count,
+        }
+
+
+# -----------------------------------------------------------------------------
+# Batch URL List Import Task
+# -----------------------------------------------------------------------------
+
+
+class BatchUrlListImportSignals(TaskSignals):
+    """Signals for batch URL list import progress."""
+    # current_index, total_count, current_filename
+    file_progress = Signal(int, int, str)
+
+
+@dataclass(frozen=True)
+class BatchUrlListImportConfig:
+    """Configuration for batch URL list import."""
+    files: Tuple[Path, ...]
+    conflict_policy: str
+    category: str
+    description: str
+    is_regex: bool = False
+
+
+class BatchUrlListImportTask(BaseTask):
+    """Background task for batch URL list import."""
+
+    def __init__(self, config: BatchUrlListImportConfig) -> None:
+        super().__init__()
+        self.config = config
+        self.signals = BatchUrlListImportSignals()
+        self._results: List[Any] = []
+
+    def get_results(self) -> List[Any]:
+        """Get import results after task completes."""
+        return self._results
+
+    def run_task(self) -> Dict[str, Any]:
+        from core.matching import ReferenceListManager, ConflictPolicy
+
+        ref_manager = ReferenceListManager()
+
+        policy_map = {
+            "skip": ConflictPolicy.SKIP,
+            "overwrite": ConflictPolicy.OVERWRITE,
+            "rename": ConflictPolicy.RENAME,
+        }
+        conflict_policy = policy_map.get(self.config.conflict_policy, ConflictPolicy.SKIP)
+
+        def progress_cb(current: int, total: int, filename: str) -> None:
+            self.report_progress(
+                int(100 * current / total) if total > 0 else 0,
+                f"Importing {filename}..."
+            )
+            try:
+                self.signals.file_progress.emit(current, total, filename)
+            except RuntimeError:
+                pass
+
+        def cancel_cb() -> bool:
+            return self._cancelled
+
+        self._results = ref_manager.import_urllist_batch(
+            files=list(self.config.files),
+            conflict_policy=conflict_policy,
+            category=self.config.category,
+            description=self.config.description,
+            is_regex=self.config.is_regex,
+            progress_callback=progress_cb,
+            cancel_check=cancel_cb,
+        )
+
+        imported = sum(1 for r in self._results if r.status == "imported")
+        overwritten = sum(1 for r in self._results if r.status == "overwritten")
+        renamed = sum(1 for r in self._results if r.status == "renamed")
+        skipped = sum(1 for r in self._results if r.status == "skipped")
+        errors = sum(1 for r in self._results if r.status == "error")
+        cancelled = sum(1 for r in self._results if r.status == "cancelled")
+
+        self.report_progress(100, "Complete")
+
+        return {
+            "imported": imported,
+            "overwritten": overwritten,
+            "renamed": renamed,
+            "skipped": skipped,
+            "errors": errors,
+            "cancelled": cancelled,
+            "total": len(self.config.files),
+            "results": self._results,
         }
 
 

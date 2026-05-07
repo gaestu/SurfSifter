@@ -10,17 +10,10 @@ from typing import Optional
 from PySide6.QtWidgets import (
     QWidget,
     QVBoxLayout,
-    QHBoxLayout,
     QLabel,
     QCheckBox,
     QGroupBox,
-    QFileDialog,
-    QPushButton,
 )
-
-from core.logging import get_logger
-
-LOGGER = get_logger("extractors.system.registry.ui")
 
 
 class RegistryConfigWidget(QWidget):
@@ -29,7 +22,6 @@ class RegistryConfigWidget(QWidget):
 
     Allows user to:
     - Select which registry hives to scan (SYSTEM, SOFTWARE, SAM, SECURITY)
-    - Choose custom detector rules file (optional)
     """
 
     def __init__(self, parent: Optional[QWidget] = None):
@@ -58,31 +50,6 @@ class RegistryConfigWidget(QWidget):
 
         layout.addWidget(hive_group)
 
-        # Rules file selection
-        rules_group = QGroupBox("Detector Rules (Optional)")
-        rules_layout = QVBoxLayout(rules_group)
-
-        rules_info = QLabel(
-            "Built-in detection rules are used by default.\n"
-            "Use custom rules to detect additional registry indicators."
-        )
-        rules_info.setWordWrap(True)
-        rules_info.setStyleSheet("color: gray; font-size: 9pt;")
-        rules_layout.addWidget(rules_info)
-
-        rules_button_layout = QHBoxLayout()
-        self.rules_button = QPushButton("📁 Select Custom Rules")
-        self.rules_button.clicked.connect(self._select_rules_file)
-        rules_button_layout.addWidget(self.rules_button)
-        rules_button_layout.addStretch()
-        rules_layout.addLayout(rules_button_layout)
-
-        self.rules_label = QLabel("Using default rules")
-        self.rules_label.setStyleSheet("color: green; font-size: 9pt;")
-        rules_layout.addWidget(self.rules_label)
-
-        layout.addWidget(rules_group)
-
         # Ingestion options
         ingest_group = QGroupBox("Ingestion Options")
         ingest_layout = QVBoxLayout(ingest_group)
@@ -99,35 +66,14 @@ class RegistryConfigWidget(QWidget):
 
         layout.addStretch()
 
-        # Store custom rules path
-        self.custom_rules_path: Optional[Path] = None
-
-    def _select_rules_file(self):
-        """Open file dialog to select custom rules YAML."""
-        file_path, _ = QFileDialog.getOpenFileName(
-            self,
-            "Select Detector Rules File",
-            str(Path.home()),
-            "YAML Files (*.yml *.yaml);;All Files (*)"
-        )
-
-        if file_path:
-            self.custom_rules_path = Path(file_path)
-            self.rules_label.setText(f"Using: {self.custom_rules_path.name}")
-            self.rules_label.setStyleSheet("color: blue; font-size: 9pt;")
-            LOGGER.info("Selected custom rules: %s", self.custom_rules_path)
-
     def get_config(self) -> dict:
         """
         Get configuration from widget.
 
         Returns:
-            Dict with rules_path (if selected)
+            Dict with enabled ingestion options.
         """
         config = {}
-
-        if self.custom_rules_path:
-            config["rules_path"] = str(self.custom_rules_path)
 
         if self.purge_existing_checkbox.isChecked():
             config["purge_existing"] = True

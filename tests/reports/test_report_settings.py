@@ -106,6 +106,7 @@ class TestReportSettingsDataclass:
         data = json.loads(settings_file.read_text())
 
         assert "reports" in data
+        assert "hash" not in data
         assert data["reports"]["default_org_name"] == "Test Org"
         assert data["reports"]["default_locale"] == "en"
 

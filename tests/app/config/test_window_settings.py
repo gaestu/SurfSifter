@@ -45,7 +45,7 @@ class TestWindowSettings:
             "general": {"thumbnail_size": 180},
             "tools": {},
             "network": {},
-            "hash": {},
+            "hash": {"db_path": "/tmp/legacy-hash.sqlite"},
         }
 
         settings_file = tmp_path / "settings.json"
@@ -58,3 +58,25 @@ class TestWindowSettings:
         assert loaded.window.width is None
         assert loaded.window.height is None
         assert loaded.window.maximized is False
+
+    def test_app_settings_ignores_legacy_hash_config_on_save(self, tmp_path):
+        """Legacy hash settings load harmlessly and are omitted on save."""
+        from app.config.settings import AppSettings
+
+        old_config = {
+            "general": {"thumbnail_size": 180},
+            "tools": {},
+            "network": {},
+            "hash": {"db_path": "/tmp/legacy-hash.sqlite"},
+        }
+
+        settings_file = tmp_path / "settings.json"
+        settings_file.write_text(json.dumps(old_config), encoding="utf-8")
+
+        loaded = AppSettings.load(settings_file)
+
+        assert not hasattr(loaded, "hash")
+
+        loaded.save(settings_file)
+        saved = json.loads(settings_file.read_text(encoding="utf-8"))
+        assert "hash" not in saved

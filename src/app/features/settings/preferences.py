@@ -13,7 +13,6 @@ from PySide6.QtWidgets import (
     QFileDialog,
     QFormLayout,
     QFrame,
-    QGridLayout,
     QHBoxLayout,
     QLabel,
     QLineEdit,
@@ -28,14 +27,9 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from app.config.settings import AppSettings, GeneralSettings, HashSettings, NetworkSettings, ToolPaths, ReportSettings
+from app.config.settings import AppSettings, GeneralSettings, NetworkSettings, ToolPaths, ReportSettings
 from core.tool_discovery import get_tool_version
-from core.subprocess_env import clean_subprocess_env
-import json
 import shutil
-import subprocess
-import yaml
-from jsonschema import Draft202012Validator, ValidationError
 
 if TYPE_CHECKING:
     from core.tool_registry import ToolRegistry
@@ -48,7 +42,6 @@ class PreferencesDialog(QDialog):
         self,
         settings: AppSettings,
         config_dir: Optional[Path] = None,
-        rules_dir: Optional[Path] = None,
         tool_registry: Optional['ToolRegistry'] = None,  #
         initial_tab: Optional[str] = None,
         parent: Optional[QWidget] = None,
@@ -57,7 +50,6 @@ class PreferencesDialog(QDialog):
         self.setWindowTitle("Preferences")
         self._original = settings
         self._config_dir = Path(config_dir) if config_dir else None
-        self._rules_dir = Path(rules_dir) if rules_dir else None
         self._tool_registry = tool_registry  #
         self._initial_tab = initial_tab
         self._tool_line_edits: Dict[str, QLineEdit] = {}
@@ -67,11 +59,9 @@ class PreferencesDialog(QDialog):
         self._build_general_tab(settings)
         self._build_tools_tab(settings)
         self._build_network_tab(settings)
-        self._build_hash_tab(settings)
         self._build_file_lists_tab()  #
         self._build_hash_lists_tab()  #
         self._build_url_lists_tab()  #
-        self._build_rules_tab()
         self._build_reports_tab(settings)  #
         self._build_text_blocks_tab()  #
 
@@ -210,320 +200,6 @@ class PreferencesDialog(QDialog):
 
         widget.setLayout(form)
         self.tabs.addTab(widget, "Network")
-
-    # Hash ----------------------------------------------------------------
-
-    def _build_hash_tab(self, settings: AppSettings) -> None:
-        widget = QWidget()
-        layout = QGridLayout()
-        self.hash_path_edit = QLineEdit(settings.hash.db_path)
-        self.hash_path_edit.setPlaceholderText("Select SQLite hash database…")
-        self.hash_path_edit.textChanged.connect(self._validate)
-        browse = QPushButton("Browse…")
-        browse.clicked.connect(lambda: self._pick_file(self.hash_path_edit))
-        layout.addWidget(QLabel("SQLite database"), 0, 0)
-        layout.addWidget(self.hash_path_edit, 0, 1)
-        layout.addWidget(browse, 0, 2)
-        widget.setLayout(layout)
-        self.tabs.addTab(widget, "Hash DB")
-
-    # Rules ---------------------------------------------------------------
-
-    def _build_rules_tab(self) -> None:
-        """Build the Rules tab showing loaded rule files with validation."""
-        widget = QWidget()
-        layout = QVBoxLayout()
-
-        # Instructions
-        info_label = QLabel(
-            "Rule files define extraction targets, carvers, and detectors. "
-            "Select a rule to validate or open in your editor."
-        )
-        info_label.setWordWrap(True)
-        layout.addWidget(info_label)
-
-        # List of rule files
-        self.rules_list = QListWidget()
-        self.rules_list.currentItemChanged.connect(self._on_rule_selected)
-        layout.addWidget(self.rules_list)
-
-        # Buttons
-        buttons_layout = QHBoxLayout()
-
-        self.validate_rule_button = QPushButton("Validate Selected")
-        self.validate_rule_button.setEnabled(False)
-        self.validate_rule_button.clicked.connect(self._validate_selected_rule)
-        buttons_layout.addWidget(self.validate_rule_button)
-
-        self.validate_all_button = QPushButton("Validate All")
-        self.validate_all_button.clicked.connect(self._validate_all_rules)
-        buttons_layout.addWidget(self.validate_all_button)
-
-        self.open_editor_button = QPushButton("Open in Editor")
-        self.open_editor_button.setEnabled(False)
-        self.open_editor_button.clicked.connect(self._open_rule_in_editor)
-        buttons_layout.addWidget(self.open_editor_button)
-
-        self.refresh_button = QPushButton("Refresh")
-        self.refresh_button.clicked.connect(self._refresh_rules_list)
-        buttons_layout.addWidget(self.refresh_button)
-
-        buttons_layout.addStretch()
-        layout.addLayout(buttons_layout)
-
-        # Validation output
-        validation_label = QLabel("Validation Output:")
-        layout.addWidget(validation_label)
-
-        self.validation_output = QTextEdit()
-        self.validation_output.setReadOnly(True)
-        self.validation_output.setMaximumHeight(150)
-        layout.addWidget(self.validation_output)
-
-        widget.setLayout(layout)
-        self.tabs.addTab(widget, "Rules")
-
-        # Load rules list initially
-        self._refresh_rules_list()
-
-    def _refresh_rules_list(self) -> None:
-        """Refresh the list of rule files."""
-        self.rules_list.clear()
-        self.validation_output.clear()
-
-        if not self._rules_dir or not self._rules_dir.exists():
-            self.validation_output.setPlainText(
-                "Rules directory not found: {path}".format(
-                    path=str(self._rules_dir) if self._rules_dir else "None"
-                )
-            )
-            return
-
-        # Find all YAML rule files
-        rule_files = sorted(
-            {path for suffix in ("*.yml", "*.yaml") for path in self._rules_dir.rglob(suffix)}
-        )
-
-        if not rule_files:
-            self.validation_output.setPlainText(
-                "No rule files found in {path}".format(path=str(self._rules_dir))
-            )
-            return
-
-        for rule_file in rule_files:
-            relative_path = rule_file.relative_to(self._rules_dir)
-            item = QListWidgetItem(str(relative_path))
-            item.setData(1, rule_file)  # Store full path in user role
-            self.rules_list.addItem(item)
-
-        self.validation_output.setPlainText(
-            "Found {count} rule file(s).".format(count=len(rule_files))
-        )
-
-    def _on_rule_selected(self, current: Optional[QListWidgetItem], previous: Optional[QListWidgetItem]) -> None:  # noqa: ARG002
-        """Enable/disable buttons based on selection."""
-        has_selection = current is not None
-        self.validate_rule_button.setEnabled(has_selection)
-        self.open_editor_button.setEnabled(has_selection)
-
-    def _validate_selected_rule(self) -> None:
-        """Validate the selected rule file against the JSON schema."""
-        current_item = self.rules_list.currentItem()
-        if not current_item:
-            return
-
-        rule_file = Path(current_item.data(1))
-        self._validate_rule_file(rule_file)
-
-    def _validate_all_rules(self) -> None:
-        """Validate all loaded rule files against the JSON schema."""
-        if not self._rules_dir or not self._rules_dir.exists():
-            self.validation_output.setPlainText(
-                "Rules directory not found."
-            )
-            return
-
-        self.validation_output.clear()
-        output_lines = ["Validating all rules...\n"]
-
-        # Load schema
-        schema_path = self._rules_dir.parent / "docs" / "rules.schema.json"
-        if not schema_path.exists():
-            output_lines.append(
-                "ERROR: Schema file not found at {path}".format(path=str(schema_path))
-            )
-            self.validation_output.setPlainText("\n".join(output_lines))
-            return
-
-        try:
-            schema = json.loads(schema_path.read_text(encoding="utf-8"))
-            validator = Draft202012Validator(schema)
-        except Exception as exc:
-            output_lines.append(
-                "ERROR: Failed to load schema: {error}".format(error=str(exc))
-            )
-            self.validation_output.setPlainText("\n".join(output_lines))
-            return
-
-        # Validate each rule file
-        rule_files = sorted(
-            {path for suffix in ("*.yml", "*.yaml") for path in self._rules_dir.rglob(suffix)}
-        )
-
-        errors_found = 0
-        for rule_file in rule_files:
-            relative_path = rule_file.relative_to(self._rules_dir)
-            try:
-                raw_text = rule_file.read_text(encoding="utf-8")
-                document = yaml.safe_load(raw_text) or {}
-
-                # Collect all validation errors
-                validation_errors = list(validator.iter_errors(document))
-
-                if validation_errors:
-                    errors_found += 1
-                    output_lines.append(f"\n❌ {relative_path}: {len(validation_errors)} error(s)")
-                    for error in validation_errors[:3]:  # Show first 3 errors
-                        path_str = " → ".join(str(p) for p in error.path) if error.path else "root"
-                        output_lines.append(f"  • {path_str}: {error.message}")
-                    if len(validation_errors) > 3:
-                        output_lines.append(f"  ... and {len(validation_errors) - 3} more error(s)")
-                else:
-                    output_lines.append(f"✓ {relative_path}")
-
-            except yaml.YAMLError as exc:
-                errors_found += 1
-                output_lines.append(f"\n❌ {relative_path}: YAML parsing error")
-                output_lines.append(f"  {str(exc)}")
-            except Exception as exc:
-                errors_found += 1
-                output_lines.append(f"\n❌ {relative_path}: {str(exc)}")
-
-        # Summary
-        output_lines.append(f"\n{'-' * 50}")
-        if errors_found == 0:
-            output_lines.append("✓ All {count} rule file(s) validated successfully!".format(count=len(rule_files)))
-        else:
-            output_lines.append(
-                "❌ {errors} file(s) with errors out of {total}".format(
-                    errors=errors_found, total=len(rule_files)
-                )
-            )
-
-        self.validation_output.setPlainText("\n".join(output_lines))
-
-    def _validate_rule_file(self, rule_file: Path) -> None:
-        """Validate a single rule file and display results."""
-        self.validation_output.clear()
-
-        if not rule_file.exists():
-            self.validation_output.setPlainText(
-                "ERROR: Rule file not found: {path}".format(path=str(rule_file))
-            )
-            return
-
-        # Load schema
-        schema_path = self._rules_dir.parent / "docs" / "rules.schema.json" if self._rules_dir else None
-        if not schema_path or not schema_path.exists():
-            self.validation_output.setPlainText(
-                "ERROR: Schema file not found at {path}".format(
-                    path=str(schema_path) if schema_path else "Unknown"
-                )
-            )
-            return
-
-        try:
-            schema = json.loads(schema_path.read_text(encoding="utf-8"))
-            validator = Draft202012Validator(schema)
-        except Exception as exc:
-            self.validation_output.setPlainText(
-                "ERROR: Failed to load schema:\n{error}".format(error=str(exc))
-            )
-            return
-
-        # Validate rule file
-        try:
-            raw_text = rule_file.read_text(encoding="utf-8")
-            document = yaml.safe_load(raw_text) or {}
-
-            # Collect all validation errors
-            validation_errors = list(validator.iter_errors(document))
-
-            output_lines = [
-                "Validating: {path}".format(
-                    path=rule_file.relative_to(self._rules_dir) if self._rules_dir else rule_file.name
-                ),
-                ""
-            ]
-
-            if validation_errors:
-                output_lines.append("❌ {count} validation error(s) found:\n".format(count=len(validation_errors)))
-                for idx, error in enumerate(validation_errors, 1):
-                    path_str = " → ".join(str(p) for p in error.path) if error.path else "root"
-                    output_lines.append(f"{idx}. Path: {path_str}")
-                    output_lines.append(f"   Error: {error.message}")
-                    if error.validator:
-                        output_lines.append(f"   Validator: {error.validator}")
-                    output_lines.append("")
-            else:
-                output_lines.append("✓ Rule file is valid!")
-
-                # Show summary
-                targets_count = len(document.get("targets", []))
-                detectors_count = len(document.get("detectors", []))
-                signatures_count = len(document.get("signatures", []))
-                output_lines.append("")
-                output_lines.append("Summary:")
-                output_lines.append(f"  • {targets_count} target(s)")
-                output_lines.append(f"  • {detectors_count} detector(s)")
-                output_lines.append(f"  • {signatures_count} signature(s)")
-
-            self.validation_output.setPlainText("\n".join(output_lines))
-
-        except yaml.YAMLError as exc:
-            self.validation_output.setPlainText(
-                "❌ YAML parsing error:\n{error}".format(error=str(exc))
-            )
-        except Exception as exc:
-            self.validation_output.setPlainText(
-                "❌ Error:\n{error}".format(error=str(exc))
-            )
-
-    def _open_rule_in_editor(self) -> None:
-        """Open the selected rule file in the system's default editor."""
-        current_item = self.rules_list.currentItem()
-        if not current_item:
-            return
-
-        rule_file = Path(current_item.data(1))
-
-        if not rule_file.exists():
-            QMessageBox.warning(
-                self,
-                "File Not Found",
-                "Rule file not found: {path}".format(path=str(rule_file))
-            )
-            return
-
-        # Try to open with system default editor
-        try:
-            # Use xdg-open on Linux, open on macOS, start on Windows
-            import sys
-            if sys.platform.startswith('linux'):
-                subprocess.Popen(['xdg-open', str(rule_file)], env=clean_subprocess_env())
-            elif sys.platform == 'darwin':
-                subprocess.Popen(['open', str(rule_file)], env=clean_subprocess_env())
-            elif sys.platform == 'win32':
-                subprocess.Popen(['start', '', str(rule_file)], shell=True, env=clean_subprocess_env())
-            else:
-                # Fallback: use Qt's openUrl
-                QDesktopServices.openUrl(QUrl.fromLocalFile(str(rule_file)))
-        except Exception as exc:
-            QMessageBox.warning(
-                self,
-                "Error Opening File",
-                "Failed to open file in editor:\n{error}".format(error=str(exc))
-            )
 
     # Reports --------------------------------------------------
 
@@ -852,30 +528,11 @@ class PreferencesDialog(QDialog):
         buttons_layout.addStretch()
         layout.addLayout(buttons_layout)
 
-        # Rebuild Hash DB section (Phase 4)
-        hash_db_layout = QHBoxLayout()
-
-        self.rebuild_hashdb_btn = QPushButton("Rebuild Hash DB")
-        self.rebuild_hashdb_btn.setToolTip(
-            "Rebuild the SQLite hash database from all .txt hash lists.\n"
-            "This is required for fast hash matching in the Images tab."
-        )
-        self.rebuild_hashdb_btn.clicked.connect(self._rebuild_hash_db)
-        hash_db_layout.addWidget(self.rebuild_hashdb_btn)
-
-        self.hash_db_status_label = QLabel()
-        self.hash_db_status_label.setStyleSheet("color: gray; font-style: italic;")
-        hash_db_layout.addWidget(self.hash_db_status_label)
-        hash_db_layout.addStretch()
-
-        layout.addLayout(hash_db_layout)
-
         widget.setLayout(layout)
         self.tabs.addTab(widget, "Hash Lists")
 
         # Load hash lists
         self._refresh_hash_lists()
-        self._update_hash_db_status()
 
     def _build_url_lists_tab(self) -> None:
         """Build the URL lists management tab."""
@@ -908,6 +565,11 @@ class PreferencesDialog(QDialog):
         self.add_urllist_btn = QPushButton("Add URL List")
         self.add_urllist_btn.clicked.connect(self._add_urllist)
         buttons_layout.addWidget(self.add_urllist_btn)
+
+        self.import_urllist_folder_btn = QPushButton("📁 Import Folder")
+        self.import_urllist_folder_btn.setToolTip("Import all .txt URL lists from a folder")
+        self.import_urllist_folder_btn.clicked.connect(self._import_urllist_folder)
+        buttons_layout.addWidget(self.import_urllist_folder_btn)
 
         self.view_urllist_btn = QPushButton("View")
         self.view_urllist_btn.setEnabled(False)
@@ -997,9 +659,7 @@ class PreferencesDialog(QDialog):
 
         # Copy file to hashlists directory
         try:
-            import shutil
-            dest_path = self.ref_manager.hashlists_dir / f"{name}.txt"
-            if dest_path.exists():
+            if self.ref_manager.check_exists("hashlist", name):
                 reply = QMessageBox.question(
                     self,
                     "Overwrite?",
@@ -1009,7 +669,7 @@ class PreferencesDialog(QDialog):
                 if reply != QMessageBox.Yes:
                     return
 
-            shutil.copy2(file_path, dest_path)
+            self.ref_manager.import_list(Path(file_path), "hashlist", name)
             QMessageBox.information(
                 self,
                 "Success",
@@ -1066,8 +726,6 @@ class PreferencesDialog(QDialog):
             return
 
         conflict_policy = preview_dialog.get_conflict_policy()
-        rebuild_db = preview_dialog.should_rebuild_db()
-
         # Step 6: Show progress dialog and run import
         progress_dialog = BatchImportProgressDialog(len(selected_files), self)
 
@@ -1075,7 +733,6 @@ class PreferencesDialog(QDialog):
         config = BatchHashListImportConfig(
             files=tuple(selected_files),
             conflict_policy=conflict_policy,
-            rebuild_db=rebuild_db,
         )
 
         # Create and configure task
@@ -1095,8 +752,6 @@ class PreferencesDialog(QDialog):
             skipped = result.get("skipped", 0)
             errors = result.get("errors", 0)
             cancelled = result.get("cancelled", 0)
-            rebuild_success = result.get("rebuild_success", False)
-            rebuild_count = result.get("rebuild_count", 0)
 
             summary_parts = []
             if imported > 0:
@@ -1110,11 +765,6 @@ class PreferencesDialog(QDialog):
 
             summary = ", ".join(summary_parts) if summary_parts else "No files processed"
 
-            if rebuild_success:
-                summary += f"\n\nHash database rebuilt with {rebuild_count} entries."
-            elif rebuild_db and imported > 0:
-                summary += "\n\n⚠ Hash database rebuild failed."
-
             QMessageBox.information(
                 self,
                 "Import Complete",
@@ -1123,7 +773,6 @@ class PreferencesDialog(QDialog):
 
             # Refresh the list
             self._refresh_reference_lists()
-            self._update_hash_db_status()
 
         def on_error(error: str, tb: str) -> None:
             progress_dialog.close()
@@ -1137,7 +786,8 @@ class PreferencesDialog(QDialog):
             self._import_task = None
 
         def on_cancelled() -> None:
-            self._import_task.cancel()
+            if self._import_task is not None:
+                self._import_task.cancel()
 
         # Connect signals
         self._import_task.signals.progress.connect(on_progress)
@@ -1151,6 +801,124 @@ class PreferencesDialog(QDialog):
         QThreadPool.globalInstance().start(self._import_task)
 
         # Show progress dialog (non-blocking)
+        progress_dialog.exec()
+
+    def _import_urllist_folder(self) -> None:
+        """Import all URL lists from a selected folder."""
+        from PySide6.QtCore import QThreadPool
+        from app.common.dialogs import BatchUrlListImportDialog, BatchImportProgressDialog
+        from app.services.workers import BatchUrlListImportTask, BatchUrlListImportConfig
+
+        folder = QFileDialog.getExistingDirectory(
+            self,
+            "Select Folder with URL Lists",
+            "",
+            QFileDialog.ShowDirsOnly
+        )
+
+        if not folder:
+            return
+
+        folder_path = Path(folder)
+        files = sorted(folder_path.glob("*.txt"))
+
+        if not files:
+            QMessageBox.information(
+                self,
+                "No Files Found",
+                "No .txt files found in the selected folder."
+            )
+            return
+
+        existing = set(self.ref_manager.list_available()["urllists"])
+
+        preview_dialog = BatchUrlListImportDialog(files, existing, self)
+        if preview_dialog.exec() != QDialog.Accepted:
+            return
+
+        selected_files = preview_dialog.get_selected_files()
+        if not selected_files:
+            return
+
+        progress_dialog = BatchImportProgressDialog(
+            len(selected_files),
+            self,
+            title="Importing URL Lists",
+        )
+
+        config = BatchUrlListImportConfig(
+            files=tuple(selected_files),
+            conflict_policy=preview_dialog.get_conflict_policy(),
+            category=preview_dialog.get_category(),
+            description=preview_dialog.get_description(),
+            is_regex=preview_dialog.is_regex(),
+        )
+
+        self._import_task = BatchUrlListImportTask(config)
+
+        def on_progress(percent: int, message: str) -> None:
+            pass
+
+        def on_file_progress(current: int, total: int, filename: str) -> None:
+            progress_dialog.update_progress(current, filename)
+
+        def on_result(result: dict) -> None:
+            progress_dialog.set_complete()
+
+            imported = result.get("imported", 0)
+            overwritten = result.get("overwritten", 0)
+            renamed = result.get("renamed", 0)
+            skipped = result.get("skipped", 0)
+            errors = result.get("errors", 0)
+            cancelled = result.get("cancelled", 0)
+
+            summary_parts = []
+            if imported > 0:
+                summary_parts.append(f"{imported} imported")
+            if overwritten > 0:
+                summary_parts.append(f"{overwritten} overwritten")
+            if renamed > 0:
+                summary_parts.append(f"{renamed} renamed")
+            if skipped > 0:
+                summary_parts.append(f"{skipped} skipped")
+            if errors > 0:
+                summary_parts.append(f"{errors} errors")
+            if cancelled > 0:
+                summary_parts.append(f"{cancelled} cancelled")
+
+            summary = ", ".join(summary_parts) if summary_parts else "No files processed"
+
+            QMessageBox.information(
+                self,
+                "Import Complete",
+                summary
+            )
+
+            self._refresh_url_lists()
+
+        def on_error(error: str, tb: str) -> None:
+            progress_dialog.close()
+            QMessageBox.critical(
+                self,
+                "Import Error",
+                f"Import failed: {error}"
+            )
+
+        def on_finished() -> None:
+            self._import_task = None
+
+        def on_cancelled() -> None:
+            if self._import_task is not None:
+                self._import_task.cancel()
+
+        self._import_task.signals.progress.connect(on_progress)
+        self._import_task.signals.file_progress.connect(on_file_progress)
+        self._import_task.signals.result.connect(on_result)
+        self._import_task.signals.error.connect(on_error)
+        self._import_task.signals.finished.connect(on_finished)
+        progress_dialog.cancelled.connect(on_cancelled)
+
+        QThreadPool.globalInstance().start(self._import_task)
         progress_dialog.exec()
 
     def _add_filelist(self) -> None:
@@ -1207,8 +975,7 @@ class PreferencesDialog(QDialog):
             return
 
         # Step 5: Check if file list already exists
-        dest_path = self.ref_manager.filelists_dir / f"{dialog.name}.txt"
-        if dest_path.exists():
+        if self.ref_manager.check_exists("filelist", dialog.name):
             reply = QMessageBox.question(
                 self,
                 "Overwrite?",
@@ -1220,19 +987,15 @@ class PreferencesDialog(QDialog):
 
         # Step 6: Generate metadata and write file
         try:
-            with open(dest_path, "w", encoding="utf-8") as f:
-                # Write metadata header
-                f.write(f"# NAME: {dialog.name}\n")
-                f.write(f"# CATEGORY: {dialog.category}\n")
-                f.write(f"# DESCRIPTION: {dialog.description}\n")
-                f.write(f"# UPDATED: {datetime.now().strftime('%Y-%m-%d')}\n")
-                f.write(f"# TYPE: filelist\n")
-                f.write(f"# REGEX: {'true' if dialog.is_regex else 'false'}\n")
-                f.write("\n")
-
-                # Write patterns
-                for pattern in patterns:
-                    f.write(f"{pattern}\n")
+            metadata = {
+                "NAME": dialog.name,
+                "CATEGORY": dialog.category,
+                "DESCRIPTION": dialog.description,
+                "UPDATED": datetime.now().strftime("%Y-%m-%d"),
+                "TYPE": "filelist",
+                "REGEX": "true" if dialog.is_regex else "false",
+            }
+            self.ref_manager.create_list("filelist", dialog.name, metadata, patterns)
 
             QMessageBox.information(
                 self,
@@ -1259,8 +1022,7 @@ class PreferencesDialog(QDialog):
 
         name = current_item.text()
         try:
-            list_path = self.ref_manager.hashlists_dir / f"{name}.txt"
-            content = list_path.read_text(encoding="utf-8")
+            content = self.ref_manager.read_list_text("hashlist", name)
 
             # Show in dialog
             dialog = QDialog(self)
@@ -1294,8 +1056,7 @@ class PreferencesDialog(QDialog):
 
         name = current_item.text()
         try:
-            list_path = self.ref_manager.filelists_dir / f"{name}.txt"
-            content = list_path.read_text(encoding="utf-8")
+            content = self.ref_manager.read_list_text("filelist", name)
 
             # Show in dialog
             dialog = QDialog(self)
@@ -1339,8 +1100,7 @@ class PreferencesDialog(QDialog):
             return
 
         try:
-            list_path = self.ref_manager.hashlists_dir / f"{name}.txt"
-            list_path.unlink()
+            self.ref_manager.delete_list("hashlist", name)
             QMessageBox.information(
                 self,
                 "Success",
@@ -1352,106 +1112,6 @@ class PreferencesDialog(QDialog):
                 self,
                 "Error",
                 "Failed to delete hash list: {error}".format(error=str(e))
-            )
-
-    def _rebuild_hash_db(self) -> None:
-        """Rebuild the SQLite hash database from all .txt hash lists (Phase 4)."""
-        from core.matching import rebuild_hash_db
-
-        hashlists_dir = self.ref_manager.hashlists_dir
-        if not hashlists_dir.exists():
-            QMessageBox.warning(
-                self,
-                "No Hash Lists",
-                "Hash lists directory does not exist: {path}".format(path=str(hashlists_dir))
-            )
-            return
-
-        # Check if there are any hash list files
-        txt_files = list(hashlists_dir.glob("*.txt"))
-        if not txt_files:
-            QMessageBox.information(
-                self,
-                "No Hash Lists",
-                f"No .txt hash list files found in:\n{hashlists_dir}\n\n"
-                "Add hash lists first, then rebuild the database."
-            )
-            return
-
-        # Confirm rebuild
-        reply = QMessageBox.question(
-            self,
-            "Rebuild Hash Database",
-            f"This will rebuild the hash database from {len(txt_files)} .txt file(s).\n\n"
-            f"Location: {self._get_hash_db_path()}\n\n"
-            "Continue?",
-            QMessageBox.Yes | QMessageBox.No
-        )
-
-        if reply != QMessageBox.Yes:
-            return
-
-        # Rebuild
-        try:
-            db_path = self._get_hash_db_path()
-            total = rebuild_hash_db(hashlists_dir, db_path)
-
-            QMessageBox.information(
-                self,
-                "Success",
-                f"Hash database rebuilt successfully!\n\n"
-                f"Total entries: {total}\n"
-                f"Location: {db_path}"
-            )
-            self._update_hash_db_status()
-
-        except Exception as e:
-            QMessageBox.critical(
-                self,
-                "Error",
-                "Failed to rebuild hash database:\n{error}".format(error=str(e))
-            )
-
-    def _get_hash_db_path(self) -> Path:
-        """Get the path to the hash database file."""
-        # Use ~/.config/surfsifter/hash_lists.db
-        import os
-        config_dir = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config"))
-        app_config_dir = config_dir / "surfsifter"
-        app_config_dir.mkdir(parents=True, exist_ok=True)
-        return app_config_dir / "hash_lists.db"
-
-    def _update_hash_db_status(self) -> None:
-        """Update the hash database status label."""
-        from core.matching import list_hash_lists
-
-        db_path = self._get_hash_db_path()
-
-        if not db_path.exists():
-            self.hash_db_status_label.setText(
-                "No hash database. Click 'Rebuild Hash DB' to create one."
-            )
-            return
-
-        try:
-            lists = list_hash_lists(db_path)
-            total_entries = sum(lst.get("entry_count", 0) for lst in lists)
-
-            # Get last modified time
-            import datetime
-            mtime = datetime.datetime.fromtimestamp(db_path.stat().st_mtime)
-            mtime_str = mtime.strftime("%Y-%m-%d %H:%M")
-
-            self.hash_db_status_label.setText(
-                "DB: {lists} list(s), {entries} entries (updated: {time})".format(
-                    lists=len(lists),
-                    entries=total_entries,
-                    time=mtime_str
-                )
-            )
-        except Exception as e:
-            self.hash_db_status_label.setText(
-                "Error reading hash database: {error}".format(error=str(e))
             )
 
     def _delete_filelist(self) -> None:
@@ -1472,8 +1132,7 @@ class PreferencesDialog(QDialog):
             return
 
         try:
-            list_path = self.ref_manager.filelists_dir / f"{name}.txt"
-            list_path.unlink()
+            self.ref_manager.delete_list("filelist", name)
             QMessageBox.information(
                 self,
                 "Success",
@@ -1558,8 +1217,7 @@ class PreferencesDialog(QDialog):
             return
 
         # Step 5: Check if URL list already exists
-        dest_path = self.ref_manager.urllists_dir / f"{dialog.name}.txt"
-        if dest_path.exists():
+        if self.ref_manager.check_exists("urllist", dialog.name):
             reply = QMessageBox.question(
                 self,
                 "Overwrite?",
@@ -1571,19 +1229,15 @@ class PreferencesDialog(QDialog):
 
         # Step 6: Generate metadata and write file
         try:
-            with open(dest_path, "w", encoding="utf-8") as f:
-                # Write metadata header
-                f.write(f"# NAME: {dialog.name}\n")
-                f.write(f"# CATEGORY: {dialog.category}\n")
-                f.write(f"# DESCRIPTION: {dialog.description}\n")
-                f.write(f"# UPDATED: {datetime.now().strftime('%Y-%m-%d')}\n")
-                f.write(f"# TYPE: urllist\n")
-                f.write(f"# REGEX: {'true' if dialog.is_regex else 'false'}\n")
-                f.write("\n")
-
-                # Write patterns
-                for pattern in patterns:
-                    f.write(f"{pattern}\n")
+            metadata = {
+                "NAME": dialog.name,
+                "CATEGORY": dialog.category,
+                "DESCRIPTION": dialog.description,
+                "UPDATED": datetime.now().strftime("%Y-%m-%d"),
+                "TYPE": "urllist",
+                "REGEX": "true" if dialog.is_regex else "false",
+            }
+            self.ref_manager.create_list("urllist", dialog.name, metadata, patterns)
 
             QMessageBox.information(
                 self,
@@ -1610,8 +1264,7 @@ class PreferencesDialog(QDialog):
 
         name = current_item.text()
         try:
-            list_path = self.ref_manager.urllists_dir / f"{name}.txt"
-            content = list_path.read_text(encoding="utf-8")
+            content = self.ref_manager.read_list_text("urllist", name)
 
             # Show in dialog
             dialog = QDialog(self)
@@ -1655,8 +1308,7 @@ class PreferencesDialog(QDialog):
             return
 
         try:
-            list_path = self.ref_manager.urllists_dir / f"{name}.txt"
-            list_path.unlink()
+            self.ref_manager.delete_list("urllist", name)
             QMessageBox.information(
                 self,
                 "Success",
@@ -1756,7 +1408,6 @@ class PreferencesDialog(QDialog):
         self.allowed_types_edit.setText(",".join(defaults.network.allowed_content_types))
         for name, editor in self._tool_line_edits.items():
             editor.setText(getattr(defaults.tools, name, ""))
-        self.hash_path_edit.setText(defaults.hash.db_path)
         # Report defaults
         self.report_author_function.setText(defaults.reports.default_author_function)
         self.report_author_name.setText(defaults.reports.default_author_name)
@@ -1790,10 +1441,6 @@ class PreferencesDialog(QDialog):
                 if path and not Path(path).exists():
                     errors.append("{tool} path not found.".format(tool=name.title()))
                     break
-
-        hash_path = self.hash_path_edit.text().strip()
-        if hash_path and not Path(hash_path).exists():
-            errors.append("Hash database path not found.")
 
         if errors:
             self.error_label.setText(errors[0])
@@ -1836,7 +1483,6 @@ class PreferencesDialog(QDialog):
             max_bytes=self.max_bytes_spin.value() * 1024 * 1024,
             allowed_content_types=self._parse_content_types(),
         )
-        hash_cfg = HashSettings(db_path=self.hash_path_edit.text().strip())
 
         # Report branding defaults
         reports = ReportSettings(
@@ -1861,7 +1507,6 @@ class PreferencesDialog(QDialog):
             window=self._original.window,
             tools=tools,
             network=network,
-            hash=hash_cfg,
             sandbox=self._original.sandbox,
             reports=reports,
         )

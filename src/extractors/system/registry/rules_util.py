@@ -4,13 +4,13 @@ Registry rules utility
 Provides registry analysis rules for the SystemRegistryExtractor.
 Rules are now defined in Python (rules.py) for modular architecture.
 
-Backward-compatible API: load_registry_rules() returns targets in dict format.
+Returns registry analysis targets in legacy dict format for existing consumers.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List
 
 from .rules import (
     get_registry_targets,
@@ -44,22 +44,16 @@ class RegistryRules:
         return []
 
 
-def load_registry_rules(custom_path: Optional[str] = None) -> RegistryRules:
+def load_registry_rules() -> RegistryRules:
     """
     Load registry rules from Python module.
-
-    Args:
-        custom_path: Ignored (kept for backward compatibility).
-                     Custom rules are no longer supported.
 
     Returns:
         RegistryRules object with targets in dict format
 
     Note:
-        The custom_path parameter is ignored in.
         Rules are now defined in rules.py for modular architecture.
     """
-    # Ignore custom_path - rules are now embedded in Python
     targets = get_all_targets_as_dicts()
     return RegistryRules(targets=targets)
 

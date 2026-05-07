@@ -9,7 +9,7 @@ from __future__ import annotations
 import json
 import sqlite3
 from pathlib import Path
-from typing import Dict, Any, List
+from typing import Dict, Any
 from datetime import datetime, timezone
 
 from core.logging import get_logger
@@ -47,7 +47,7 @@ def run_registry_ingestion(
         evidence_id: Evidence ID
         callbacks: Progress callbacks
         output_dir: Directory containing the manifest and hives
-        config: Ingestion configuration (optional rules_path)
+        config: Ingestion configuration
 
     Returns:
         Dict with inserted count and errors count

@@ -14,7 +14,6 @@ Dialogs and workers extracted to separate modules.
 from __future__ import annotations
 
 import shutil
-import sys
 from typing import Dict, Optional, TYPE_CHECKING
 from pathlib import Path
 
@@ -80,19 +79,12 @@ class ExtractionTab(QWidget):
         self,
         evidence_id: int,
         case_data: Optional[CaseDataAccess] = None,
-        rules_dir: Optional[Path] = None,
         tool_registry = None,
         parent: Optional[QWidget] = None
     ):
         super().__init__(parent)
         self.evidence_id = evidence_id
         self.case_data = case_data
-        if rules_dir:
-            self.rules_dir = rules_dir
-        elif getattr(sys, "frozen", False):
-            self.rules_dir = Path(getattr(sys, "_MEIPASS", ".")) / "rules"
-        else:
-            self.rules_dir = Path(__file__).resolve().parents[3] / "rules"
         self.tool_registry = tool_registry
 
         # Modular architecture
