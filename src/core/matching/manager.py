@@ -12,10 +12,13 @@ Supports three types of reference lists:
 from __future__ import annotations
 
 import logging
+import hashlib
 import os
+import re
 import shutil
 import stat
 import tempfile
+import unicodedata
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
@@ -58,12 +61,13 @@ class ImportResult:
 class ReferenceListManager:
     """Manage reference lists (hash lists, file name lists, and URL lists)."""
 
-    def __init__(self, base_path: Optional[Path] = None):
+    def __init__(self, base_path: Optional[Path] = None, *, create_dirs: bool = True):
         """
         Initialize reference list manager.
 
         Args:
             base_path: Custom base path (default: ~/.config/surfsifter/reference_lists)
+            create_dirs: Create missing reference-list directories when True.
         """
         if base_path is None:
             primary = Path.home() / ".config" / "surfsifter" / "reference_lists"
@@ -80,10 +84,10 @@ class ReferenceListManager:
         self.filelists_dir = self.base_path / "filelists"
         self.urllists_dir = self.base_path / "urllists"
 
-        # Create directories if they don't exist
-        self.hashlists_dir.mkdir(parents=True, exist_ok=True)
-        self.filelists_dir.mkdir(parents=True, exist_ok=True)
-        self.urllists_dir.mkdir(parents=True, exist_ok=True)
+        if create_dirs:
+            self.hashlists_dir.mkdir(parents=True, exist_ok=True)
+            self.filelists_dir.mkdir(parents=True, exist_ok=True)
+            self.urllists_dir.mkdir(parents=True, exist_ok=True)
 
         logger.info(f"Reference lists base path: {self.base_path}")
 
@@ -104,22 +108,41 @@ class ReferenceListManager:
         Raises:
             FileNotFoundError: If hash list doesn't exist
         """
-        list_path = self.hashlists_dir / f"{name}.txt"
+        hashes, _version = self.load_hashlist_with_version(name)
+        return hashes
+
+    def load_hashlist_with_version(self, name: str) -> Tuple[Set[str], str]:
+        """
+        Load a hash list from one file snapshot and return its SHA-256 version.
+
+        Args:
+            name: Hash list name (without .txt extension)
+
+        Returns:
+            Tuple of normalized hash set and SHA-256 of the file bytes.
+
+        Raises:
+            FileNotFoundError: If hash list doesn't exist
+            UnicodeDecodeError: If the hash list is not UTF-8 text
+        """
+        list_path = self._get_list_path("hashlist", name)
         if not list_path.exists():
             raise FileNotFoundError(f"Hash list not found: {name}")
 
+        contents = self._read_hashlist_bytes(list_path)
+        version = hashlib.sha256(contents).hexdigest()
+
         hashes = set()
-        with open(list_path, "r", encoding="utf-8") as f:
-            for line in f:
-                line = line.strip()
-                # Skip comments and empty lines
-                if not line or line.startswith("#"):
-                    continue
-                # Normalize to lowercase for case-insensitive matching
-                hashes.add(line.lower())
+        for line in contents.decode("utf-8").splitlines():
+            line = line.strip()
+            # Skip comments and empty lines
+            if not line or line.startswith("#"):
+                continue
+            # Normalize to lowercase for case-insensitive matching
+            hashes.add(line.lower())
 
         logger.info(f"Loaded {len(hashes)} hashes from '{name}'")
-        return hashes
+        return hashes, version
 
     def load_filelist(self, name: str) -> Tuple[List[str], bool]:
         """
@@ -136,7 +159,7 @@ class ReferenceListManager:
         Raises:
             FileNotFoundError: If file list doesn't exist
         """
-        list_path = self.filelists_dir / f"{name}.txt"
+        list_path = self._get_list_path("filelist", name)
         if not list_path.exists():
             raise FileNotFoundError(f"File list not found: {name}")
 
@@ -148,7 +171,7 @@ class ReferenceListManager:
         if metadata.get("REGEX", "false").lower() in ("true", "yes", "1"):
             is_regex = True
 
-        with open(list_path, "r", encoding="utf-8") as f:
+        with self._open_hashlist_text(list_path) as f:
             for line in f:
                 line = line.strip()
                 # Skip comments and empty lines
@@ -174,7 +197,7 @@ class ReferenceListManager:
         Raises:
             FileNotFoundError: If URL list doesn't exist
         """
-        list_path = self.urllists_dir / f"{name}.txt"
+        list_path = self._get_list_path("urllist", name)
         if not list_path.exists():
             raise FileNotFoundError(f"URL list not found: {name}")
 
@@ -186,7 +209,7 @@ class ReferenceListManager:
         if metadata.get("REGEX", "false").lower() in ("true", "yes", "1"):
             is_regex = True
 
-        with open(list_path, "r", encoding="utf-8") as f:
+        with self._open_urllist_text(list_path) as f:
             for line in f:
                 line = line.strip()
                 # Skip comments and empty lines
@@ -209,15 +232,9 @@ class ReferenceListManager:
             Dictionary with keys 'hashlists', 'filelists', 'urllists',
             values are list names (without .txt)
         """
-        hashlists = [
-            f.stem for f in self.hashlists_dir.glob("*.txt") if f.is_file()
-        ]
-        filelists = [
-            f.stem for f in self.filelists_dir.glob("*.txt") if f.is_file()
-        ]
-        urllists = [
-            f.stem for f in self.urllists_dir.glob("*.txt") if f.is_file()
-        ]
+        hashlists = self._list_safe_stems(self.hashlists_dir)
+        filelists = self._list_safe_stems(self.filelists_dir)
+        urllists = self._list_safe_stems(self.urllists_dir)
 
         return {
             "hashlists": sorted(hashlists),
@@ -245,7 +262,11 @@ class ReferenceListManager:
             raise FileNotFoundError(f"{list_type} not found: {name}")
 
         metadata = {}
-        with open(list_path, "r", encoding="utf-8") as f:
+        if list_type == "urllist":
+            opener = self._open_urllist_text
+        else:
+            opener = self._open_hashlist_text
+        with opener(list_path) as f:
             for line in f:
                 line = line.strip()
                 # Stop at first non-comment line
@@ -280,8 +301,24 @@ class ReferenceListManager:
             raise FileNotFoundError(f"Source file not found: {source_path}")
 
         dest_path = self._get_list_path(list_type, name)
-        shutil.copy2(source_path, dest_path)
+        if list_type == "hashlist":
+            self._atomic_copy(source_path, dest_path)
+        elif list_type == "urllist":
+            self._atomic_copy_urllist(source_path, dest_path)
+        else:
+            shutil.copy2(source_path, dest_path)
         logger.info(f"Imported {list_type} '{name}' from {source_path}")
+
+    def read_list_text(self, list_type: str, name: str) -> str:
+        """Read a stored reference list with validation and no-follow checks."""
+        list_path = self._get_list_path(list_type, name)
+        if list_type == "hashlist":
+            return self._read_hashlist_bytes(list_path).decode("utf-8")
+        if list_type == "filelist":
+            return self._read_filelist_bytes(list_path).decode("utf-8")
+        if list_type == "urllist":
+            return self._read_urllist_bytes(list_path).decode("utf-8")
+        raise ValueError(f"Invalid list_type: {list_type}")
 
     def create_list(
         self,
@@ -426,6 +463,16 @@ class ReferenceListManager:
 
             # Derive name from filename (without extension)
             base_name = file_path.stem
+            try:
+                base_name = self.validate_list_name(base_name)
+            except ValueError as e:
+                results.append(ImportResult(
+                    source_path=file_path,
+                    dest_name=base_name,
+                    status="error",
+                    error=str(e),
+                ))
+                continue
 
             # Validate file
             is_valid, error_msg = self._validate_hashlist_file(file_path)
@@ -459,9 +506,8 @@ class ReferenceListManager:
                 dest_name = base_name
                 status = "imported"
 
-            # Perform import with atomic copy
-            dest_path = self.hashlists_dir / f"{dest_name}.txt"
             try:
+                dest_path = self._get_list_path("hashlist", dest_name)
                 self._atomic_copy(file_path, dest_path)
                 results.append(ImportResult(
                     source_path=file_path,
@@ -537,12 +583,14 @@ class ReferenceListManager:
                 progress_callback(idx + 1, total, file_path.name)
 
             base_name = file_path.stem
-            if not base_name.strip():
+            try:
+                base_name = self.validate_list_name(base_name)
+            except ValueError as e:
                 results.append(ImportResult(
                     source_path=file_path,
                     dest_name=base_name,
                     status="error",
-                    error="Reference list name cannot be empty",
+                    error=str(e),
                 ))
                 continue
 
@@ -575,8 +623,8 @@ class ReferenceListManager:
                 dest_name = base_name
                 status = "imported"
 
-            dest_path = self.urllists_dir / f"{dest_name}.txt"
             try:
+                dest_path = self._get_list_path("urllist", dest_name)
                 if self._has_urllist_metadata(file_path):
                     self._atomic_copy_urllist(file_path, dest_path)
                 else:
@@ -619,16 +667,57 @@ class ReferenceListManager:
     # Private Helper Methods
     # -------------------------------------------------------------------------
 
+    def _list_safe_stems(self, directory: Path) -> List[str]:
+        """List regular, non-symlink .txt reference-list stems with safe names."""
+        stems: List[str] = []
+        for path in directory.glob("*.txt"):
+            if path.is_symlink() or not path.is_file():
+                continue
+            try:
+                stems.append(self.validate_list_name(path.stem))
+            except ValueError:
+                logger.warning("Ignoring unsafe reference list name: %s", path.name)
+        return stems
+
     def _get_list_path(self, list_type: str, name: str) -> Path:
         """Get the file path for a reference list."""
+        safe_name = self.validate_list_name(name)
         if list_type == "hashlist":
-            return self.hashlists_dir / f"{name}.txt"
+            list_dir = self.hashlists_dir
         elif list_type == "filelist":
-            return self.filelists_dir / f"{name}.txt"
+            list_dir = self.filelists_dir
         elif list_type == "urllist":
-            return self.urllists_dir / f"{name}.txt"
+            list_dir = self.urllists_dir
         else:
             raise ValueError(f"Invalid list_type: {list_type}")
+
+        path = list_dir / f"{safe_name}.txt"
+        try:
+            base_resolved = self.base_path.resolve(strict=False)
+            list_dir_resolved = list_dir.resolve(strict=False)
+            list_dir_resolved.relative_to(base_resolved)
+            path.parent.resolve(strict=False).relative_to(list_dir_resolved)
+        except ValueError as exc:
+            raise ValueError(f"Invalid reference list path: {name!r}") from exc
+        return path
+
+    @staticmethod
+    def validate_list_name(name: str) -> str:
+        """Validate a reference-list name before turning it into a path."""
+        if not isinstance(name, str):
+            raise ValueError("Reference list name must be text")
+        name = unicodedata.normalize("NFKC", name)
+        if not name or not name.strip():
+            raise ValueError("Reference list name cannot be empty")
+        if name in {".", ".."} or ".." in name:
+            raise ValueError(f"Invalid reference list name: {name!r}")
+        if Path(name).is_absolute() or "/" in name or "\\" in name:
+            raise ValueError(f"Invalid reference list name: {name!r}")
+        if any(ord(char) < 32 or ord(char) == 127 for char in name):
+            raise ValueError("Reference list name contains control characters")
+        if not re.fullmatch(r"[A-Za-z0-9._\- ]+", name):
+            raise ValueError(f"Invalid reference list name: {name!r}")
+        return name
 
     def _validate_hashlist_file(self, path: Path) -> Tuple[bool, Optional[str]]:
         """
@@ -776,7 +865,36 @@ class ReferenceListManager:
         """Open a hash-list source fd with no-follow semantics and size checks."""
         return self._open_regular_binary_fd(path, MAX_HASHLIST_SIZE)
 
-    def _open_regular_binary_fd(self, path: Path, max_size: int) -> int:
+    def _read_hashlist_bytes(self, path: Path) -> bytes:
+        fd = self._open_regular_binary_fd(path, MAX_HASHLIST_SIZE, allow_empty=True)
+        return self._read_regular_bytes(fd, MAX_HASHLIST_SIZE)
+
+    def _read_filelist_bytes(self, path: Path) -> bytes:
+        fd = self._open_regular_binary_fd(path, MAX_HASHLIST_SIZE, allow_empty=True)
+        return self._read_regular_bytes(fd, MAX_HASHLIST_SIZE)
+
+    def _read_urllist_bytes(self, path: Path) -> bytes:
+        fd = self._open_regular_binary_fd(path, MAX_URLLIST_SIZE, allow_empty=True)
+        return self._read_regular_bytes(fd, MAX_URLLIST_SIZE)
+
+    def _read_regular_bytes(self, fd: int, max_size: int) -> bytes:
+        """Read an fd in bounded chunks so growth after open cannot exceed limits."""
+        chunks: List[bytes] = []
+        total = 0
+        with os.fdopen(fd, "rb") as handle:
+            while True:
+                chunk = handle.read(1024 * 1024)
+                if not chunk:
+                    break
+                total += len(chunk)
+                if total > max_size:
+                    raise ValueError(
+                        f"File too large: {total / (1024*1024):.1f} MB (max 100 MB)"
+                    )
+                chunks.append(chunk)
+        return b"".join(chunks)
+
+    def _open_regular_binary_fd(self, path: Path, max_size: int, *, allow_empty: bool = False) -> int:
         """Open a source fd with no-follow semantics and stable regular-file checks."""
         if path.is_symlink():
             raise ValueError(f"Symlinked files are not supported: {path}")
@@ -810,7 +928,7 @@ class ReferenceListManager:
                 raise ValueError(
                     f"File too large: {source_stat.st_size / (1024*1024):.1f} MB (max 100 MB)"
                 )
-            if source_stat.st_size == 0:
+            if source_stat.st_size == 0 and not allow_empty:
                 raise ValueError("File is empty")
             return fd
         except Exception:

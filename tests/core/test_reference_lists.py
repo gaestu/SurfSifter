@@ -2,6 +2,7 @@
 Tests for reference lists manager and matcher.
 """
 import sqlite3
+from hashlib import sha256
 from pathlib import Path
 
 import pytest
@@ -66,6 +67,16 @@ def test_ref_manager_directories_created(ref_manager):
     """Test that reference list directories are created."""
     assert ref_manager.hashlists_dir.exists()
     assert ref_manager.filelists_dir.exists()
+
+
+def test_ref_manager_no_create_mode_does_not_create_directories(tmp_path):
+    """Read-only reference list access must not create config directories."""
+    base_path = tmp_path / "reference_lists"
+
+    manager = ReferenceListManager(base_path=base_path, create_dirs=False)
+
+    assert manager.hashlists_dir == base_path / "hashlists"
+    assert not base_path.exists()
 
 
 def test_create_hashlist(ref_manager):
@@ -152,6 +163,61 @@ def test_load_hashlist(ref_manager):
     assert len(loaded) == 2
     assert "d41d8cd98f00b204e9800998ecf8427e" in loaded
     assert "a1b2c3d4e5f6" in loaded  # Normalized to lowercase
+
+
+def test_load_hashlist_with_version_uses_file_bytes(ref_manager):
+    """Hash-list version is the SHA-256 of the exact text file bytes."""
+    contents = b"# test\nDEADBEEF\n"
+    ref_manager.hashlists_dir.mkdir(parents=True, exist_ok=True)
+    (ref_manager.hashlists_dir / "versioned.txt").write_bytes(contents)
+
+    hashes, version = ref_manager.load_hashlist_with_version("versioned")
+
+    assert hashes == {"deadbeef"}
+    assert version == sha256(contents).hexdigest()
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "",
+        "   ",
+        "../escape",
+        "nested/name",
+        "nested\\name",
+        "bad\nname",
+        "bad\u202ename",
+        "bad\u200bname",
+        "fullwidth\uff0fslash",
+    ],
+)
+def test_load_hashlist_with_version_rejects_unsafe_names(ref_manager, name):
+    """Hash-list loading rejects names that could escape or spoof paths."""
+    with pytest.raises(ValueError):
+        ref_manager.load_hashlist_with_version(name)
+
+
+def test_load_hashlist_with_version_allows_empty_stored_list(ref_manager):
+    """Stored empty hash lists can be loaded and viewed without import validation."""
+    ref_manager.hashlists_dir.mkdir(parents=True, exist_ok=True)
+    (ref_manager.hashlists_dir / "empty.txt").write_bytes(b"")
+
+    hashes, version = ref_manager.load_hashlist_with_version("empty")
+
+    assert hashes == set()
+    assert version == sha256(b"").hexdigest()
+    assert ref_manager.read_list_text("hashlist", "empty") == ""
+
+
+def test_load_hashlist_with_version_rejects_symlinks(ref_manager, tmp_path):
+    """Hash-list loading keeps the existing no-follow symlink protection."""
+    target = tmp_path / "target.txt"
+    target.write_text("deadbeef\n", encoding="utf-8")
+    symlink = ref_manager.hashlists_dir / "linked.txt"
+    symlink.symlink_to(target)
+
+    with pytest.raises(ValueError, match="Symlinked files"):
+        ref_manager.load_hashlist_with_version("linked")
 
 
 def test_load_filelist_wildcard(ref_manager):
@@ -421,6 +487,22 @@ def test_import_urllist_batch_reports_empty_or_comment_only(ref_manager, tmp_pat
     assert "No valid URL patterns found" in (results[1].error or "")
 
 
+def test_import_urllist_batch_rejects_unsafe_stem(ref_manager, tmp_path):
+    """Unsafe URL-list filenames should be rejected before destination paths are built."""
+    source = tmp_path / "bad\u202ename.txt"
+    source.write_text("bad.example\n", encoding="utf-8")
+
+    results = ref_manager.import_urllist_batch(
+        [source],
+        category="Category",
+        description="Description",
+    )
+
+    assert results[0].status == "error"
+    assert "Invalid reference list name" in (results[0].error or "")
+    assert not (ref_manager.urllists_dir / "bad\u202ename.txt").exists()
+
+
 def test_import_urllist_batch_rejects_oversized_file(ref_manager, tmp_path, monkeypatch):
     """Oversized URL lists should be rejected before import."""
     monkeypatch.setattr(matching_manager, "MAX_URLLIST_SIZE", 4)
@@ -490,6 +572,18 @@ def test_import_hashlist_batch_rejects_symlink(ref_manager, tmp_path):
     assert results[0].status == "error"
     assert "Symlinked files are not supported" in (results[0].error or "")
     assert "linked_hashes" not in ref_manager.list_available()["hashlists"]
+
+
+def test_import_hashlist_batch_rejects_unsafe_stem(ref_manager, tmp_path):
+    """Unsafe hash-list filenames should be rejected before destination paths are built."""
+    source = tmp_path / "bad\u202ename.txt"
+    source.write_text("d41d8cd98f00b204e9800998ecf8427e\n", encoding="utf-8")
+
+    results = ref_manager.import_hashlist_batch([source])
+
+    assert results[0].status == "error"
+    assert "Invalid reference list name" in (results[0].error or "")
+    assert not (ref_manager.hashlists_dir / "bad\u202ename.txt").exists()
 
 
 def test_delete_list(ref_manager):

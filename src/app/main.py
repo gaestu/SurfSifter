@@ -505,9 +505,6 @@ class MainWindow(QMainWindow):
         images_tab.hashLookupFinished.connect(self._refresh_counts)
         if self.case_data:
             images_tab.set_case_data(self.case_data, case_folder=self.case_path, defer_load=defer_load)
-            images_tab.set_hash_db_path(
-                Path(self.settings.hash.db_path) if self.settings.hash.db_path else None
-            )
         images_tab.set_evidence(evidence_id, defer_load=defer_load)
         evidence_tabs.addTab(images_tab, "Images")
 
@@ -1394,10 +1391,7 @@ class MainWindow(QMainWindow):
             if evidence_tab_widget and isinstance(evidence_tab_widget, QTabWidget):
                 # Find the Images tab (index 4 in the evidence sub-tabs after  File List addition)
                 images_tab = evidence_tab_widget.widget(4)  # Images is at index 4
-                if images_tab and hasattr(images_tab, 'set_hash_db_path'):
-                    images_tab.set_hash_db_path(
-                        Path(self.settings.hash.db_path) if self.settings.hash.db_path else None
-                    )
+                if images_tab:
                     images_tab.set_thumbnail_size(self.settings.general.thumbnail_size)
 
         self.logger.info("Preferences updated")

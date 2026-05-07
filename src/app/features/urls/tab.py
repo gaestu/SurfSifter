@@ -1104,7 +1104,7 @@ class UrlsTab(QWidget):
 
         # Get available URL lists
         from core.matching import ReferenceListManager
-        ref_manager = ReferenceListManager()
+        ref_manager = ReferenceListManager(create_dirs=False)
         available = ref_manager.list_available()
         available_urllists = available.get("urllists", [])
 

@@ -67,7 +67,7 @@ def insert_hash_match(
         conn: SQLite connection to evidence database
         evidence_id: Evidence ID
         image_id: ID of the matching image
-        db_name: Hash database name
+        db_name: Matching source or reference list name
         db_md5: MD5 hash value
         **kwargs: Optional fields (matched_at_utc, list_name, list_version, note, hash_sha256, run_id)
     """

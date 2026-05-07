@@ -69,11 +69,6 @@ class WindowSettings:
 
 
 @dataclass
-class HashSettings:
-    db_path: str = ""
-
-
-@dataclass
 class SandboxSettings:
     """Settings for sandbox browser behavior."""
 
@@ -129,7 +124,6 @@ class AppSettings:
     window: WindowSettings = field(default_factory=WindowSettings)
     tools: ToolPaths = field(default_factory=ToolPaths)
     network: NetworkSettings = field(default_factory=NetworkSettings)
-    hash: HashSettings = field(default_factory=HashSettings)
     sandbox: SandboxSettings = field(default_factory=SandboxSettings)
     reports: ReportSettings = field(default_factory=ReportSettings)
 
@@ -147,7 +141,6 @@ class AppSettings:
         window = WindowSettings(**{k: v for k, v in window_data.items() if k in window_fields})
         tools = ToolPaths(**data.get("tools", {}))
         network = NetworkSettings(**data.get("network", {}))
-        hash_cfg = HashSettings(**data.get("hash", {}))
         sandbox_data = data.get("sandbox", {})
         sandbox_fields = {f.name for f in SandboxSettings.__dataclass_fields__.values()}
         sandbox = SandboxSettings(**{k: v for k, v in sandbox_data.items() if k in sandbox_fields})
@@ -159,7 +152,6 @@ class AppSettings:
             window=window,
             tools=tools,
             network=network,
-            hash=hash_cfg,
             sandbox=sandbox,
             reports=reports,
         )
@@ -171,7 +163,6 @@ class AppSettings:
             "window": asdict(self.window),
             "tools": asdict(self.tools),
             "network": asdict(self.network),
-            "hash": asdict(self.hash),
             "sandbox": asdict(self.sandbox),
             "reports": asdict(self.reports),
         }

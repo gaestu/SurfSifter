@@ -10,7 +10,6 @@ from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QPalette
 from PySide6.QtWidgets import (
     QButtonGroup,
-    QCheckBox,
     QComboBox,
     QDialog,
     QDialogButtonBox,
@@ -48,7 +47,6 @@ class BatchHashListImportDialog(QDialog):
         *,
         list_label: str = "hash list",
         window_title: str = "Batch Import Hash Lists",
-        show_rebuild_db: bool = True,
         show_url_metadata: bool = False,
     ) -> None:
         super().__init__(parent)
@@ -58,7 +56,6 @@ class BatchHashListImportDialog(QDialog):
         self.files = files
         self.existing_names = existing_names
         self.list_label = list_label
-        self.show_rebuild_db = show_rebuild_db
         self.show_url_metadata = show_url_metadata
         self._conflict_count = 0
 
@@ -167,18 +164,6 @@ class BatchHashListImportDialog(QDialog):
             metadata_layout.addWidget(pattern_group)
             metadata_group.setLayout(metadata_layout)
             layout.addWidget(metadata_group)
-
-        # Rebuild hash DB checkbox
-        if self.show_rebuild_db:
-            self.rebuild_checkbox = QCheckBox("Rebuild hash database after import")
-            self.rebuild_checkbox.setChecked(True)
-            self.rebuild_checkbox.setToolTip(
-                "Rebuild the SQLite hash database for fast matching.\n"
-                "Required for hash matching to work with new lists."
-            )
-            layout.addWidget(self.rebuild_checkbox)
-        else:
-            self.rebuild_checkbox = None
 
         # Dialog buttons
         button_box = QDialogButtonBox()
@@ -310,10 +295,6 @@ class BatchHashListImportDialog(QDialog):
             return "rename"
         return "skip"
 
-    def should_rebuild_db(self) -> bool:
-        """Check if hash DB should be rebuilt after import."""
-        return bool(self.rebuild_checkbox and self.rebuild_checkbox.isChecked())
-
     def get_category(self) -> str:
         """Get the shared URL-list category."""
         if not self.show_url_metadata:
@@ -349,7 +330,6 @@ class BatchUrlListImportDialog(BatchHashListImportDialog):
             parent,
             list_label="URL list",
             window_title="Batch Import URL Lists",
-            show_rebuild_db=False,
             show_url_metadata=True,
         )
 

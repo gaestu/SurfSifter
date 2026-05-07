@@ -13,7 +13,6 @@ from PySide6.QtWidgets import (
     QFileDialog,
     QFormLayout,
     QFrame,
-    QGridLayout,
     QHBoxLayout,
     QLabel,
     QLineEdit,
@@ -28,7 +27,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from app.config.settings import AppSettings, GeneralSettings, HashSettings, NetworkSettings, ToolPaths, ReportSettings
+from app.config.settings import AppSettings, GeneralSettings, NetworkSettings, ToolPaths, ReportSettings
 from core.tool_discovery import get_tool_version
 from core.subprocess_env import clean_subprocess_env
 import json
@@ -67,7 +66,6 @@ class PreferencesDialog(QDialog):
         self._build_general_tab(settings)
         self._build_tools_tab(settings)
         self._build_network_tab(settings)
-        self._build_hash_tab(settings)
         self._build_file_lists_tab()  #
         self._build_hash_lists_tab()  #
         self._build_url_lists_tab()  #
@@ -210,22 +208,6 @@ class PreferencesDialog(QDialog):
 
         widget.setLayout(form)
         self.tabs.addTab(widget, "Network")
-
-    # Hash ----------------------------------------------------------------
-
-    def _build_hash_tab(self, settings: AppSettings) -> None:
-        widget = QWidget()
-        layout = QGridLayout()
-        self.hash_path_edit = QLineEdit(settings.hash.db_path)
-        self.hash_path_edit.setPlaceholderText("Select SQLite hash database…")
-        self.hash_path_edit.textChanged.connect(self._validate)
-        browse = QPushButton("Browse…")
-        browse.clicked.connect(lambda: self._pick_file(self.hash_path_edit))
-        layout.addWidget(QLabel("SQLite database"), 0, 0)
-        layout.addWidget(self.hash_path_edit, 0, 1)
-        layout.addWidget(browse, 0, 2)
-        widget.setLayout(layout)
-        self.tabs.addTab(widget, "Hash DB")
 
     # Rules ---------------------------------------------------------------
 
@@ -852,30 +834,11 @@ class PreferencesDialog(QDialog):
         buttons_layout.addStretch()
         layout.addLayout(buttons_layout)
 
-        # Rebuild Hash DB section (Phase 4)
-        hash_db_layout = QHBoxLayout()
-
-        self.rebuild_hashdb_btn = QPushButton("Rebuild Hash DB")
-        self.rebuild_hashdb_btn.setToolTip(
-            "Rebuild the SQLite hash database from all .txt hash lists.\n"
-            "This is required for fast hash matching in the Images tab."
-        )
-        self.rebuild_hashdb_btn.clicked.connect(self._rebuild_hash_db)
-        hash_db_layout.addWidget(self.rebuild_hashdb_btn)
-
-        self.hash_db_status_label = QLabel()
-        self.hash_db_status_label.setStyleSheet("color: gray; font-style: italic;")
-        hash_db_layout.addWidget(self.hash_db_status_label)
-        hash_db_layout.addStretch()
-
-        layout.addLayout(hash_db_layout)
-
         widget.setLayout(layout)
         self.tabs.addTab(widget, "Hash Lists")
 
         # Load hash lists
         self._refresh_hash_lists()
-        self._update_hash_db_status()
 
     def _build_url_lists_tab(self) -> None:
         """Build the URL lists management tab."""
@@ -1002,9 +965,7 @@ class PreferencesDialog(QDialog):
 
         # Copy file to hashlists directory
         try:
-            import shutil
-            dest_path = self.ref_manager.hashlists_dir / f"{name}.txt"
-            if dest_path.exists():
+            if self.ref_manager.check_exists("hashlist", name):
                 reply = QMessageBox.question(
                     self,
                     "Overwrite?",
@@ -1014,7 +975,7 @@ class PreferencesDialog(QDialog):
                 if reply != QMessageBox.Yes:
                     return
 
-            shutil.copy2(file_path, dest_path)
+            self.ref_manager.import_list(Path(file_path), "hashlist", name)
             QMessageBox.information(
                 self,
                 "Success",
@@ -1071,8 +1032,6 @@ class PreferencesDialog(QDialog):
             return
 
         conflict_policy = preview_dialog.get_conflict_policy()
-        rebuild_db = preview_dialog.should_rebuild_db()
-
         # Step 6: Show progress dialog and run import
         progress_dialog = BatchImportProgressDialog(len(selected_files), self)
 
@@ -1080,7 +1039,6 @@ class PreferencesDialog(QDialog):
         config = BatchHashListImportConfig(
             files=tuple(selected_files),
             conflict_policy=conflict_policy,
-            rebuild_db=rebuild_db,
         )
 
         # Create and configure task
@@ -1100,8 +1058,6 @@ class PreferencesDialog(QDialog):
             skipped = result.get("skipped", 0)
             errors = result.get("errors", 0)
             cancelled = result.get("cancelled", 0)
-            rebuild_success = result.get("rebuild_success", False)
-            rebuild_count = result.get("rebuild_count", 0)
 
             summary_parts = []
             if imported > 0:
@@ -1115,11 +1071,6 @@ class PreferencesDialog(QDialog):
 
             summary = ", ".join(summary_parts) if summary_parts else "No files processed"
 
-            if rebuild_success:
-                summary += f"\n\nHash database rebuilt with {rebuild_count} entries."
-            elif rebuild_db and imported > 0:
-                summary += "\n\n⚠ Hash database rebuild failed."
-
             QMessageBox.information(
                 self,
                 "Import Complete",
@@ -1128,7 +1079,6 @@ class PreferencesDialog(QDialog):
 
             # Refresh the list
             self._refresh_reference_lists()
-            self._update_hash_db_status()
 
         def on_error(error: str, tb: str) -> None:
             progress_dialog.close()
@@ -1331,8 +1281,7 @@ class PreferencesDialog(QDialog):
             return
 
         # Step 5: Check if file list already exists
-        dest_path = self.ref_manager.filelists_dir / f"{dialog.name}.txt"
-        if dest_path.exists():
+        if self.ref_manager.check_exists("filelist", dialog.name):
             reply = QMessageBox.question(
                 self,
                 "Overwrite?",
@@ -1344,19 +1293,15 @@ class PreferencesDialog(QDialog):
 
         # Step 6: Generate metadata and write file
         try:
-            with open(dest_path, "w", encoding="utf-8") as f:
-                # Write metadata header
-                f.write(f"# NAME: {dialog.name}\n")
-                f.write(f"# CATEGORY: {dialog.category}\n")
-                f.write(f"# DESCRIPTION: {dialog.description}\n")
-                f.write(f"# UPDATED: {datetime.now().strftime('%Y-%m-%d')}\n")
-                f.write(f"# TYPE: filelist\n")
-                f.write(f"# REGEX: {'true' if dialog.is_regex else 'false'}\n")
-                f.write("\n")
-
-                # Write patterns
-                for pattern in patterns:
-                    f.write(f"{pattern}\n")
+            metadata = {
+                "NAME": dialog.name,
+                "CATEGORY": dialog.category,
+                "DESCRIPTION": dialog.description,
+                "UPDATED": datetime.now().strftime("%Y-%m-%d"),
+                "TYPE": "filelist",
+                "REGEX": "true" if dialog.is_regex else "false",
+            }
+            self.ref_manager.create_list("filelist", dialog.name, metadata, patterns)
 
             QMessageBox.information(
                 self,
@@ -1383,8 +1328,7 @@ class PreferencesDialog(QDialog):
 
         name = current_item.text()
         try:
-            list_path = self.ref_manager.hashlists_dir / f"{name}.txt"
-            content = list_path.read_text(encoding="utf-8")
+            content = self.ref_manager.read_list_text("hashlist", name)
 
             # Show in dialog
             dialog = QDialog(self)
@@ -1418,8 +1362,7 @@ class PreferencesDialog(QDialog):
 
         name = current_item.text()
         try:
-            list_path = self.ref_manager.filelists_dir / f"{name}.txt"
-            content = list_path.read_text(encoding="utf-8")
+            content = self.ref_manager.read_list_text("filelist", name)
 
             # Show in dialog
             dialog = QDialog(self)
@@ -1463,8 +1406,7 @@ class PreferencesDialog(QDialog):
             return
 
         try:
-            list_path = self.ref_manager.hashlists_dir / f"{name}.txt"
-            list_path.unlink()
+            self.ref_manager.delete_list("hashlist", name)
             QMessageBox.information(
                 self,
                 "Success",
@@ -1476,106 +1418,6 @@ class PreferencesDialog(QDialog):
                 self,
                 "Error",
                 "Failed to delete hash list: {error}".format(error=str(e))
-            )
-
-    def _rebuild_hash_db(self) -> None:
-        """Rebuild the SQLite hash database from all .txt hash lists (Phase 4)."""
-        from core.matching import rebuild_hash_db
-
-        hashlists_dir = self.ref_manager.hashlists_dir
-        if not hashlists_dir.exists():
-            QMessageBox.warning(
-                self,
-                "No Hash Lists",
-                "Hash lists directory does not exist: {path}".format(path=str(hashlists_dir))
-            )
-            return
-
-        # Check if there are any hash list files
-        txt_files = list(hashlists_dir.glob("*.txt"))
-        if not txt_files:
-            QMessageBox.information(
-                self,
-                "No Hash Lists",
-                f"No .txt hash list files found in:\n{hashlists_dir}\n\n"
-                "Add hash lists first, then rebuild the database."
-            )
-            return
-
-        # Confirm rebuild
-        reply = QMessageBox.question(
-            self,
-            "Rebuild Hash Database",
-            f"This will rebuild the hash database from {len(txt_files)} .txt file(s).\n\n"
-            f"Location: {self._get_hash_db_path()}\n\n"
-            "Continue?",
-            QMessageBox.Yes | QMessageBox.No
-        )
-
-        if reply != QMessageBox.Yes:
-            return
-
-        # Rebuild
-        try:
-            db_path = self._get_hash_db_path()
-            total = rebuild_hash_db(hashlists_dir, db_path)
-
-            QMessageBox.information(
-                self,
-                "Success",
-                f"Hash database rebuilt successfully!\n\n"
-                f"Total entries: {total}\n"
-                f"Location: {db_path}"
-            )
-            self._update_hash_db_status()
-
-        except Exception as e:
-            QMessageBox.critical(
-                self,
-                "Error",
-                "Failed to rebuild hash database:\n{error}".format(error=str(e))
-            )
-
-    def _get_hash_db_path(self) -> Path:
-        """Get the path to the hash database file."""
-        # Use ~/.config/surfsifter/hash_lists.db
-        import os
-        config_dir = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config"))
-        app_config_dir = config_dir / "surfsifter"
-        app_config_dir.mkdir(parents=True, exist_ok=True)
-        return app_config_dir / "hash_lists.db"
-
-    def _update_hash_db_status(self) -> None:
-        """Update the hash database status label."""
-        from core.matching import list_hash_lists
-
-        db_path = self._get_hash_db_path()
-
-        if not db_path.exists():
-            self.hash_db_status_label.setText(
-                "No hash database. Click 'Rebuild Hash DB' to create one."
-            )
-            return
-
-        try:
-            lists = list_hash_lists(db_path)
-            total_entries = sum(lst.get("entry_count", 0) for lst in lists)
-
-            # Get last modified time
-            import datetime
-            mtime = datetime.datetime.fromtimestamp(db_path.stat().st_mtime)
-            mtime_str = mtime.strftime("%Y-%m-%d %H:%M")
-
-            self.hash_db_status_label.setText(
-                "DB: {lists} list(s), {entries} entries (updated: {time})".format(
-                    lists=len(lists),
-                    entries=total_entries,
-                    time=mtime_str
-                )
-            )
-        except Exception as e:
-            self.hash_db_status_label.setText(
-                "Error reading hash database: {error}".format(error=str(e))
             )
 
     def _delete_filelist(self) -> None:
@@ -1596,8 +1438,7 @@ class PreferencesDialog(QDialog):
             return
 
         try:
-            list_path = self.ref_manager.filelists_dir / f"{name}.txt"
-            list_path.unlink()
+            self.ref_manager.delete_list("filelist", name)
             QMessageBox.information(
                 self,
                 "Success",
@@ -1682,8 +1523,7 @@ class PreferencesDialog(QDialog):
             return
 
         # Step 5: Check if URL list already exists
-        dest_path = self.ref_manager.urllists_dir / f"{dialog.name}.txt"
-        if dest_path.exists():
+        if self.ref_manager.check_exists("urllist", dialog.name):
             reply = QMessageBox.question(
                 self,
                 "Overwrite?",
@@ -1695,19 +1535,15 @@ class PreferencesDialog(QDialog):
 
         # Step 6: Generate metadata and write file
         try:
-            with open(dest_path, "w", encoding="utf-8") as f:
-                # Write metadata header
-                f.write(f"# NAME: {dialog.name}\n")
-                f.write(f"# CATEGORY: {dialog.category}\n")
-                f.write(f"# DESCRIPTION: {dialog.description}\n")
-                f.write(f"# UPDATED: {datetime.now().strftime('%Y-%m-%d')}\n")
-                f.write(f"# TYPE: urllist\n")
-                f.write(f"# REGEX: {'true' if dialog.is_regex else 'false'}\n")
-                f.write("\n")
-
-                # Write patterns
-                for pattern in patterns:
-                    f.write(f"{pattern}\n")
+            metadata = {
+                "NAME": dialog.name,
+                "CATEGORY": dialog.category,
+                "DESCRIPTION": dialog.description,
+                "UPDATED": datetime.now().strftime("%Y-%m-%d"),
+                "TYPE": "urllist",
+                "REGEX": "true" if dialog.is_regex else "false",
+            }
+            self.ref_manager.create_list("urllist", dialog.name, metadata, patterns)
 
             QMessageBox.information(
                 self,
@@ -1734,8 +1570,7 @@ class PreferencesDialog(QDialog):
 
         name = current_item.text()
         try:
-            list_path = self.ref_manager.urllists_dir / f"{name}.txt"
-            content = list_path.read_text(encoding="utf-8")
+            content = self.ref_manager.read_list_text("urllist", name)
 
             # Show in dialog
             dialog = QDialog(self)
@@ -1779,8 +1614,7 @@ class PreferencesDialog(QDialog):
             return
 
         try:
-            list_path = self.ref_manager.urllists_dir / f"{name}.txt"
-            list_path.unlink()
+            self.ref_manager.delete_list("urllist", name)
             QMessageBox.information(
                 self,
                 "Success",
@@ -1880,7 +1714,6 @@ class PreferencesDialog(QDialog):
         self.allowed_types_edit.setText(",".join(defaults.network.allowed_content_types))
         for name, editor in self._tool_line_edits.items():
             editor.setText(getattr(defaults.tools, name, ""))
-        self.hash_path_edit.setText(defaults.hash.db_path)
         # Report defaults
         self.report_author_function.setText(defaults.reports.default_author_function)
         self.report_author_name.setText(defaults.reports.default_author_name)
@@ -1914,10 +1747,6 @@ class PreferencesDialog(QDialog):
                 if path and not Path(path).exists():
                     errors.append("{tool} path not found.".format(tool=name.title()))
                     break
-
-        hash_path = self.hash_path_edit.text().strip()
-        if hash_path and not Path(hash_path).exists():
-            errors.append("Hash database path not found.")
 
         if errors:
             self.error_label.setText(errors[0])
@@ -1960,7 +1789,6 @@ class PreferencesDialog(QDialog):
             max_bytes=self.max_bytes_spin.value() * 1024 * 1024,
             allowed_content_types=self._parse_content_types(),
         )
-        hash_cfg = HashSettings(db_path=self.hash_path_edit.text().strip())
 
         # Report branding defaults
         reports = ReportSettings(
@@ -1985,7 +1813,6 @@ class PreferencesDialog(QDialog):
             window=self._original.window,
             tools=tools,
             network=network,
-            hash=hash_cfg,
             sandbox=self._original.sandbox,
             reports=reports,
         )

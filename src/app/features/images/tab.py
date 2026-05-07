@@ -48,8 +48,8 @@ from core.matching import ReferenceListManager
 from core.logging import get_logger
 from core.enums import BROWSER_IMAGE_SOURCES
 
-# Workers extracted to separate module
-from app.features.images.workers import HashCheckWorker, ClusterLoadWorker, ImageFilterLoadWorker
+from app.features.images.workers import ClusterLoadWorker, ImageFilterLoadWorker
+from app.services.matching_workers import HashCheckWorker
 
 LOGGER = get_logger("app.features.images")
 
@@ -205,7 +205,6 @@ class ImagesTab(QWidget):
         self.case_folder = case_folder
         self.evidence_id: Optional[int] = None
         self.filters = ImageFilters()
-        self.hash_db_path: Optional[Path] = None
         self._current_phash: Optional[str] = None
         self._view_mode = "grid"  # "grid", "clusters", or "table"
 
@@ -632,10 +631,6 @@ class ImagesTab(QWidget):
             if row and row.get("id") is not None:
                 ids.append(int(row["id"]))
         return ids
-
-    def set_hash_db_path(self, path: Optional[Path]) -> None:
-        """Store hash database path for Check Known Hashes feature."""
-        self.hash_db_path = path
 
     def set_thumbnail_size(self, size: int) -> None:
         self.list_view.setIconSize(QSize(size, size))
@@ -1310,7 +1305,7 @@ class ImagesTab(QWidget):
             return
 
         # Get available hash lists
-        ref_manager = ReferenceListManager()
+        ref_manager = ReferenceListManager(create_dirs=False)
         available = ref_manager.list_available()
         available_hashlists = available.get("hashlists", [])
 

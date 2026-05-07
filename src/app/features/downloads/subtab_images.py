@@ -538,7 +538,7 @@ class DownloadedImagesPanel(QWidget):
         from app.common.dialogs import HashListSelectorDialog
 
         # Get available hash lists
-        ref_manager = ReferenceListManager()
+        ref_manager = ReferenceListManager(create_dirs=False)
         available = ref_manager.list_available()
         available_hashlists = available.get("hashlists", [])
 

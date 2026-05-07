@@ -1,25 +1,197 @@
-"""
-Reference list matching workers.
-
-Provides QThread workers for background reference list matching operations.
-Consolidates duplicate MatchWorker patterns from file_list and urls tabs.
-
-Extracted from features/file_list/tab.py and features/urls/tab.py
-"""
+"""Reference list matching service workers."""
 
 from __future__ import annotations
 
+import json
 import sqlite3
+from contextlib import closing
 from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Tuple
 
 from PySide6.QtCore import QThread, Signal
 
+from core.database import create_process_log, finalize_process_log, insert_hash_matches
+from core.logging import get_logger
+from core.matching import ReferenceListManager
+
 if TYPE_CHECKING:
     from core.database import DatabaseManager
 
-from core.logging import get_logger
-
 logger = get_logger(__name__)
+
+
+class HashCheckWorker(QThread):
+    """Worker thread for checking images against text hash lists."""
+
+    progress = Signal(int, int)  # current, total
+    finished = Signal(dict)  # results: {list_name: match_count}
+    error = Signal(str)  # error message
+
+    def __init__(self, db_manager, evidence_id: int, selected_hashlists: List[str]):
+        super().__init__()
+        self.db_manager = db_manager
+        self.evidence_id = evidence_id
+        self.selected_hashlists = selected_hashlists
+
+    def run(self):
+        """Run hash checking in background thread."""
+        evidence_conn = None
+        log_id = None
+        finalized = False
+        results = {}
+        list_errors = []
+        try:
+            with closing(sqlite3.connect(self.db_manager.case_db_path)) as conn:
+                conn.row_factory = sqlite3.Row
+                row = conn.execute(
+                    "SELECT label FROM evidences WHERE id = ?",
+                    (self.evidence_id,),
+                ).fetchone()
+                label = row["label"] if row and row["label"] else f"EV-{self.evidence_id:03d}"
+
+            evidence_conn = self.db_manager.get_evidence_conn(self.evidence_id, label=label)
+            ref_manager = ReferenceListManager(create_dirs=False)
+
+            cursor = evidence_conn.execute(
+                """SELECT id, md5, sha256 FROM images
+                WHERE evidence_id = ? AND (md5 IS NOT NULL OR sha256 IS NOT NULL)""",
+                (self.evidence_id,),
+            )
+            images = cursor.fetchall()
+            total_images = len(images)
+
+            valid_hashlists = []
+            for hashlist_name in self.selected_hashlists:
+                try:
+                    valid_hashlists.append(ref_manager.validate_list_name(hashlist_name))
+                except ValueError as e:
+                    results[hashlist_name] = f"Error: {e}"
+                    list_errors.append(_format_list_error(hashlist_name, str(e)))
+
+            log_id = create_process_log(
+                evidence_conn,
+                self.evidence_id,
+                "hash_check",
+                "lists={lists} images={images}".format(
+                    lists=json.dumps(sorted(self.selected_hashlists), ensure_ascii=True),
+                    images=total_images,
+                ),
+            )
+            run_id = f"hash_check:{log_id}"
+            valid_total = len(valid_hashlists)
+
+            for list_idx, hashlist_name in enumerate(valid_hashlists):
+                self._raise_if_interrupted()
+                try:
+                    hashes, list_version = ref_manager.load_hashlist_with_version(hashlist_name)
+                    if not hashes:
+                        results[hashlist_name] = 0
+                        continue
+
+                    matches = []
+                    for img_idx, img_row in enumerate(images):
+                        self._raise_if_interrupted()
+                        image_id, md5, sha256 = img_row
+
+                        matched = False
+                        matched_hash = None
+                        if md5 and md5.lower() in hashes:
+                            matched = True
+                            matched_hash = md5.lower()
+                        elif sha256 and sha256.lower() in hashes:
+                            matched = True
+                            matched_hash = sha256.lower()
+
+                        if matched:
+                            matches.append({
+                                "image_id": image_id,
+                                "db_name": hashlist_name,
+                                "db_md5": matched_hash,
+                                "list_name": hashlist_name,
+                                "list_version": list_version,
+                                "note": None,
+                                "hash_sha256": sha256.lower() if sha256 else None,
+                                "run_id": run_id,
+                            })
+
+                        if (img_idx + 1) % 50 == 0:
+                            overall_progress = (list_idx * total_images) + img_idx + 1
+                            overall_total = valid_total * total_images
+                            self.progress.emit(overall_progress, overall_total)
+
+                    if matches:
+                        insert_hash_matches(evidence_conn, self.evidence_id, matches)
+
+                    results[hashlist_name] = len(matches)
+
+                except _HashCheckCancelled:
+                    raise
+                except FileNotFoundError:
+                    message = "hash list not found"
+                    results[hashlist_name] = f"Error: {message}"
+                    list_errors.append(_format_list_error(hashlist_name, message))
+                except Exception as e:
+                    results[hashlist_name] = f"Error: {e}"
+                    list_errors.append(_format_list_error(hashlist_name, str(e)))
+
+            evidence_conn.commit()
+            if log_id is not None:
+                total_matches = sum(v for v in results.values() if isinstance(v, int))
+                finalize_process_log(
+                    evidence_conn,
+                    log_id,
+                    exit_code=1 if list_errors else 0,
+                    stdout=f"matches={total_matches}",
+                    stderr="\n".join(list_errors),
+                )
+                finalized = True
+
+            self.finished.emit(results)
+
+        except _HashCheckCancelled:
+            if evidence_conn is not None and log_id is not None and not finalized:
+                total_matches = sum(v for v in results.values() if isinstance(v, int))
+                finalize_process_log(
+                    evidence_conn,
+                    log_id,
+                    exit_code=1,
+                    stdout=f"matches={total_matches}",
+                    stderr=_format_error("cancelled"),
+                )
+                finalized = True
+        except Exception as e:
+            if evidence_conn is not None and log_id is not None and not finalized:
+                finalize_process_log(
+                    evidence_conn,
+                    log_id,
+                    exit_code=1,
+                    stdout="",
+                    stderr=_format_error(str(e)),
+                )
+                finalized = True
+            self.error.emit(str(e))
+        finally:
+            if evidence_conn is not None:
+                evidence_conn.close()
+
+    def _raise_if_interrupted(self) -> None:
+        if self.isInterruptionRequested():
+            raise _HashCheckCancelled()
+
+
+class _HashCheckCancelled(Exception):
+    """Raised when hash checking is cancelled cooperatively."""
+
+
+def _format_list_error(list_name: str, message: str) -> str:
+    return json.dumps(
+        {"list": list_name, "error": message},
+        ensure_ascii=True,
+        sort_keys=True,
+    )
+
+
+def _format_error(message: str) -> str:
+    return json.dumps({"error": message}, ensure_ascii=True, sort_keys=True)
 
 
 class FileListMatchWorker(QThread):

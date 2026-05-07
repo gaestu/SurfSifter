@@ -9,7 +9,7 @@ SurfSifter stores user preferences in a JSON file that persists across sessions.
 | Installed / frozen binary | `~/.config/surfsifter/settings.json` |
 | Development (from source) | `config/settings.json` (seeded from `config/settings.defaults.json`) |
 
-Settings are auto-saved when you click **Save** in the Preferences dialog. Unknown fields from newer versions are preserved on load for forward compatibility.
+Settings are auto-saved when you click **Save** in the Preferences dialog. Unknown or legacy fields are ignored on load and omitted the next time settings are saved.
 
 ## Preferences tabs
 
@@ -40,9 +40,6 @@ Controls for the built-in download manager (used by the Downloads tab):
 - **Retries** — retry count on failure (0–5, default: 1).
 - **Max download size** — per-file size limit in bytes (default: 200 MB).
 - **Allowed content types** — MIME type patterns permitted for download (default includes `image/*`, `video/*`, `audio/*`, `application/pdf`, Office document types, archive formats, `text/plain`, `text/html`).
-
-### Hash Database
-- **Database path** — path to a SQLite hash database for known-file matching (e.g., NSRL or custom hash sets). Leave empty to disable hash matching.
 
 ### Rules
 - **Rule file** — path to a YAML rule file for registry analysis. The file is validated against a JSONSchema (Draft 2020-12) on save. Invalid rules are rejected with error details.
@@ -80,6 +77,7 @@ Hash Lists and URL Lists also support **Import Folder**:
 - The selected folder is scanned for `.txt` files directly inside that folder only; nested folders are not imported.
 - Each `.txt` file is imported as a separate list using the file stem as the list name.
 - Existing-name conflicts can be handled with **Skip** (default), **Overwrite**, or **Rename (_1, _2)**.
+- Hash Lists are matched directly from the stored text lists by the Images tab **Check Known Hashes** action.
 - URL List folder import asks once for shared category, description, and wildcard/regex pattern mode. These values are written as metadata for plain text URL lists.
 - URL List files that already contain SurfSifter URL-list metadata keep their existing metadata where practical.
 
