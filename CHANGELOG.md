@@ -4,6 +4,8 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased
 
+## v0.3.8-beta - 2026-05-07
+
 - Added batch folder import for URL reference lists with shared metadata and conflict handling.
 - Removed the unused SQLite Hash DB preferences and rebuild workflow while keeping text hash-list matching.
 - Removed deprecated YAML Rules preferences and internal rules_dir plumbing.
