@@ -1262,6 +1262,7 @@ class ExtractAndIngestWorker(QThread):
         config = getattr(extractor, '_config', {}).copy()
         config['evidence_id'] = self.evidence_id
         config['evidence_label'] = self.evidence_label
+        config['run_id'] = run_id
         config['db_manager'] = self.db_manager  # For extractors that need DB access
 
         # Get output directory

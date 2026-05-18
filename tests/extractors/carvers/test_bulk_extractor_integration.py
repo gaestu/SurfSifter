@@ -141,6 +141,8 @@ def test_bulk_extractor_extractor_name_triggers_execution(case_context, mock_fs)
         ).fetchall()
         assert len(urls) == 2, "Should have 2 URL artifacts"
         assert any("gambling" in row["url"] for row in urls)
+        assert all(row["run_id"] for row in urls), "Bulk extractor URLs should be tied to an ingestion run"
+        assert len({row["run_id"] for row in urls}) == 1
 
         emails = evidence_conn.execute(
             "SELECT * FROM emails WHERE evidence_id = ?",
