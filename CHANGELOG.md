@@ -4,6 +4,8 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased
 
+- Fixed Chromium Media History playback parsing when SQLite rows are read via `sqlite3.Row`, including databases with `playback.origin_id` joined to the `origin` table (#31).
+
 ## v0.3.8-beta - 2026-05-07
 
 - Added batch folder import for URL reference lists with shared metadata and conflict handling.

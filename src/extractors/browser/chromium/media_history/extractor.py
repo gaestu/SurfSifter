@@ -1044,11 +1044,13 @@ class MediaHistoryExtractor(BaseExtractor):
 
         records = []
         for row in cursor:
+            row_keys = row.keys()
+            origin_url = row["origin_url"] if "origin_url" in row_keys else ""
             record = {
                 "browser": browser,
                 "profile": profile,
                 "url": row["url"] if "url" in columns else "",
-                "origin": row.get("origin_url") or "",
+                "origin": origin_url or "",
                 "run_id": run_id,
                 "source_path": file_entry["logical_path"],
                 "discovered_by": discovered_by,
