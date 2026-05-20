@@ -269,6 +269,7 @@ CHROMIUM_BROWSERS: Dict[str, Dict[str, Any]] = {
             "home/*/.config/opera",
         ],
         "cache_roots": [
+            "Users/*/AppData/Local/Opera Software/Opera Stable",
             "Users/*/Library/Caches/com.operasoftware.Opera",
             "home/*/.cache/opera",
         ],
@@ -285,6 +286,7 @@ CHROMIUM_BROWSERS: Dict[str, Dict[str, Any]] = {
             "home/*/.config/opera-gx",
         ],
         "cache_roots": [
+            "Users/*/AppData/Local/Opera Software/Opera GX Stable",
             "Users/*/Library/Caches/com.operasoftware.OperaGX",
             "home/*/.cache/opera-gx",
         ],

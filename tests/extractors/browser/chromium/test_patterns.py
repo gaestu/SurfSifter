@@ -187,12 +187,30 @@ class TestGetPatterns:
         assert any(p.endswith("/History") for p in patterns)
         assert any("Opera Stable/History" in p for p in patterns)
 
+    def test_opera_windows_local_cache_path(self):
+        """Opera cache patterns include the Windows Local cache location."""
+        patterns = get_patterns("opera", "cache")
+
+        assert any(
+            "AppData/Local/Opera Software/Opera Stable/Cache/Cache_Data" in p
+            for p in patterns
+        )
+
     def test_opera_gx_flat_profile(self):
         """Opera GX patterns do NOT include Default/ prefix."""
         patterns = get_patterns("opera_gx", "history")
 
         assert not any("Default/" in p for p in patterns)
         assert any("Opera GX Stable/History" in p for p in patterns)
+
+    def test_opera_gx_windows_local_cache_path(self):
+        """Opera GX cache patterns include the Windows Local cache location."""
+        patterns = get_patterns("opera_gx", "cache")
+
+        assert any(
+            "AppData/Local/Opera Software/Opera GX Stable/Cache/Cache_Data" in p
+            for p in patterns
+        )
 
     def test_chromium_patterns(self):
         """Chromium (OSS) browser patterns work."""
