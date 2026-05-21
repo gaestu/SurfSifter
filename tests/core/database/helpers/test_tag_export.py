@@ -3,6 +3,7 @@ Tests for get_tagged_artifact_export() and get_reference_list_match_export().
 """
 from __future__ import annotations
 
+import json
 import sqlite3
 
 import pytest
@@ -107,6 +108,39 @@ def _insert_file(conn, fid: int, name: str = "f.txt"):
         "VALUES (?, ?, ?, ?, 'txt', 100, '2024-01-01T00:00:00Z', "
         "'test', '2024-01-01T00:00:00Z')",
         (fid, EVIDENCE_ID, f"/p/{name}", name),
+    )
+    conn.commit()
+
+
+def _insert_browser_history(conn, history_id: int):
+    conn.execute(
+        "INSERT INTO browser_history (id, evidence_id, url, title, ts_utc, "
+        "browser, profile, visit_count) VALUES (?, ?, 'https://history.example', "
+        "'History Title', '2024-05-01T00:00:00Z', 'chrome', 'Default', 4)",
+        (history_id, EVIDENCE_ID),
+    )
+    conn.commit()
+
+
+def _insert_os_indicator(
+    conn,
+    indicator_id: int,
+    indicator_type: str,
+    value: str,
+    extra: dict,
+):
+    conn.execute(
+        "INSERT INTO os_indicators (id, evidence_id, type, name, value, path, "
+        "hive, provenance, extra_json) VALUES (?, ?, ?, ?, ?, '/source', "
+        "'NTUSER.DAT', 'registry', ?)",
+        (
+            indicator_id,
+            EVIDENCE_ID,
+            indicator_type,
+            value,
+            value,
+            json.dumps(extra, sort_keys=True),
+        ),
     )
     conn.commit()
 
@@ -222,6 +256,21 @@ class TestGetTaggedArtifactExport:
         assert result[0]["sections"][0]["artifact_type"] == "browser_download"
         assert result[0]["sections"][0]["raw_artifact_types"] == ["downloads"]
 
+        # 'history' is the report-module legacy name for browser_history.
+        _insert_browser_history(evidence_db, 11)
+        history_tag = _create_tag(evidence_db, "History")
+        _tag_artifact(evidence_db, history_tag, "history", 11)
+
+        history_result = get_tagged_artifact_export(evidence_db, EVIDENCE_ID)
+        history_section = next(
+            s
+            for tag_entry in history_result
+            if tag_entry["tag_name"] == "History"
+            for s in tag_entry["sections"]
+        )
+        assert history_section["artifact_type"] == "browser_history"
+        assert history_section["raw_artifact_types"] == ["history"]
+
     def test_bookmarks_section_columns(self, evidence_db):
         _insert_bookmark(
             evidence_db, 7, "https://b.example", "Title", "2024-03-01T00:00:00Z"
@@ -236,6 +285,57 @@ class TestGetTaggedArtifactExport:
         assert row[0] == "Title"
         assert row[1] == "https://b.example"
         assert "chrome" in str(row[2])
+
+    def test_requested_artifact_types_render_supported_sections(self, evidence_db):
+        _insert_browser_history(evidence_db, 1)
+        _insert_os_indicator(
+            evidence_db,
+            2,
+            "execution:user_assist",
+            "C:/Tools/App.exe",
+            {
+                "decoded_path": "C:/Tools/App.exe",
+                "last_run_utc": "2024-05-02T00:00:00Z",
+                "run_count": 3,
+            },
+        )
+        _insert_os_indicator(
+            evidence_db,
+            3,
+            "system:installed_software",
+            "Example App",
+            {
+                "publisher": "Example Co",
+                "version": "1.2.3",
+                "install_date": "2024-05-03",
+            },
+        )
+
+        tag = _create_tag(evidence_db, "System Review")
+        _tag_artifact(evidence_db, tag, "browser_history", 1)
+        _tag_artifact(evidence_db, tag, "app_execution", 2)
+        _tag_artifact(evidence_db, tag, "installed_software", 3)
+
+        result = get_tagged_artifact_export(evidence_db, EVIDENCE_ID)
+        sections = {s["artifact_type"]: s for s in result[0]["sections"]}
+
+        assert sections["browser_history"]["supported"] is True
+        assert sections["browser_history"]["rows"][0][:2] == [
+            "History Title",
+            "https://history.example",
+        ]
+        assert sections["app_execution"]["supported"] is True
+        assert sections["app_execution"]["rows"][0][:3] == [
+            "C:/Tools/App.exe",
+            "2024-05-02T00:00:00Z",
+            3,
+        ]
+        assert sections["installed_software"]["supported"] is True
+        assert sections["installed_software"]["rows"][0][:3] == [
+            "Example App",
+            "Example Co",
+            "1.2.3",
+        ]
 
     def test_evidence_isolation(self, evidence_db):
         _insert_url(evidence_db, 1, "https://a.com")

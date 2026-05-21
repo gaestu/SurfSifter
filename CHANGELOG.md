@@ -5,6 +5,7 @@ All notable changes to this project will be documented in this file.
 ## Unreleased
 
 - Fixed Chromium Media History playback parsing when SQLite rows are read via `sqlite3.Row`, including databases with `playback.origin_id` joined to the `origin` table (#31).
+- Add app_execution, browser_history and installed_software to tagged summary export
 
 ## v0.3.8-beta - 2026-05-07
 

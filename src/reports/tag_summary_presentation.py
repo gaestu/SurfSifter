@@ -28,6 +28,10 @@ __all__ = [
 # canonical artifact_type → (section label, column headers)
 ARTIFACT_PRESENTATION: Dict[str, Tuple[str, Tuple[str, ...]]] = {
     "url": ("URLs", ("URL", "Visit timestamp", "Visit count", "Source")),
+    "browser_history": (
+        "Browser history",
+        ("Title", "URL", "Visit time", "Browser/profile", "Visits"),
+    ),
     "browser_search_term": (
         "Browser search terms",
         ("Term", "Timestamp", "Browser/profile"),
@@ -57,6 +61,14 @@ ARTIFACT_PRESENTATION: Dict[str, Tuple[str, Tuple[str, ...]]] = {
     "jump_list_entry": (
         "Jump list entries",
         ("Title", "Target", "Browser"),
+    ),
+    "app_execution": (
+        "Application execution",
+        ("Application path", "Last run", "Run count", "Source"),
+    ),
+    "installed_software": (
+        "Installed software",
+        ("Software", "Publisher", "Version", "Install date"),
     ),
     "timeline": ("Timeline events", ("Kind", "Timestamp", "Reference")),
 }

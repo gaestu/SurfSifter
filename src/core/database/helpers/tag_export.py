@@ -50,6 +50,30 @@ _BROWSER_PROFILE_EXPR = (
 )
 
 
+def _json_value_expr(path: str) -> str:
+    """Safely read a JSON field from os_indicators.extra_json in SQL."""
+    return (
+        "CASE WHEN json_valid(extra_json) "
+        f"THEN json_extract(extra_json, '$.{path}') ELSE NULL END"
+    )
+
+
+_APP_PATH_EXPR = (
+    f"COALESCE({_json_value_expr('decoded_path')}, value, path, name, '')"
+)
+_APP_LAST_RUN_EXPR = (
+    f"COALESCE({_json_value_expr('last_run_utc')}, "
+    f"{_json_value_expr('last_run')}, detected_at_utc)"
+)
+_INSTALL_NAME_EXPR = (
+    f"COALESCE(value, {_json_value_expr('name')}, name, '')"
+)
+_INSTALL_DATE_EXPR = (
+    f"COALESCE({_json_value_expr('install_date_formatted')}, "
+    f"{_json_value_expr('install_date')}, detected_at_utc)"
+)
+
+
 ARTIFACT_EXPORT_SPECS: Dict[str, Dict[str, Any]] = {
     "url": {
         "table": "urls",
@@ -60,6 +84,18 @@ ARTIFACT_EXPORT_SPECS: Dict[str, Dict[str, Any]] = {
             "COALESCE(discovered_by, '')",
         ],
         "ts_expr": "COALESCE(last_seen_utc, first_seen_utc)",
+        "tie_expr": "url",
+    },
+    "browser_history": {
+        "table": "browser_history",
+        "columns": [
+            "COALESCE(title, '')",
+            "url",
+            "COALESCE(ts_utc, last_visit_time_utc, '')",
+            _BROWSER_PROFILE_EXPR,
+            "COALESCE(visit_count, '')",
+        ],
+        "ts_expr": "COALESCE(ts_utc, last_visit_time_utc)",
         "tie_expr": "url",
     },
     "browser_search_term": {
@@ -214,6 +250,30 @@ ARTIFACT_EXPORT_SPECS: Dict[str, Dict[str, Any]] = {
         "ts_expr": "COALESCE(lnk_modification_time, lnk_creation_time, lnk_access_time)",
         "tie_expr": "COALESCE(title, target_path, jumplist_path)",
     },
+    "app_execution": {
+        "table": "os_indicators",
+        "where": "a.type IN ('execution:user_assist', 'execution:launch_services')",
+        "columns": [
+            _APP_PATH_EXPR,
+            f"COALESCE({_APP_LAST_RUN_EXPR}, '')",
+            f"COALESCE({_json_value_expr('run_count')}, '')",
+            "COALESCE(provenance, hive, '')",
+        ],
+        "ts_expr": _APP_LAST_RUN_EXPR,
+        "tie_expr": _APP_PATH_EXPR,
+    },
+    "installed_software": {
+        "table": "os_indicators",
+        "where": "a.type IN ('system:installed_software', 'system:installed_app_macos', 'system:install_receipt_macos')",
+        "columns": [
+            _INSTALL_NAME_EXPR,
+            f"COALESCE({_json_value_expr('publisher')}, '')",
+            f"COALESCE({_json_value_expr('version')}, '')",
+            f"COALESCE({_INSTALL_DATE_EXPR}, '')",
+        ],
+        "ts_expr": _INSTALL_DATE_EXPR,
+        "tie_expr": _INSTALL_NAME_EXPR,
+    },
     "timeline": {
         "table": "timeline",
         "columns": [
@@ -232,6 +292,7 @@ _ARTIFACT_TYPE_ALIASES: Dict[str, str] = {
     "download": "browser_download",
     "downloads": "browser_download",
     "browser_downloads": "browser_download",
+    "history": "browser_history",
     "cookies": "cookie",
     "bookmarks": "bookmark",
     "jump_list": "jump_list_entry",
@@ -430,6 +491,8 @@ def _fetch_artifact_rows(
     select_exprs = ", ".join(spec["columns"])
     ts_expr = spec["ts_expr"]
     tie_expr = spec["tie_expr"]
+    extra_where = spec.get("where")
+    extra_where_sql = f" AND {extra_where}" if extra_where else ""
 
     type_placeholders = ", ".join("?" for _ in raw_artifact_types)
     type_params = list(raw_artifact_types)
@@ -447,6 +510,7 @@ def _fetch_artifact_rows(
             WHERE ta.tag_id = ?
               AND ta.evidence_id = ?
               AND a.evidence_id = ?
+                            {extra_where_sql}
         )
         """,
         (*type_params, tag_id, evidence_id, evidence_id),
@@ -469,6 +533,7 @@ def _fetch_artifact_rows(
               AND ta.evidence_id = ?
         )
         AND a.evidence_id = ?
+        {extra_where_sql}
         -- Final ASC on a.id is the deterministic tiebreaker so two
         -- runs against identical evidence always pick the same sample
         -- rows when ts/tie collide (e.g. timeline rows).
