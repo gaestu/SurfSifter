@@ -18,7 +18,9 @@ import re
 import zipfile
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Iterable, List, Sequence
+from typing import Any, Iterable, List, Optional, Sequence
+
+from core.safe_io import write_bytes_no_follow
 
 __all__ = [
     "TagSummaryExportData",
@@ -41,6 +43,8 @@ _DETERMINISTIC_MTIME = (1980, 1, 1, 0, 0, 0)
 
 
 CHECKBOX_GLYPH = "\u2610"  # ☐
+_THUMB_ROW_HEIGHT = 78
+_THUMB_EMU = 914400  # 96 px at 96 DPI.
 
 
 # ---------------------------------------------------------------------------
@@ -61,6 +65,13 @@ class TagSummaryExportData:
     # Each ref-list bucket: {"list_name": str, "kind": str,
     #   "headers": tuple[str, ...], "rows": list[list[Any]], "total": int}
     reference_list_matches: List[dict]
+
+
+@dataclass(frozen=True)
+class _EmbeddedImage:
+    row: int
+    col: int
+    image_bytes: bytes
 
 
 # ---------------------------------------------------------------------------
@@ -120,22 +131,35 @@ def _cell(col_letter: str, row: int, text: Any, style: int) -> str:
     )
 
 
-def _row_xml(row_num: int, cells: Iterable[str]) -> str:
-    return f'<row r="{row_num}">' + "".join(cells) + "</row>"
+def _row_xml(
+    row_num: int,
+    cells: Iterable[str],
+    *,
+    height: int | None = None,
+) -> str:
+    attrs = f' r="{row_num}"'
+    if height is not None:
+        attrs += f' ht="{height}" customHeight="1"'
+    return f"<row{attrs}>" + "".join(cells) + "</row>"
+
+
+def _has_thumbnail_bytes(values: Sequence[Any]) -> bool:
+    return any(isinstance(v, (bytes, bytearray)) and len(v) > 0 for v in values)
 
 
 # ---------------------------------------------------------------------------
 # Sheet builder
 # ---------------------------------------------------------------------------
 
-def _build_sheet_xml(data: TagSummaryExportData) -> str:
+def _build_sheet_xml(data: TagSummaryExportData) -> tuple[str, List[_EmbeddedImage]]:
     rows_xml: List[str] = []
+    embedded_images: List[_EmbeddedImage] = []
     row = 1
     max_cols = 1
 
-    def emit(cells: Sequence[str]) -> None:
+    def emit(cells: Sequence[str], *, height: int | None = None) -> None:
         nonlocal row
-        rows_xml.append(_row_xml(row, cells))
+        rows_xml.append(_row_xml(row, cells, height=height))
         row += 1
 
     # --- Header rows ---
@@ -164,7 +188,10 @@ def _build_sheet_xml(data: TagSummaryExportData) -> str:
             ])
             for section in tag["sections"]:
                 headers = section["headers"]
-                cols_total = len(headers) + 1  # +1 for the checkbox column
+                thumbnails = section.get("thumbnail_bytes") or []
+                has_thumbnails = _has_thumbnail_bytes(thumbnails)
+                # +1 for checkbox; +1 for thumbnail when available.
+                cols_total = len(headers) + 1 + (1 if has_thumbnails else 0)
                 max_cols = max(max_cols, cols_total)
 
                 # Group heading row carries the tickable checkbox.
@@ -187,24 +214,49 @@ def _build_sheet_xml(data: TagSummaryExportData) -> str:
                 # Column header row: blank under the checkbox column,
                 # then the section column headers.
                 header_cells = [_cell("A", row, "", _STYLE_DEFAULT)]
-                for idx, h in enumerate(headers, start=2):
+                first_data_col = 2
+                if has_thumbnails:
+                    header_cells.append(_cell("B", row, "Thumbnail", _STYLE_HEADER))
+                    first_data_col = 3
+                for idx, h in enumerate(headers, start=first_data_col):
                     header_cells.append(_cell(_col_letter(idx), row, h, _STYLE_HEADER))
                 emit(header_cells)
 
-                for body_row in section["rows"]:
+                for body_idx, body_row in enumerate(section["rows"]):
+                    body_row_num = row
                     body_cells = [_cell("A", row, "", _STYLE_DEFAULT)]
-                    for idx, value in enumerate(body_row, start=2):
+                    if has_thumbnails:
+                        body_cells.append(_cell("B", row, "", _STYLE_DEFAULT))
+                    for idx, value in enumerate(body_row, start=first_data_col):
                         body_cells.append(
                             _cell(_col_letter(idx), row, value, _STYLE_DEFAULT)
                         )
-                    emit(body_cells)
+                    emit(
+                        body_cells,
+                        height=_THUMB_ROW_HEIGHT if has_thumbnails else None,
+                    )
+                    if has_thumbnails and body_idx < len(thumbnails):
+                        thumbnail = thumbnails[body_idx]
+                        if isinstance(thumbnail, (bytes, bytearray)) and thumbnail:
+                            embedded_images.append(
+                                _EmbeddedImage(
+                                    row=body_row_num,
+                                    col=2,
+                                    image_bytes=bytes(thumbnail),
+                                )
+                            )
 
                 shown = len(section["rows"])
                 if section["total"] > shown:
                     extra = section["total"] - shown
                     emit([
                         _cell("A", row, "", _STYLE_DEFAULT),
-                        _cell("B", row, f"…and {extra} more", _STYLE_MORE),
+                        _cell(
+                            _col_letter(first_data_col),
+                            row,
+                            f"…and {extra} more",
+                            _STYLE_MORE,
+                        ),
                     ])
                 emit([_cell("A", row, "", _STYLE_DEFAULT)])  # spacer between sections
             emit([_cell("A", row, "", _STYLE_DEFAULT)])  # spacer after tag
@@ -222,7 +274,9 @@ def _build_sheet_xml(data: TagSummaryExportData) -> str:
     else:
         for bucket in data.reference_list_matches:
             headers = bucket["headers"]
-            cols_total = len(headers) + 1
+            thumbnails = bucket.get("thumbnail_bytes") or []
+            has_thumbnails = _has_thumbnail_bytes(thumbnails)
+            cols_total = len(headers) + 1 + (1 if has_thumbnails else 0)
             max_cols = max(max_cols, cols_total)
 
             label = f"{bucket['list_name']} ({bucket['kind']})"
@@ -233,38 +287,78 @@ def _build_sheet_xml(data: TagSummaryExportData) -> str:
             ])
 
             header_cells = [_cell("A", row, "", _STYLE_DEFAULT)]
-            for idx, h in enumerate(headers, start=2):
+            first_data_col = 2
+            if has_thumbnails:
+                header_cells.append(_cell("B", row, "Thumbnail", _STYLE_HEADER))
+                first_data_col = 3
+            for idx, h in enumerate(headers, start=first_data_col):
                 header_cells.append(_cell(_col_letter(idx), row, h, _STYLE_HEADER))
             emit(header_cells)
 
-            for body_row in bucket["rows"]:
+            for body_idx, body_row in enumerate(bucket["rows"]):
+                body_row_num = row
                 body_cells = [_cell("A", row, "", _STYLE_DEFAULT)]
-                for idx, value in enumerate(body_row, start=2):
+                if has_thumbnails:
+                    body_cells.append(_cell("B", row, "", _STYLE_DEFAULT))
+                for idx, value in enumerate(body_row, start=first_data_col):
                     body_cells.append(
                         _cell(_col_letter(idx), row, value, _STYLE_DEFAULT)
                     )
-                emit(body_cells)
+                emit(
+                    body_cells,
+                    height=_THUMB_ROW_HEIGHT if has_thumbnails else None,
+                )
+                if has_thumbnails and body_idx < len(thumbnails):
+                    thumbnail = thumbnails[body_idx]
+                    if isinstance(thumbnail, (bytes, bytearray)) and thumbnail:
+                        embedded_images.append(
+                            _EmbeddedImage(
+                                row=body_row_num,
+                                col=2,
+                                image_bytes=bytes(thumbnail),
+                            )
+                        )
 
             shown = len(bucket["rows"])
             if bucket["total"] > shown:
                 extra = bucket["total"] - shown
                 emit([
                     _cell("A", row, "", _STYLE_DEFAULT),
-                    _cell("B", row, f"…and {extra} more", _STYLE_MORE),
+                    _cell(
+                        _col_letter(first_data_col),
+                        row,
+                        f"…and {extra} more",
+                        _STYLE_MORE,
+                    ),
                 ])
             emit([_cell("A", row, "", _STYLE_DEFAULT)])  # spacer
 
     # Column widths: narrow checkbox column, wider data columns.
-    cols_block = (
-        '<cols>'
-        '<col min="1" max="1" width="6" customWidth="1"/>'
-        f'<col min="2" max="{max(2, max_cols)}" width="36" customWidth="1"/>'
-        '</cols>'
-    )
+    if embedded_images:
+        cols_block = (
+            '<cols>'
+            '<col min="1" max="1" width="6" customWidth="1"/>'
+            '<col min="2" max="2" width="16" customWidth="1"/>'
+            f'<col min="3" max="{max(3, max_cols)}" width="36" customWidth="1"/>'
+            '</cols>'
+        )
+    else:
+        cols_block = (
+            '<cols>'
+            '<col min="1" max="1" width="6" customWidth="1"/>'
+            f'<col min="2" max="{max(2, max_cols)}" width="36" customWidth="1"/>'
+            '</cols>'
+        )
+
+    worksheet_attrs = 'xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"'
+    drawing_ref = ""
+    if embedded_images:
+        worksheet_attrs += ' xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"'
+        drawing_ref = '<drawing r:id="rId1"/>'
 
     sheet_xml = (
         '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
-        '<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">'
+        f'<worksheet {worksheet_attrs}>'
         '<sheetPr><pageSetUpPr fitToPage="1"/></sheetPr>'
         f'{cols_block}'
         "<sheetData>" + "".join(rows_xml) + "</sheetData>"
@@ -273,28 +367,43 @@ def _build_sheet_xml(data: TagSummaryExportData) -> str:
         'header="0.3" footer="0.3"/>'
         '<pageSetup paperSize="9" orientation="portrait" '
         'fitToHeight="0" fitToWidth="1"/>'
+        f'{drawing_ref}'
         "</worksheet>"
     )
-    return sheet_xml
+    return sheet_xml, embedded_images
 
 
 # ---------------------------------------------------------------------------
 # Static workbook parts
 # ---------------------------------------------------------------------------
 
-_CONTENT_TYPES_XML = (
-    '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
-    '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">'
-    '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>'
-    '<Default Extension="xml" ContentType="application/xml"/>'
-    '<Override PartName="/xl/workbook.xml" '
-    'ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>'
-    '<Override PartName="/xl/worksheets/sheet1.xml" '
-    'ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>'
-    '<Override PartName="/xl/styles.xml" '
-    'ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/>'
-    '</Types>'
-)
+def _content_types_xml(has_images: bool) -> str:
+    image_default = (
+        '<Default Extension="jpg" ContentType="image/jpeg"/>'
+        if has_images
+        else ""
+    )
+    drawing_override = (
+        '<Override PartName="/xl/drawings/drawing1.xml" '
+        'ContentType="application/vnd.openxmlformats-officedocument.drawing+xml"/>'
+        if has_images
+        else ""
+    )
+    return (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">'
+        '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>'
+        '<Default Extension="xml" ContentType="application/xml"/>'
+        f'{image_default}'
+        '<Override PartName="/xl/workbook.xml" '
+        'ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>'
+        '<Override PartName="/xl/worksheets/sheet1.xml" '
+        'ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>'
+        '<Override PartName="/xl/styles.xml" '
+        'ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/>'
+        f'{drawing_override}'
+        '</Types>'
+    )
 
 _ROOT_RELS_XML = (
     '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
@@ -326,6 +435,69 @@ _WORKBOOK_RELS_XML = (
     'Target="styles.xml"/>'
     '</Relationships>'
 )
+
+_SHEET_RELS_XML = (
+    '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+    '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+    '<Relationship Id="rId1" '
+    'Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/drawing" '
+    'Target="../drawings/drawing1.xml"/>'
+    '</Relationships>'
+)
+
+
+def _drawing_xml(images: Sequence[_EmbeddedImage]) -> str:
+    anchors: List[str] = []
+    for idx, image in enumerate(images, start=1):
+        col = image.col - 1
+        row = image.row - 1
+        # OOXML drawing anchors are zero-based; worksheet cells above are one-based.
+        anchors.append(
+            '<xdr:oneCellAnchor>'
+            '<xdr:from>'
+            f'<xdr:col>{col}</xdr:col><xdr:colOff>95250</xdr:colOff>'
+            f'<xdr:row>{row}</xdr:row><xdr:rowOff>95250</xdr:rowOff>'
+            '</xdr:from>'
+            f'<xdr:ext cx="{_THUMB_EMU}" cy="{_THUMB_EMU}"/>'
+            '<xdr:pic>'
+            '<xdr:nvPicPr>'
+            f'<xdr:cNvPr id="{idx}" name="thumbnail {idx}"/>'
+            '<xdr:cNvPicPr><a:picLocks noChangeAspect="1"/></xdr:cNvPicPr>'
+            '</xdr:nvPicPr>'
+            '<xdr:blipFill>'
+            f'<a:blip r:embed="rId{idx}"/>'
+            '<a:stretch><a:fillRect/></a:stretch>'
+            '</xdr:blipFill>'
+            '<xdr:spPr><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></xdr:spPr>'
+            '</xdr:pic>'
+            '<xdr:clientData/>'
+            '</xdr:oneCellAnchor>'
+        )
+    return (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        '<xdr:wsDr '
+        'xmlns:xdr="http://schemas.openxmlformats.org/drawingml/2006/spreadsheetDrawing" '
+        'xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" '
+        'xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">'
+        + "".join(anchors)
+        + '</xdr:wsDr>'
+    )
+
+
+def _drawing_rels_xml(images: Sequence[_EmbeddedImage]) -> str:
+    rels = []
+    for idx, _image in enumerate(images, start=1):
+        rels.append(
+            f'<Relationship Id="rId{idx}" '
+            'Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" '
+            f'Target="../media/image{idx}.jpg"/>'
+        )
+    return (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+        + "".join(rels)
+        + '</Relationships>'
+    )
 
 # Style table: indices must line up with _STYLE_* constants above.
 _STYLES_XML = (
@@ -392,6 +564,8 @@ _STYLES_XML = (
 def write_tag_summary_xlsx(
     data: TagSummaryExportData,
     output_path: Path,
+    *,
+    containment_root: Path,
 ) -> Path:
     """
     Write the tag-summary working document to ``output_path``.
@@ -399,18 +573,30 @@ def write_tag_summary_xlsx(
     Returns the resolved output path.
     """
     output_path = Path(output_path)
-    output_path.parent.mkdir(parents=True, exist_ok=True)
 
-    sheet_xml = _build_sheet_xml(data)
+    sheet_xml, embedded_images = _build_sheet_xml(data)
 
     parts = [
-        ("[Content_Types].xml", _CONTENT_TYPES_XML),
+        ("[Content_Types].xml", _content_types_xml(bool(embedded_images))),
         ("_rels/.rels", _ROOT_RELS_XML),
         ("xl/workbook.xml", _WORKBOOK_XML),
         ("xl/_rels/workbook.xml.rels", _WORKBOOK_RELS_XML),
         ("xl/styles.xml", _STYLES_XML),
         ("xl/worksheets/sheet1.xml", sheet_xml),
     ]
+    if embedded_images:
+        parts.extend(
+            [
+                ("xl/worksheets/_rels/sheet1.xml.rels", _SHEET_RELS_XML),
+                ("xl/drawings/drawing1.xml", _drawing_xml(embedded_images)),
+                (
+                    "xl/drawings/_rels/drawing1.xml.rels",
+                    _drawing_rels_xml(embedded_images),
+                ),
+            ]
+        )
+        for idx, image in enumerate(embedded_images, start=1):
+            parts.append((f"xl/media/image{idx}.jpg", image.image_bytes))
 
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w", compression=zipfile.ZIP_DEFLATED) as zf:
@@ -421,5 +607,10 @@ def write_tag_summary_xlsx(
             info.compress_type = zipfile.ZIP_DEFLATED
             zf.writestr(info, payload)
 
-    output_path.write_bytes(buf.getvalue())
+    write_bytes_no_follow(
+        output_path,
+        buf.getvalue(),
+        containment_root=containment_root,
+        exclusive=True,
+    )
     return output_path

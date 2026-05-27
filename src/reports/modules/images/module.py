@@ -9,11 +9,10 @@ from __future__ import annotations
 import base64
 import json
 import sqlite3
-from io import BytesIO
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from jinja2 import Template
+from jinja2 import Environment, FileSystemLoader
 
 from ...dates import format_datetime
 from ..base import (
@@ -22,18 +21,13 @@ from ..base import (
     FilterType,
     ModuleMetadata,
 )
-from core.image_codecs import ensure_pillow_heif_registered
-from core.database.manager import slugify_label
+from core.image_codecs import PIL_AVAILABLE, thumbnail_to_jpeg_bytes
+from core.image_paths import evidence_workspace_root, resolve_case_image_path
 from reports.paths import get_module_template_dir
 
 _SQL_CHUNK_SIZE = 500
 
-# Try to import PIL for thumbnail generation
-try:
-    from PIL import Image as PILImage
-    HAS_PIL = True
-except ImportError:
-    HAS_PIL = False
+HAS_PIL = PIL_AVAILABLE
 
 # Module directory for template resolution
 _MODULE_DIR = get_module_template_dir(__file__)
@@ -344,8 +338,8 @@ class ImagesModule(BaseReportModule):
         # Load and render template
         template_path = self.get_template_path()
         if template_path and template_path.exists():
-            template_content = template_path.read_text(encoding="utf-8")
-            template = Template(template_content)
+            env = Environment(loader=FileSystemLoader(template_path.parent), autoescape=True)
+            template = env.get_template(template_path.name)
             # Build auto-generated description
             auto_description = ""
             if show_description:
@@ -657,24 +651,22 @@ class ImagesModule(BaseReportModule):
             if not image_path or not image_path.exists():
                 return ""
 
-            ensure_pillow_heif_registered()
-            # Open and create thumbnail
-            with PILImage.open(image_path) as img:
-                # Convert to RGB if necessary (for PNG with transparency)
-                if img.mode in ("RGBA", "P"):
-                    img = img.convert("RGB")
-
-                # Create thumbnail (maintains aspect ratio)
-                img.thumbnail(self.THUMB_SIZE, PILImage.Resampling.LANCZOS)
-
-                # Save to bytes
-                buffer = BytesIO()
-                img.save(buffer, format="JPEG", quality=85)
-                buffer.seek(0)
-
-                # Encode as base64
-                b64 = base64.b64encode(buffer.read()).decode("utf-8")
-                return f"data:image/jpeg;base64,{b64}"
+            source_root = evidence_workspace_root(
+                case_folder=Path(case_folder),
+                evidence_id=evidence_id,
+                evidence_label=evidence_label,
+            )
+            if source_root is None:
+                return ""
+            thumb_bytes = thumbnail_to_jpeg_bytes(
+                image_path,
+                size=self.THUMB_SIZE,
+                containment_root=source_root,
+            )
+            if not thumb_bytes:
+                return ""
+            b64 = base64.b64encode(thumb_bytes).decode("utf-8")
+            return f"data:image/jpeg;base64,{b64}"
 
         except Exception:
             return ""
@@ -700,62 +692,17 @@ class ImagesModule(BaseReportModule):
             Full path to the image file, or None if cannot resolve
         """
         if not case_folder:
-            # Try simple paths as fallback
-            simple_path = Path(rel_path)
-            if simple_path.exists():
-                return simple_path
             return None
 
-        # Build evidence slug using canonical slugify function
-        if evidence_label:
-            evidence_slug = slugify_label(evidence_label, evidence_id)
-        else:
-            evidence_slug = f"evidence_{evidence_id}"
-
-        evidence_dir = case_folder / "evidences" / evidence_slug
-
-        # Map discovered_by to the extractor's output subdirectory
-        source_map = {
-            # Carving extractors
-            "bulk_extractor": "bulk_extractor",
-            "bulk_extractor:images": "bulk_extractor",
-            "bulk_extractor_images": "bulk_extractor",
-            "foremost_carver": "foremost_carver",
-            "scalpel": "scalpel",
-            "swiftbeaver": "swiftbeaver",
-            "image_carving": "",  # Legacy: rel_path is full path
-            # Filesystem extractor
-            "filesystem_images": "filesystem_images/extracted",
-            # Cache/browser extractors
-            "cache_simple": "cache_simple",
-            "cache_blockfile": "cache_simple",
-            "cache_firefox": "cache_firefox",
-            "browser_storage_indexeddb": "browser_storage",
-            "safari": "safari",
-            # Favicon extractors
-            "firefox_favicons": "firefox_favicons",
-            "chromium_favicons": "chromium_favicons",
-        }
-
-        base_subdir = source_map.get(discovered_by or "", "")
-
-        # Try extractor-specific path first
-        if base_subdir:
-            full_path = (evidence_dir / base_subdir / rel_path).resolve()
-            if full_path.exists():
-                return full_path
-
-        # Fallback: try direct path under evidence directory
-        fallback_path = (evidence_dir / rel_path).resolve()
-        if fallback_path.exists():
-            return fallback_path
-
-        # Last resort: try from case folder directly
-        last_resort = (case_folder / rel_path).resolve()
-        if last_resort.exists():
-            return last_resort
-
-        return None
+        return resolve_case_image_path(
+            rel_path=rel_path,
+            discovered_by=discovered_by,
+            case_folder=case_folder,
+            evidence_id=evidence_id,
+            evidence_label=evidence_label,
+            require_exists=True,
+            allow_case_root_fallback=False,
+        )
 
     def _build_filter_description(
         self, tag_filter: list, match_filter: str, t: Dict[str, str] | None = None

@@ -3,6 +3,7 @@ Tests for the standalone XLSX writer used by Reports → Export Tag Summary.
 """
 from __future__ import annotations
 
+import base64
 import zipfile
 from xml.etree import ElementTree as ET
 
@@ -14,6 +15,11 @@ from reports.tag_summary_export import (
 
 
 XLSX_NS = {"s": "http://schemas.openxmlformats.org/spreadsheetml/2006/main"}
+JPEG_1X1 = base64.b64decode(
+    "/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAP//////////////////////////////////////////////////////////////////////////////////////"
+    "////2wBDAf//////////////////////////////////////////////////////////////////////////////////////wAARCAABAAEDASIAAhEBAxEB/"
+    "8QAFQABAQAAAAAAAAAAAAAAAAAAAAX/xAAUEAEAAAAAAAAAAAAAAAAAAAAA/9oADAMBAAIQAxAAAAH/xAAUEAEAAAAAAAAAAAAAAAAAAAAA/9oACAEBAAEFAqf/xAAUEQEAAAAAAAAAAAAAAAAAAAAA/9oACAEDAQE/ASP/xAAUEQEAAAAAAAAAAAAAAAAAAAAA/9oACAECAQE/ASP/xAAUEAEAAAAAAAAAAAAAAAAAAAAA/9oACAEBAAY/Aqf/xAAUEAEAAAAAAAAAAAAAAAAAAAAA/9oACAEBAAE/IV//2gAMAwEAAgADAAAAEP/EFBQRAQAAAAAAAAAAAAAAAAAAABD/2gAIAQMBAT8QH//EFBQRAQAAAAAAAAAAAAAAAAAAABD/2gAIAQIBAT8QH//EFBABAQAAAAAAAAAAAAAAAAAAABD/2gAIAQEAAT8QH//Z"
+)
 
 
 def _read_sheet_text_cells(xlsx_path) -> list[str]:
@@ -29,6 +35,19 @@ def _read_sheet_text_cells(xlsx_path) -> list[str]:
     return out
 
 
+def _read_sheet_cell_map(xlsx_path) -> dict[str, str]:
+    """Return sheet1 inline string cells keyed by Excel cell reference."""
+    with zipfile.ZipFile(xlsx_path) as zf:
+        sheet_xml = zf.read("xl/worksheets/sheet1.xml")
+    root = ET.fromstring(sheet_xml)
+    out: dict[str, str] = {}
+    for cell in root.findall(".//s:sheetData/s:row/s:c", XLSX_NS):
+        ref = cell.attrib["r"]
+        text = cell.findtext("s:is/s:t", default="", namespaces=XLSX_NS)
+        out[ref] = text
+    return out
+
+
 def _make_data(**overrides) -> TagSummaryExportData:
     base = dict(
         evidence_label="EV-001",
@@ -41,9 +60,13 @@ def _make_data(**overrides) -> TagSummaryExportData:
     return TagSummaryExportData(**base)
 
 
+def _write_xlsx(data: TagSummaryExportData, out) -> None:
+    write_tag_summary_xlsx(data, out, containment_root=out.parent)
+
+
 def test_writer_produces_valid_zip_with_required_parts(tmp_path):
     out = tmp_path / "tag_summary.xlsx"
-    write_tag_summary_xlsx(_make_data(), out)
+    _write_xlsx(_make_data(), out)
     assert out.exists()
     with zipfile.ZipFile(out) as zf:
         names = set(zf.namelist())
@@ -59,7 +82,7 @@ def test_writer_produces_valid_zip_with_required_parts(tmp_path):
 
 def test_header_rows_present(tmp_path):
     out = tmp_path / "h.xlsx"
-    write_tag_summary_xlsx(_make_data(), out)
+    _write_xlsx(_make_data(), out)
     cells = _read_sheet_text_cells(out)
     assert "Tag Summary — EV-001" in cells
     assert "Exported: 2025-01-01T12:00:00+00:00" in cells
@@ -67,7 +90,7 @@ def test_header_rows_present(tmp_path):
 
 def test_no_tags_message(tmp_path):
     out = tmp_path / "n.xlsx"
-    write_tag_summary_xlsx(_make_data(), out)
+    _write_xlsx(_make_data(), out)
     cells = _read_sheet_text_cells(out)
     assert "No tagged artifacts." in cells
     assert "Reference-list matches" in cells
@@ -95,7 +118,7 @@ def test_tag_section_renders_rows_and_truncation(tmp_path):
         ]
     )
     out = tmp_path / "t.xlsx"
-    write_tag_summary_xlsx(data, out)
+    _write_xlsx(data, out)
     cells = _read_sheet_text_cells(out)
 
     assert "Tag: Suspicious" in cells
@@ -123,7 +146,7 @@ def test_reference_list_section_rendered(tmp_path):
         ]
     )
     out = tmp_path / "r.xlsx"
-    write_tag_summary_xlsx(data, out)
+    _write_xlsx(data, out)
     cells = _read_sheet_text_cells(out)
     assert "Reference-list matches" in cells
     assert "blocklist (url)" in cells
@@ -147,7 +170,7 @@ def test_special_chars_are_escaped(tmp_path):
         ]
     )
     out = tmp_path / "x.xlsx"
-    write_tag_summary_xlsx(data, out)
+    _write_xlsx(data, out)
     # Should round-trip through the XML parser without raising and yield
     # the original text values.
     cells = _read_sheet_text_cells(out)
@@ -175,7 +198,7 @@ def test_xml_invalid_control_chars_are_stripped(tmp_path):
         ]
     )
     out = tmp_path / "ctrl.xlsx"
-    write_tag_summary_xlsx(data, out)
+    _write_xlsx(data, out)
     # Must parse without raising; cells must contain the cleaned values.
     cells = _read_sheet_text_cells(out)
     assert "Tag: TagX" in cells
@@ -201,6 +224,106 @@ def test_writer_is_deterministic_for_identical_input(tmp_path):
     )
     a = tmp_path / "a.xlsx"
     b = tmp_path / "b.xlsx"
-    write_tag_summary_xlsx(data, a)
-    write_tag_summary_xlsx(data, b)
+    _write_xlsx(data, a)
+    _write_xlsx(data, b)
+    assert a.read_bytes() == b.read_bytes()
+
+
+def test_writer_embeds_tag_and_reference_thumbnails(tmp_path):
+    data = _make_data(
+        tags=[
+            {
+                "tag_name": "Pictures",
+                "sections": [
+                    {
+                        "label": "Images",
+                        "headers": ("Filename", "Path", "Timestamp"),
+                        "rows": [["a.jpg", "img/a.jpg", "2025-01-01T00:00:00Z"]],
+                        "thumbnail_bytes": [JPEG_1X1],
+                        "total": 1,
+                    }
+                ],
+            }
+        ],
+        reference_list_matches=[
+            {
+                "list_name": "known",
+                "kind": "image",
+                "headers": ("Filename", "Path", "MD5"),
+                "rows": [["b.jpg", "img/b.jpg", "abc"]],
+                "thumbnail_bytes": [JPEG_1X1],
+                "total": 1,
+            }
+        ],
+    )
+    out = tmp_path / "thumbs.xlsx"
+    _write_xlsx(data, out)
+
+    with zipfile.ZipFile(out) as zf:
+        names = set(zf.namelist())
+        assert "xl/worksheets/_rels/sheet1.xml.rels" in names
+        assert "xl/drawings/drawing1.xml" in names
+        assert "xl/drawings/_rels/drawing1.xml.rels" in names
+        assert "xl/media/image1.jpg" in names
+        assert "xl/media/image2.jpg" in names
+        assert zf.read("xl/media/image1.jpg") == JPEG_1X1
+        ET.fromstring(zf.read("xl/drawings/drawing1.xml"))
+
+    cells = _read_sheet_text_cells(out)
+    assert cells.count("Thumbnail") == 2
+
+
+def test_writer_handles_mixed_thumbnail_rows(tmp_path):
+    data = _make_data(
+        tags=[
+            {
+                "tag_name": "Pictures",
+                "sections": [
+                    {
+                        "label": "Images",
+                        "headers": ("Filename",),
+                        "rows": [["a.jpg"], ["missing.jpg"], ["c.jpg"]],
+                        "thumbnail_bytes": [JPEG_1X1, None, JPEG_1X1],
+                        "total": 5,
+                    }
+                ],
+            }
+        ]
+    )
+    out = tmp_path / "mixed-thumbs.xlsx"
+    _write_xlsx(data, out)
+
+    with zipfile.ZipFile(out) as zf:
+        names = set(zf.namelist())
+        assert "xl/media/image1.jpg" in names
+        assert "xl/media/image2.jpg" in names
+        assert "xl/media/image3.jpg" not in names
+
+    cells = _read_sheet_cell_map(out)
+    assert cells["B6"] == "Thumbnail"
+    assert cells["C6"] == "Filename"
+    assert cells["C10"] == "…and 2 more"
+
+
+def test_writer_is_deterministic_with_thumbnails(tmp_path):
+    data = _make_data(
+        tags=[
+            {
+                "tag_name": "Pictures",
+                "sections": [
+                    {
+                        "label": "Images",
+                        "headers": ("Filename",),
+                        "rows": [["a.jpg"]],
+                        "thumbnail_bytes": [JPEG_1X1],
+                        "total": 1,
+                    }
+                ],
+            }
+        ]
+    )
+    a = tmp_path / "thumb-a.xlsx"
+    b = tmp_path / "thumb-b.xlsx"
+    _write_xlsx(data, a)
+    _write_xlsx(data, b)
     assert a.read_bytes() == b.read_bytes()

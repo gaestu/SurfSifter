@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import sqlite3
+from pathlib import Path
 from typing import Generator
 
 import pytest
+from PIL import Image as PILImage
 
 from reports.appendix import AppendixDownloadListModule, AppendixRegistry
 from reports.locales import get_translations
@@ -109,6 +111,190 @@ class TestAppendixDownloadListMetadata:
 
     def test_default_title(self, module: AppendixDownloadListModule) -> None:
         assert module.get_default_title() == "Downloaded Images"
+
+
+class TestDownloadThumbnailCache:
+    def test_uses_valid_md5_key(self, module: AppendixDownloadListModule) -> None:
+        digest = "a" * 32
+        key = module._thumb_cache_key(1, digest)
+        assert key != digest
+        assert len(key) == 32
+
+    def test_rejects_malformed_md5_key(self, module: AppendixDownloadListModule) -> None:
+        key = module._thumb_cache_key(1, "../../outside")
+        assert key != "../../outside"
+        assert len(key) == 32
+
+    def test_cache_key_is_evidence_scoped(
+        self,
+        module: AppendixDownloadListModule,
+    ) -> None:
+        digest = "a" * 32
+        key1 = module._thumb_cache_key(1, digest, evidence_id=1)
+        key2 = module._thumb_cache_key(1, digest, evidence_id=2)
+        assert key1 != key2
+
+    def test_safe_cache_path_rejects_escape(
+        self,
+        module: AppendixDownloadListModule,
+        tmp_path: Path,
+    ) -> None:
+        cache_dir = tmp_path / "report_thumbs" / "downloads"
+        cache_dir.mkdir(parents=True)
+        assert module._safe_thumb_cache_path(cache_dir, "../../outside") is None
+
+    def test_resolves_case_relative_completed_download_path(
+        self,
+        module: AppendixDownloadListModule,
+        tmp_path: Path,
+    ) -> None:
+        case_folder = tmp_path / "case"
+        image_path = case_folder / "evidences" / "test-evidence" / "_downloads" / "example.com" / "image.jpg"
+        image_path.parent.mkdir(parents=True)
+        image_path.write_bytes(b"image-bytes")
+
+        resolved = module._resolve_download_path(
+            "evidences/test-evidence/_downloads/example.com/image.jpg",
+            case_folder,
+            evidence_id=1,
+            evidence_label="Test Evidence",
+        )
+
+        assert resolved == image_path
+
+    def test_rejects_case_relative_path_for_other_evidence(
+        self,
+        module: AppendixDownloadListModule,
+        tmp_path: Path,
+    ) -> None:
+        case_folder = tmp_path / "case"
+        image_path = case_folder / "evidences" / "other-evidence" / "_downloads" / "example.com" / "image.jpg"
+        image_path.parent.mkdir(parents=True)
+        image_path.write_bytes(b"image-bytes")
+
+        resolved = module._resolve_download_path(
+            "evidences/other-evidence/_downloads/example.com/image.jpg",
+            case_folder,
+            evidence_id=1,
+            evidence_label="Test Evidence",
+        )
+
+        assert resolved is None
+
+    def test_rejects_absolute_download_path_inside_evidence(
+        self,
+        module: AppendixDownloadListModule,
+        tmp_path: Path,
+    ) -> None:
+        case_folder = tmp_path / "case"
+        image_path = case_folder / "evidences" / "test-evidence" / "_downloads" / "example.com" / "image.jpg"
+        image_path.parent.mkdir(parents=True)
+        image_path.write_bytes(b"image-bytes")
+
+        resolved = module._resolve_download_path(
+            str(image_path.resolve()),
+            case_folder,
+            evidence_id=1,
+            evidence_label="Test Evidence",
+        )
+
+        assert resolved is None
+
+    def test_rejects_legacy_absolute_download_path_for_other_evidence(
+        self,
+        module: AppendixDownloadListModule,
+        tmp_path: Path,
+    ) -> None:
+        case_folder = tmp_path / "case"
+        image_path = case_folder / "evidences" / "other-evidence" / "_downloads" / "example.com" / "image.jpg"
+        image_path.parent.mkdir(parents=True)
+        image_path.write_bytes(b"image-bytes")
+
+        resolved = module._resolve_download_path(
+            str(image_path.resolve()),
+            case_folder,
+            evidence_id=1,
+            evidence_label="Test Evidence",
+        )
+
+        assert resolved is None
+
+    def test_batch_regenerates_invalid_cache_from_source(
+        self,
+        module: AppendixDownloadListModule,
+        tmp_path: Path,
+    ) -> None:
+        case_folder = tmp_path / "case"
+        image_path = case_folder / "evidences" / "test-evidence" / "_downloads" / "example.com" / "image.jpg"
+        image_path.parent.mkdir(parents=True)
+        PILImage.new("RGB", (64, 64), color=(100, 150, 200)).save(image_path, format="JPEG")
+        cache_dir = case_folder / "report_thumbs" / "downloads"
+        cache_dir.mkdir(parents=True)
+
+        row = {
+            "id": 1,
+            "dest_path": "example.com/image.jpg",
+            "md5": "a" * 32,
+        }
+        key = module._thumb_cache_key(
+            row["id"],
+            row.get("md5"),
+            1,
+            row["dest_path"],
+        )
+        cache_path = module._safe_thumb_cache_path(cache_dir, key)
+        assert cache_path is not None
+        cache_path.write_bytes(b"not-a-jpeg" * 20)
+
+        result = module._generate_thumbnails_batch(
+            [row],
+            case_folder,
+            evidence_id=1,
+            evidence_label="Test Evidence",
+            thumb_cache_dir=cache_dir,
+        )
+
+        assert result[row["id"]].startswith("data:image/jpeg;base64,")
+
+    def test_batch_ignores_valid_cache_when_md5_is_malformed(
+        self,
+        module: AppendixDownloadListModule,
+        tmp_path: Path,
+    ) -> None:
+        case_folder = tmp_path / "case"
+        image_path = case_folder / "evidences" / "test-evidence" / "_downloads" / "example.com" / "image.jpg"
+        image_path.parent.mkdir(parents=True)
+        PILImage.new("RGB", (64, 64), color=(0, 0, 255)).save(image_path, format="JPEG")
+        stale_path = tmp_path / "stale.jpg"
+        PILImage.new("RGB", (64, 64), color=(255, 0, 0)).save(stale_path, format="JPEG")
+        cache_dir = case_folder / "report_thumbs" / "downloads"
+        cache_dir.mkdir(parents=True)
+
+        row = {
+            "id": 1,
+            "dest_path": "example.com/image.jpg",
+            "md5": "not-a-valid-md5",
+        }
+        key = module._thumb_cache_key(
+            row["id"],
+            row.get("md5"),
+            1,
+            row["dest_path"],
+        )
+        cache_path = module._safe_thumb_cache_path(cache_dir, key)
+        assert cache_path is not None
+        stale_ref = module._generate_single_thumbnail(stale_path, cache_path)
+
+        result = module._generate_thumbnails_batch(
+            [row],
+            case_folder,
+            evidence_id=1,
+            evidence_label="Test Evidence",
+            thumb_cache_dir=cache_dir,
+        )
+
+        assert result[row["id"]].startswith("data:image/jpeg;base64,")
+        assert result[row["id"]] != stale_ref
 
 
 class TestAppendixDownloadListFilterFields:

@@ -5,12 +5,15 @@ Verifies the two-phase similarity search algorithm:
 2. Python Hamming distance on reduced set
 """
 
+import importlib
 import sqlite3
 from pathlib import Path
 from typing import List
 
 import pytest
+from PIL import Image
 
+from core import phash as phash_module
 from core.phash import compute_phash_prefix
 from core.database import migrate, insert_images
 from core.database import EVIDENCE_MIGRATIONS_DIR
@@ -27,6 +30,17 @@ def create_test_db(tmp_path: Path) -> sqlite3.Connection:
 
 class TestPhashPrefix:
     """Test phash prefix computation."""
+
+    def test_import_does_not_reset_pillow_pixel_limit(self):
+        original_limit = Image.MAX_IMAGE_PIXELS
+        sentinel_limit = 123_456_789
+        Image.MAX_IMAGE_PIXELS = sentinel_limit
+        try:
+            importlib.reload(phash_module)
+            assert Image.MAX_IMAGE_PIXELS == sentinel_limit
+        finally:
+            Image.MAX_IMAGE_PIXELS = original_limit
+            importlib.reload(phash_module)
 
     def test_compute_prefix_valid(self):
         """Valid 16-char hex phash returns integer prefix."""

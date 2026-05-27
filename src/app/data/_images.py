@@ -16,7 +16,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
-from core.database import slugify_label
+from core.image_paths import resolve_case_image_path, safe_relative_artifact_path
 from core.phash import hamming_distance
 
 from ._base import BaseDataAccess
@@ -487,7 +487,7 @@ class ImageQueryMixin(BaseDataAccess):
         rel_path: str,
         evidence_id: Optional[int] = None,
         discovered_by: Optional[str] = None,
-    ) -> Path:
+    ) -> Optional[Path]:
         """
         Resolve an image's relative path to its full filesystem path.
 
@@ -497,55 +497,41 @@ class ImageQueryMixin(BaseDataAccess):
             discovered_by: Source extractor (optional, determines base directory)
 
         Returns:
-            Full path to the image file
+            Full path to the image file, or None if the path is not resolvable.
         """
-        # If no evidence context, fall back to simple resolution (legacy behavior)
-        if evidence_id is None or discovered_by is None:
-            return (self.case_folder / rel_path).resolve()
+        # If no evidence context, fall back to simple resolution (legacy behavior).
+        if evidence_id is None:
+            return self._contained_case_image_fallback(rel_path)
 
-        # Get evidence label and convert to folder slug
+        safe_rel = safe_relative_artifact_path(rel_path)
+        if safe_rel is None or safe_rel.parts[:1] == ("evidences",):
+            return None
+
         label = self._get_evidence_label(evidence_id)
-        if not label:
-            return (self.case_folder / rel_path).resolve()
+        resolved = resolve_case_image_path(
+            rel_path=rel_path,
+            discovered_by=discovered_by,
+            case_folder=self.case_folder,
+            evidence_id=evidence_id,
+            evidence_label=label,
+            require_exists=False,
+            allow_case_root_fallback=False,
+        )
+        if resolved is not None:
+            return resolved
+        return None
 
-        # Convert label to filesystem-safe slug (matching folder name)
-        evidence_slug = slugify_label(label, evidence_id)
-        evidence_dir = self.case_folder / "evidences" / evidence_slug
-
-        # Map discovered_by to the extractor's output subdirectory
-        # Note: rel_path already includes 'carved/' prefix from ingestion
-        # (e.g., 'carved/gif/00001234.gif'), so base_subdir should point
-        # to the extractor directory, not including 'carved/'
-        # Added cache extractors (cache_simple, cache_firefox, browser_storage, safari)
-        source_map = {
-            # Carving extractors
-            "bulk_extractor": "bulk_extractor",
-            "bulk_extractor:images": "bulk_extractor",
-            "bulk_extractor_images": "bulk_extractor",
-            "foremost_carver": "foremost_carver",
-            "scalpel": "scalpel",
-            "swiftbeaver": "swiftbeaver",
-            "image_carving": "",  # Legacy: rel_path is full path
-            # Filesystem extractor
-            "filesystem_images": "filesystem_images/extracted",
-            # Cache/browser extractors
-            # rel_path format: <run_id>/carved_images/<filename> or similar
-            "cache_simple": "cache_simple",
-            "cache_blockfile": "cache_simple",  # Blockfile uses same output dir
-            "cache_firefox": "cache_firefox",
-            "browser_storage_indexeddb": "browser_storage",
-            "safari": "safari",
-            # Favicon extractors
-            "firefox_favicons": "firefox_favicons",
-            "chromium_favicons": "chromium_favicons",
-        }
-
-        base_subdir = source_map.get(discovered_by, "")
-        if base_subdir:
-            return (evidence_dir / base_subdir / rel_path).resolve()
-
-        # Fallback: try direct path under evidence directory
-        return (evidence_dir / rel_path).resolve()
+    def _contained_case_image_fallback(self, rel_path: str) -> Optional[Path]:
+        safe_rel = safe_relative_artifact_path(rel_path)
+        if safe_rel is None:
+            return None
+        try:
+            case_root = self.case_folder.resolve()
+            candidate = (case_root / safe_rel).resolve()
+            candidate.relative_to(case_root)
+        except (OSError, ValueError):
+            return None
+        return candidate
 
     # -------------------------------------------------------------------------
     # Image Similarity & Hash Matching
@@ -575,11 +561,13 @@ class ImageQueryMixin(BaseDataAccess):
         # Guard: return empty list if evidence DB doesn't exist yet
         if not self._evidence_db_exists(evidence_id):
             return []
+        if target_phash is None:
+            return []
 
         # Compute target prefix for SQL filtering
         try:
             target_prefix = int(target_phash[:4], 16)
-        except ValueError:
+        except (TypeError, ValueError):
             # Invalid phash format, fall back to full scan
             target_prefix = None
 

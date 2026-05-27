@@ -201,8 +201,7 @@ class ReportsTab(QWidget):
         if case_folder is None:
             return None
         slug = self._slugify(self._evidence_label)
-        timestamp = datetime.now(tz=timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-        filename = f"tag_summary_{slug}_{timestamp}.xlsx"
+        filename = f"tag_summary_{slug}.xlsx"
         return case_folder / "reports" / filename
 
     def _case_folder(self) -> Optional[Path]:
@@ -273,7 +272,7 @@ class ReportsTab(QWidget):
             self._evidence_id, self._evidence_label
         )
 
-        exported_at_iso = (
+        finished_at_iso = (
             datetime.now(tz=timezone.utc).replace(microsecond=0).isoformat()
         )
 
@@ -285,7 +284,8 @@ class ReportsTab(QWidget):
                 or f"evidence #{self._evidence_id}",
                 case_folder=case_folder,
                 output_path=output_path,
-                exported_at_iso=exported_at_iso,
+                exported_at_iso="see case audit log",
+                finished_at_iso=finished_at_iso,
                 top_n=10,
             )
         except TagSummaryExportError as exc:

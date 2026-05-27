@@ -25,7 +25,7 @@ Reports tab shim - integrates self-contained reports module into main app.
 ## Outputs
 - Report preview (HTML) and exported PDF saved to disk.
 - Report settings and custom sections saved in the database.
-- **Tag Summary XLSX**: a single-sheet workbook grouped by tag → artifact group (e.g. *Browser search terms*, *Stored sites*, *Bookmarks*) plus a *Reference-list matches* section. Each group heading carries a tickable ☐ checkbox so the prosecutor can mark which groups should appear in the final PDF; up to 10 sample entries are shown per group with a "…and N more" indicator. The export is restricted to the case workspace and the action is recorded in `process_log` before the file is written.
+- **Tag Summary XLSX**: a single-sheet workbook grouped by tag → artifact group (e.g. *Browser search terms*, *Stored sites*, *Bookmarks*, *Downloaded files*) plus a *Reference-list matches* section. Each group heading carries a tickable ☐ checkbox so the prosecutor can mark which groups should appear in the final PDF; up to 10 sample entries are shown per group with a "…and N more" indicator. Tagged image artifacts and image hash/reference-list matches include embedded thumbnails when the source artifact is available inside the selected evidence workspace. The workbook is written only inside the case workspace, and the completed action is recorded in `process_log` after the file write succeeds.
 
 ## Subtabs
 - None

@@ -239,7 +239,7 @@ class TestGetTaggedArtifactExport:
         assert types["url"]["supported"] is True
 
     def test_artifact_type_aliases(self, evidence_db):
-        # 'downloads' should be treated as 'browser_download'.
+        # 'browser_downloads' should be treated as 'browser_download'.
         evidence_db.execute(
             "INSERT INTO browser_downloads (id, evidence_id, browser, url, "
             "filename, target_path, start_time_utc) "
@@ -248,13 +248,39 @@ class TestGetTaggedArtifactExport:
             (EVIDENCE_ID,),
         )
         evidence_db.commit()
-        tag = _create_tag(evidence_db, "Downloaded")
-        _tag_artifact(evidence_db, tag, "downloads", 10)
+        tag = _create_tag(evidence_db, "BrowserDownloaded")
+        _tag_artifact(evidence_db, tag, "browser_downloads", 10)
 
         result = get_tagged_artifact_export(evidence_db, EVIDENCE_ID)
         assert len(result[0]["sections"]) == 1
         assert result[0]["sections"][0]["artifact_type"] == "browser_download"
-        assert result[0]["sections"][0]["raw_artifact_types"] == ["downloads"]
+        assert result[0]["sections"][0]["raw_artifact_types"] == ["browser_downloads"]
+
+        # 'downloads' is the legacy plural for investigator downloads.
+        evidence_db.execute(
+            """
+            INSERT INTO downloads (
+                id, evidence_id, url, domain, file_type, status, dest_path,
+                filename, queued_at_utc, completed_at_utc
+            ) VALUES (
+                12, ?, 'https://e/f2', 'e', 'image', 'completed', '/t/f2.bin',
+                'f2.bin', '2024-02-01T00:00:00Z', '2024-02-02T00:00:00Z'
+            )
+            """,
+            (EVIDENCE_ID,),
+        )
+        downloads_tag = _create_tag(evidence_db, "Downloaded")
+        _tag_artifact(evidence_db, downloads_tag, "downloads", 12)
+
+        download_result = get_tagged_artifact_export(evidence_db, EVIDENCE_ID)
+        download_section = next(
+            s
+            for tag_entry in download_result
+            if tag_entry["tag_name"] == "Downloaded"
+            for s in tag_entry["sections"]
+        )
+        assert download_section["artifact_type"] == "download"
+        assert download_section["raw_artifact_types"] == ["downloads"]
 
         # 'history' is the report-module legacy name for browser_history.
         _insert_browser_history(evidence_db, 11)

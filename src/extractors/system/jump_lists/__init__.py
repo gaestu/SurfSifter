@@ -18,8 +18,8 @@ Components:
     - lnk_parser: LNK shortcut parser for target paths and URLs
 
 The AppID registry is centralized at:
-    extractors/_shared/appids.json (700+ applications)
-    extractors/_shared/appid_loader.py (loader module)
+    core/appids.json (700+ applications)
+    core/appid_loader.py (loader module)
 """
 
 from .extractor import SystemJumpListsExtractor

@@ -2,7 +2,7 @@
 AppID Registry for Jump Lists
 
 Wrapper module providing backward-compatible access to the centralized
-AppID registry in extractors._shared.appid_loader.
+AppID registry in core.appid_loader.
 
 Maps Windows Jump List Application IDs (AppIDs) to application names.
 AppIDs are the 16-character hex prefix of .automaticDestinations-ms filenames.
@@ -12,10 +12,10 @@ Example filename: 5d696d521de238c3.automaticDestinations-ms
                       AppID (Chrome in this case)
 
 The actual registry data is now stored in:
-    extractors/_shared/appids.json
+    core/appids.json
 
 This module provides backward-compatible API for existing code.
-For new code, consider importing directly from extractors._shared.appid_loader.
+For new code, consider importing directly from core.appid_loader.
 """
 
 from __future__ import annotations
@@ -25,7 +25,7 @@ from pathlib import Path
 from typing import Dict, Set, Optional
 
 # Import from centralized registry
-from extractors._shared.appid_loader import (
+from core.appid_loader import (
     load_browser_appids as _load_browser_appids,
     is_browser_appid as _is_browser_appid,
     get_app_name as _get_app_name,
@@ -44,7 +44,7 @@ def load_browser_appids(config_path: Optional[Path] = None) -> Dict[str, str]:
     """
     Load browser AppID mappings.
 
-    Now uses centralized registry from extractors/_shared/appids.json.
+    Now uses centralized registry from core/appids.json.
     The config_path parameter is kept for backward compatibility but ignored.
 
     Args:

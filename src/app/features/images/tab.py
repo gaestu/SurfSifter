@@ -1252,7 +1252,7 @@ class ImagesTab(QWidget):
                 evidence_id=self.evidence_id,
                 discovered_by=discovered_by,
             )
-            if not source_path.exists():
+            if source_path is None or not source_path.exists():
                 continue
             target_path = dest / Path(rel_path).name
             target_path.parent.mkdir(parents=True, exist_ok=True)
@@ -1540,7 +1540,7 @@ class ImagesTab(QWidget):
             evidence_id=self.evidence_id,
             discovered_by=row.get("discovered_by"),
         )
-        if not target.exists():
+        if target is None or not target.exists():
             QMessageBox.warning(
                 self,
                 "Reveal in case folder",
@@ -1673,6 +1673,8 @@ class ImagesTab(QWidget):
             evidence_id=self.evidence_id,
             discovered_by=row.get("discovered_by"),
         )
+        if image_path is None:
+            return None
         key = hashlib.md5(str(image_path).encode("utf-8")).hexdigest()
         thumb_path = cache_base / ".thumbs" / f"{key}.jpg"
 

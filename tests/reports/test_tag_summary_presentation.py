@@ -114,3 +114,53 @@ def test_compose_attaches_label_and_headers(evidence_db):
     assert bucket["headers"] == REFERENCE_PRESENTATION["image"]
     # NULL list_name surfaces as a non-empty string sentinel.
     assert isinstance(bucket["list_name"], str) and bucket["list_name"]
+
+
+def test_compose_exports_investigator_download_tags_from_downloads_table(evidence_db):
+    evidence_db.execute(
+        """
+        INSERT INTO downloads (
+            id, evidence_id, url, domain, file_type, status, dest_path,
+            filename, queued_at_utc, completed_at_utc
+        ) VALUES (
+            1, ?, 'https://example.test/file.jpg', 'example.test', 'image',
+            'completed', 'example.test/file.jpg', 'file.jpg',
+            '2024-01-01T00:00:00Z', '2024-01-01T00:01:00Z'
+        )
+        """,
+        (EVIDENCE_ID,),
+    )
+    cursor = evidence_db.execute(
+        "INSERT INTO tags (evidence_id, name, name_normalized, created_by) "
+        "VALUES (?, 'Downloads', 'downloads', 'test')",
+        (EVIDENCE_ID,),
+    )
+    tag_id = cursor.lastrowid
+    evidence_db.execute(
+        "INSERT INTO tag_associations (tag_id, evidence_id, artifact_type, "
+        "artifact_id, tagged_by) VALUES (?, ?, 'download', 1, 'test')",
+        (tag_id, EVIDENCE_ID),
+    )
+    evidence_db.commit()
+
+    data = compose_tag_summary(
+        evidence_db,
+        EVIDENCE_ID,
+        evidence_label="EV-001",
+        exported_at_iso="2025-01-01T00:00:00+00:00",
+        top_n=5,
+    )
+
+    section = data.tags[0]["sections"][0]
+    assert section["artifact_type"] == "download"
+    assert section["label"] == "Downloaded files"
+    assert section["headers"] == ARTIFACT_PRESENTATION["download"][1]
+    assert section["rows"] == [
+        [
+            "file.jpg",
+            "example.test/file.jpg",
+            "https://example.test/file.jpg",
+            "2024-01-01T00:01:00Z",
+            "completed",
+        ]
+    ]

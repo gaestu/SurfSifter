@@ -20,5 +20,7 @@ Shows completed image downloads in a visual grid with metadata.
 - Image grid with thumbnail, URL, hashes, and download timestamp.
 
 ## Notes
-- Thumbnails require Pillow; if not installed, images may show without previews.
+- Thumbnails require Pillow; optional `pillow-heif` support is used when installed.
+- Source files must resolve under the selected evidence workspace. Missing files, files outside that workspace, unreadable files, and images over the thumbnail pixel safety cap are shown without previews.
+- Thumbnail bytes are embedded inline in report output; evidence-derived text fields are HTML-escaped during rendering.
 - Only downloads classified as images are included.

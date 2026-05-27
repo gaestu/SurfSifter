@@ -14,7 +14,7 @@ from typing import Any, Dict, List, Optional
 from jinja2 import Environment, FileSystemLoader
 
 try:
-    from extractors._shared.appid_loader import get_app_name as _registry_get_app_name
+    from core.appid_loader import get_app_name as _registry_get_app_name
 except ImportError:  # pragma: no cover - optional dependency at runtime
     _registry_get_app_name = None
 

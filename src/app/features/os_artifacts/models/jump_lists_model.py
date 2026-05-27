@@ -10,8 +10,8 @@ from typing import Any, Dict, List, Optional
 
 from PySide6.QtCore import QAbstractTableModel, QModelIndex, Qt
 
+from core.appid_loader import get_app_name
 from core.database import DatabaseManager
-from extractors._shared.appid_loader import get_app_name
 
 logger = logging.getLogger(__name__)
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sqlite3
+from pathlib import Path
 from typing import Generator
 
 import pytest
@@ -265,6 +266,86 @@ class TestDownloadedImagesRender:
         }
         html = module.render(test_db, 1, config)
         assert '<p class="limit-note">' not in html
+
+
+class TestDownloadedImagesPathResolution:
+    """Test downloaded image source path resolution."""
+
+    def test_resolves_case_relative_completed_download_path(
+        self,
+        module: DownloadedImagesModule,
+        tmp_path: Path,
+    ) -> None:
+        case_folder = tmp_path / "case"
+        image_path = case_folder / "evidences" / "test-evidence" / "_downloads" / "example.com" / "image.jpg"
+        image_path.parent.mkdir(parents=True)
+        image_path.write_bytes(b"image-bytes")
+
+        resolved = module._resolve_download_path(
+            "evidences/test-evidence/_downloads/example.com/image.jpg",
+            case_folder,
+            evidence_id=1,
+            evidence_label="Test Evidence",
+        )
+
+        assert resolved == image_path
+
+    def test_rejects_case_relative_path_for_other_evidence(
+        self,
+        module: DownloadedImagesModule,
+        tmp_path: Path,
+    ) -> None:
+        case_folder = tmp_path / "case"
+        image_path = case_folder / "evidences" / "other-evidence" / "_downloads" / "example.com" / "image.jpg"
+        image_path.parent.mkdir(parents=True)
+        image_path.write_bytes(b"image-bytes")
+
+        resolved = module._resolve_download_path(
+            "evidences/other-evidence/_downloads/example.com/image.jpg",
+            case_folder,
+            evidence_id=1,
+            evidence_label="Test Evidence",
+        )
+
+        assert resolved is None
+
+    def test_rejects_absolute_download_path_inside_evidence(
+        self,
+        module: DownloadedImagesModule,
+        tmp_path: Path,
+    ) -> None:
+        case_folder = tmp_path / "case"
+        image_path = case_folder / "evidences" / "test-evidence" / "_downloads" / "example.com" / "image.jpg"
+        image_path.parent.mkdir(parents=True)
+        image_path.write_bytes(b"image-bytes")
+
+        resolved = module._resolve_download_path(
+            str(image_path.resolve()),
+            case_folder,
+            evidence_id=1,
+            evidence_label="Test Evidence",
+        )
+
+        assert resolved is None
+
+    def test_rejects_legacy_absolute_download_path_for_other_evidence(
+        self,
+        module: DownloadedImagesModule,
+        tmp_path: Path,
+    ) -> None:
+        case_folder = tmp_path / "case"
+        image_path = case_folder / "evidences" / "other-evidence" / "_downloads" / "example.com" / "image.jpg"
+        image_path.parent.mkdir(parents=True)
+        image_path.write_bytes(b"image-bytes")
+
+        resolved = module._resolve_download_path(
+            str(image_path.resolve()),
+            case_folder,
+            evidence_id=1,
+            evidence_label="Test Evidence",
+        )
+
+        assert resolved is None
 
 
 class TestDownloadedImagesTranslations:

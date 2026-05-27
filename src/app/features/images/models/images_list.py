@@ -319,7 +319,7 @@ class ImagesListModel(QAbstractListModel):
             evidence_id=self.evidence_id,
             discovered_by=discovered_by,
         )
-        if not image_path.exists():
+        if image_path is None or not image_path.exists():
             return None
         cache_dir = cache_base / ".thumbs"
         return ensure_thumbnail(image_path, cache_dir, size=(self.thumb_size, self.thumb_size))
