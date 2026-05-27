@@ -12,7 +12,6 @@ Initial implementation for Tor state extractor.
 from __future__ import annotations
 
 import sqlite3
-from datetime import datetime, timezone
 from typing import Any, Dict, Iterable, List, Optional
 
 __all__ = [
@@ -21,6 +20,7 @@ __all__ = [
     "insert_browser_configs",
     "get_browser_configs",
     "get_browser_config_keys",
+    "get_browser_config_filter_values",
     "delete_browser_config_by_run",
     # Tor state
     "insert_tor_state",
@@ -153,6 +153,9 @@ def get_browser_configs(
     browser: Optional[str] = None,
     config_type: Optional[str] = None,
     config_key: Optional[str] = None,
+    config_key_search: Optional[str] = None,
+    profile: Optional[str] = None,
+    profile_search: Optional[str] = None,
     run_id: Optional[str] = None,
     limit: int = 1000,
 ) -> List[Dict[str, Any]]:
@@ -165,6 +168,9 @@ def get_browser_configs(
         browser: Filter by browser
         config_type: Filter by config type
         config_key: Filter by config key
+        config_key_search: Case-insensitive partial config key filter
+        profile: Filter by profile
+        profile_search: Case-insensitive partial profile filter
         run_id: Filter by run ID
         limit: Maximum results
 
@@ -183,6 +189,15 @@ def get_browser_configs(
     if config_key:
         query += " AND config_key = ?"
         params.append(config_key)
+    if config_key_search:
+        query += " AND LOWER(config_key) LIKE LOWER(?) ESCAPE '\\'"
+        params.append(_like_literal_pattern(config_key_search))
+    if profile:
+        query += " AND profile = ?"
+        params.append(profile)
+    if profile_search:
+        query += " AND LOWER(COALESCE(profile, '')) LIKE LOWER(?) ESCAPE '\\'"
+        params.append(_like_literal_pattern(profile_search))
     if run_id:
         query += " AND run_id = ?"
         params.append(run_id)
@@ -195,6 +210,64 @@ def get_browser_configs(
     cursor.execute(query, params)
 
     return [dict(row) for row in cursor.fetchall()]
+
+
+def _like_literal_pattern(value: str) -> str:
+    """Return a contains-match LIKE pattern with wildcard characters escaped."""
+    escaped = (
+        value
+        .replace("\\", "\\\\")
+        .replace("%", "\\%")
+        .replace("_", "\\_")
+    )
+    return f"%{escaped}%"
+
+
+def get_browser_config_filter_values(
+    conn: sqlite3.Connection,
+    evidence_id: int,
+    column: str,
+    *,
+    browser: Optional[str] = None,
+    config_type: Optional[str] = None,
+) -> List[str]:
+    """
+    Get distinct non-empty browser_config values for an allow-listed column.
+
+    Args:
+        conn: SQLite connection
+        evidence_id: Evidence ID
+        column: One of browser, config_type, profile, config_key
+        browser: Optional browser filter
+        config_type: Optional config type filter
+
+    Returns:
+        Sorted list of distinct values.
+    """
+    allowed_columns = {"browser", "config_type", "profile", "config_key"}
+    if column not in allowed_columns:
+        raise ValueError(f"Unsupported browser_config filter column: {column}")
+
+    query = (
+        f"SELECT DISTINCT {column} FROM browser_config "
+        "WHERE evidence_id = ? "
+        f"AND {column} IS NOT NULL AND {column} != ''"
+    )
+    params: List[Any] = [evidence_id]
+
+    if browser:
+        query += " AND browser = ?"
+        params.append(browser)
+    if config_type:
+        query += " AND config_type = ?"
+        params.append(config_type)
+
+    query += f" ORDER BY {column}"
+
+    cursor = conn.cursor()
+    cursor.execute(query, params)
+
+    return [row[0] for row in cursor.fetchall()]
 
 
 def get_browser_config_keys(

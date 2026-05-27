@@ -83,8 +83,8 @@ Source: `src/extractors/browser/chromium/`
 ### ChromiumExtensionsExtractor
 - Purpose: Extract extension inventory and related script files.
 - Extraction (source): Preferences (extensions.settings) and Extensions/{id}/{version}/manifest.json; copies manifest and referenced JS (background/content/service worker), hashes files.
-- Ingestion (transform + store): Computes permission risk via calculate_risk_level, matches known extensions, and inserts via insert_extensions with runtime state from Preferences.
-- Outputs: Per-extension directories with manifest/scripts, copied Preferences JSON, manifest.json, and extracted_files audit records.
+- Ingestion (transform + store): Computes permission risk via calculate_risk_level, matches known extensions, inserts via insert_extensions with runtime state from Preferences, and stores selected Preferences configuration keys in browser_config.
+- Outputs: Per-extension directories with manifest/scripts, copied Preferences JSON, manifest.json, extracted_files audit records, and browser_config rows for selected Preferences keys.
 - Special behavior: Merges Preferences state (enabled, install_time, disable_reasons, install_location); host_permissions inferred for MV2.
 - Notes: Uses known_extensions reference list and risk classification helpers.
 

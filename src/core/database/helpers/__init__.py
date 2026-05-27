@@ -26,6 +26,7 @@ Exports:
 - Sync Data: insert_sync_data*, get_sync_data*
 - Favicons: insert_favicon*, get_favicons*, favicon_mappings, top_sites
 - Browser Inventory: get_browser_inventory
+- Browser Config: insert_browser_config*, get_browser_config*, delete_browser_config_by_run
 - Batch Operations: get_evidence_table_counts, purge_evidence_data
 - OS Indicators: insert_os_indicator*, get_os_indicators*, platform_detections
 - Hash Matches: insert_hash_match*, get_hash_matches*, url_matches
@@ -487,6 +488,7 @@ from .browser_config import (
     insert_browser_configs,
     get_browser_configs,
     get_browser_config_keys,
+    get_browser_config_filter_values,
     delete_browser_config_by_run,
     insert_tor_state,
     insert_tor_states,
@@ -1109,6 +1111,7 @@ __all__ = [
     "insert_browser_configs",
     "get_browser_configs",
     "get_browser_config_keys",
+    "get_browser_config_filter_values",
     "delete_browser_config_by_run",
     "insert_tor_state",
     "insert_tor_states",

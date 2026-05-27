@@ -27,6 +27,7 @@
     - [[features/browser_inventory/media|Media]]
     - [[features/browser_inventory/site-engagement|Site Engagement]]
     - [[features/browser_inventory/extensions|Extensions]]
+    - [[features/browser_inventory/browser-config|Browser Config]]
     - [[features/browser_inventory/web-storage|Web Storage]]
     - [[features/browser_inventory/cache|Cache]]
     - [[features/browser_inventory/form-data|Form Data]]

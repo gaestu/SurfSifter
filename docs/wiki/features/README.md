@@ -7,7 +7,7 @@ Each evidence item in a case has its own set of tabs for extraction, analysis, a
 - **Case** — case metadata and batch evidence operations
 - **Extraction** — configure and run extractors
 - **File List** — file system enumeration viewer
-- **Browser Inventory** — 25 subtabs for parsed browser artifacts
+- **Browser Inventory** — organized subtabs for parsed browser artifacts
 - **URLs** — extracted URL browser with matching and tagging
 - **Images** — image grid, clusters, and table views
 - **OS Artifacts** — registry findings, Jump Lists, installed applications

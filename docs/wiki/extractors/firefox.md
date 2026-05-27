@@ -115,8 +115,8 @@ Source: `src/extractors/browser/firefox/`
 ### FirefoxTorStateExtractor
 - Purpose: Collect Tor Browser state/config files for forensic review.
 - Extraction (source): TorBrowser/Data/Tor artifacts (torrc, state, cached-*, control_auth_cookie, geoip, pt_state/*, keys/*) via TOR_DATA_ROOTS/TOR_ARTIFACT_PATHS; copied to output_dir.
-- Ingestion (transform + store): Registers each file in browser_inventory; parses torrc to count settings and stores parsed summary in inventory notes; other files are inventory-only.
-- Outputs: Copied files + manifest.json + extracted_files audit records; browser_inventory entries with extraction_notes/notes.
+- Ingestion (transform + store): Registers each file in browser_inventory; parses torrc directives and inserts them into browser_config via insert_browser_configs; stores parsed summary in inventory notes; other files are inventory-only.
+- Outputs: Copied files + manifest.json + extracted_files audit records; browser_inventory entries with extraction_notes/notes; browser_config rows for torrc directives.
 - Special behavior: File_type classification (torrc/state/cached/pt_state/keys/etc.) drives ingestion notes.
 - Notes: Tor-only (SUPPORTED_BROWSERS = ["tor"]).
 

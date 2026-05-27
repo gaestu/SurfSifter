@@ -37,6 +37,7 @@ Browser/Cache Inventory tab - displays all discovered browser artifacts.
 - [[./media|Media]] - media playback history.
 - [[./site-engagement|Site Engagement]] - Chromium site and media engagement scores.
 - [[./extensions|Extensions]] - installed extensions and risk metadata.
+- [[./browser-config|Browser Config]] - parsed browser configuration key/value records.
 - [[./web-storage|Web Storage]] - container for storage views and tokens.
 - [[./cache|Cache]] - browser cache entries.
 - [[./form-data|Form Data]] - saved form field entries.

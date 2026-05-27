@@ -26,6 +26,7 @@ from app.features.browser_inventory.permissions import PermissionsSubtab
 from app.features.browser_inventory.media import MediaSubtab
 from app.features.browser_inventory.site_engagement import SiteEngagementSubtab
 from app.features.browser_inventory.extensions import ExtensionsSubtab
+from app.features.browser_inventory.browser_config import BrowserConfigSubtab
 
 # Container subtabs (with nested tabs inside)
 from app.features.browser_inventory.autofill import AutofillContainer
@@ -59,6 +60,7 @@ class BrowserInventoryTab(QWidget):
     - Media: Media playback history
     - Site Engagement: Chromium site engagement scores
     - Extensions: Browser extensions with risk analysis
+    - Browser Config: Parsed browser configuration key/value records
     - Web Storage: LocalStorage, SessionStorage, IndexedDB, auth tokens
     - Cache: Browser cache entries with pagination
     """
@@ -124,6 +126,7 @@ class BrowserInventoryTab(QWidget):
         self._media = MediaSubtab(self._ctx, parent=self)
         self._site_engagement = SiteEngagementSubtab(self._ctx, parent=self)
         self._extensions = ExtensionsSubtab(self._ctx, parent=self)
+        self._browser_config = BrowserConfigSubtab(self._ctx, parent=self)
         self._web_storage = WebStorageContainer(self._ctx, parent=self)
         self._cache = CacheContainer(self._ctx, parent=self)
 
@@ -141,8 +144,9 @@ class BrowserInventoryTab(QWidget):
             self._media,           # 9
             self._site_engagement, # 10
             self._extensions,      # 11
-            self._web_storage,     # 12
-            self._cache,           # 13
+            self._browser_config,  # 12
+            self._web_storage,     # 13
+            self._cache,           # 14
         ]
 
         # Add tabs
@@ -158,6 +162,7 @@ class BrowserInventoryTab(QWidget):
         self.subtabs.addTab(self._media, "Media")
         self.subtabs.addTab(self._site_engagement, "Site Engagement")
         self.subtabs.addTab(self._extensions, "Extensions")
+        self.subtabs.addTab(self._browser_config, "Browser Config")
         self.subtabs.addTab(self._web_storage, "Web Storage")
         self.subtabs.addTab(self._cache, "Cache")
 
@@ -186,7 +191,9 @@ class BrowserInventoryTab(QWidget):
         storage_keys.set_origin_filter(origin)
 
         # Switch to Web Storage tab
-        self.subtabs.setCurrentIndex(12)
+        web_storage_index = self.subtabs.indexOf(self._web_storage)
+        if web_storage_index >= 0:
+            self.subtabs.setCurrentIndex(web_storage_index)
 
         # Switch to Storage Keys nested tab
         self._web_storage.nested_tabs.setCurrentIndex(1)

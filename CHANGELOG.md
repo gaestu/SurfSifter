@@ -4,6 +4,7 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased
 
+- Add a read-only Browser Config subtab to Browser Inventory for filtering and inspecting stored `browser_config` evidence rows (#56).
 - Fixed Chromium Media History playback parsing when SQLite rows are read via `sqlite3.Row`, including databases with `playback.origin_id` joined to the `origin` table (#31).
 - Add app_execution, browser_history and installed_software to tagged summary export.
 - Route Tag Summary `download`/`downloads` tags to the investigator downloads table as **Downloaded files**, distinct from browser download artifacts.
