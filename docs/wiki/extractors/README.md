@@ -3,7 +3,7 @@
 This section documents all extractors under `src/extractors/`.
 
 ## Browser Families
-- Chromium (`chromium.md`) — 16 extractors for Chrome, Chromium, Edge, Brave, Opera, Vivaldi, and embedded CEF/CefSharp
+- Chromium (`chromium.md`) — 17 extractors for Chrome, Chromium, Edge, Brave, Opera, Vivaldi, and embedded CEF/CefSharp
 - Firefox (`firefox.md`) — 14 extractors for Firefox, Firefox ESR, and Tor Browser
 - Safari (`safari.md`) — 9 extractors for macOS Safari (experimental)
 - IE Legacy (`ie-legacy.md`) — 12 extractors for Internet Explorer and Legacy Edge

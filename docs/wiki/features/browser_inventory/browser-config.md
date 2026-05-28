@@ -8,7 +8,7 @@ Browser Config subtab - parsed browser configuration key/value records.
 
 ## Inputs
 - Existing `browser_config` rows written by browser configuration extractors.
-- Current sources include Tor Browser configuration/state ingestion and Chromium Preferences parsing where available.
+- Current sources include Tor Browser configuration/state ingestion, Chromium profile `Preferences`, and Chromium user-data-root `Local State` rows stored with `config_type=local_state` and no profile.
 
 ## Filters and controls
 - Filters: browser and config type.

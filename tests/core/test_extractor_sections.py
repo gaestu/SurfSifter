@@ -35,6 +35,16 @@ def test_explicit_extractor_mappings_are_unique():
     assert duplicates == set()
 
 
+def test_chromium_config_grouped_with_chromium_browsers():
+    """Chromium config should appear in the Chromium UI section, not Other."""
+    grouped = group_extractors_by_section([_fake_extractor("chromium_config")])
+
+    assert [extractor.metadata.name for extractor in grouped["Chromium Browsers"]] == [
+        "chromium_config"
+    ]
+    assert grouped["Other"] == []
+
+
 def test_carvers_grouped_once_with_all_carver_extractors():
     """Regression test for duplicated Carvers UI sections."""
     carvers = [

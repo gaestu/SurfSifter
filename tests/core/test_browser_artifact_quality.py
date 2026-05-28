@@ -451,7 +451,7 @@ class TestBrowserConfigParser:
 
     def test_parse_preferences_config(self):
         """Parse Chrome Preferences for config fields."""
-        from extractors.browser.chromium.extensions._config_parser import (
+        from extractors.browser.chromium.config._parser import (
             parse_preferences_config,
         )
 
@@ -481,7 +481,7 @@ class TestBrowserConfigParser:
 
     def test_empty_preferences(self):
         """Empty Preferences should return no records."""
-        from extractors.browser.chromium.extensions._config_parser import (
+        from extractors.browser.chromium.config._parser import (
             parse_preferences_config,
         )
 
@@ -492,7 +492,7 @@ class TestBrowserConfigParser:
 
     def test_startup_urls_extracted(self):
         """session.startup_urls list should produce a startup_urls record."""
-        from extractors.browser.chromium.extensions._config_parser import (
+        from extractors.browser.chromium.config._parser import (
             parse_preferences_config,
         )
 
@@ -515,7 +515,7 @@ class TestBrowserConfigParser:
 
     def test_record_metadata_fields(self):
         """Each record should carry browser, profile, source_path, run_id."""
-        from extractors.browser.chromium.extensions._config_parser import (
+        from extractors.browser.chromium.config._parser import (
             parse_preferences_config,
         )
 
@@ -532,6 +532,91 @@ class TestBrowserConfigParser:
         assert r["profile"] == "Profile 1"
         assert r["source_path"] == "/Users/test/Edge/Preferences"
         assert r["run_id"] == "run_42"
+
+    def test_structured_values_are_serialized_stably(self):
+        """Lists and dictionaries should be stored deterministically."""
+        from extractors.browser.chromium.config._parser import (
+            parse_local_state_config,
+            parse_preferences_config,
+        )
+
+        pref_records = parse_preferences_config(
+            {"session": {"startup_urls": ["https://b.example", "https://a.example"]}},
+            "chrome", "Default", "/Preferences", run_id="run_42",
+        )
+        startup = next(r for r in pref_records if r["config_key"] == "startup_urls")
+        assert startup["config_value"] == '["https://b.example","https://a.example"]'
+        assert startup["value_count"] == 2
+
+        local_state_records = parse_local_state_config(
+            {"profile": {"info_cache": {"Profile 1": {"name": "Work"}, "Default": {"name": "Person 1"}}}},
+            "chrome", "/Local State", run_id="run_42",
+        )
+        info_cache = next(r for r in local_state_records if r["config_key"] == "profile_info_cache")
+        assert info_cache["profile"] is None
+        assert info_cache["config_type"] == "local_state"
+        assert info_cache["config_value"] == '{"Default":{"name":"Person 1"},"Profile 1":{"name":"Work"}}'
+
+    def test_type_mismatch_records_warning(self):
+        """Unexpected allowlisted value types should be warned and skipped."""
+        from unittest.mock import Mock
+
+        from extractors.browser.chromium.config._parser import parse_preferences_config
+
+        warning_collector = Mock()
+        records = parse_preferences_config(
+            {"session": {"startup_urls": "https://not-a-list.example"}},
+            "chrome", "Default", "/Preferences", run_id="run_42",
+            warning_collector=warning_collector,
+        )
+
+        assert records == []
+        warning_collector.add_warning.assert_called_once()
+
+    def test_numeric_values_are_serialized(self):
+        """Numeric allowlisted values should be stored as deterministic strings."""
+        from extractors.browser.chromium.config._parser import parse_preferences_config
+
+        records = parse_preferences_config(
+            {
+                "profile": {"creation_time": 13300000000000000},
+                "session": {"restore_on_startup": 4},
+            },
+            "chrome", "Default", "/Preferences", run_id="run_42",
+        )
+
+        values = {record["config_key"]: record["config_value"] for record in records}
+        assert values["creation_time"] == "13300000000000000"
+        assert values["restore_on_startup"] == "4"
+
+    def test_null_values_are_preserved(self):
+        """Explicit null allowlisted values should be distinct from absent keys."""
+        from extractors.browser.chromium.config._parser import parse_preferences_config
+
+        records = parse_preferences_config(
+            {"homepage": None},
+            "chrome", "Default", "/Preferences", run_id="run_42",
+        )
+
+        assert len(records) == 1
+        assert records[0]["config_key"] == "homepage_url"
+        assert records[0]["config_value"] is None
+
+    def test_duplicate_alias_disagreement_records_warning(self):
+        """Modern and legacy aliases mapping to one key should warn when they disagree."""
+        from unittest.mock import Mock
+
+        from extractors.browser.chromium.config._parser import parse_preferences_config
+
+        warning_collector = Mock()
+        records = parse_preferences_config(
+            {"extensions": {"ui": {"developer_mode": True}, "developer_mode": False}},
+            "chrome", "Default", "/Preferences", run_id="run_42",
+            warning_collector=warning_collector,
+        )
+
+        assert [record["config_key"] for record in records] == ["extensions_developer_mode"]
+        warning_collector.add_warning.assert_called_once()
 
 
 # ---------------------------------------------------------------------------

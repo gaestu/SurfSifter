@@ -3,7 +3,7 @@
 Source: `src/extractors/browser/chromium/`
 
 ## Overview
-- Scope: 16 Chromium family extractors for Chrome, Chromium, Edge, Brave, and Opera (stable plus beta/dev/canary/nightly/GX where listed in chromium/_patterns), plus embedded Chromium/CEF/CefSharp artifact recovery.
+- Scope: 17 Chromium family extractors for Chrome, Chromium, Edge, Brave, and Opera (stable plus beta/dev/canary/nightly/GX where listed in chromium/_patterns), plus embedded Chromium/CEF/CefSharp artifact recovery.
 - Extraction: Uses chromium/_patterns path globs to locate profile artifacts; several extractors copy companion WAL/journal/shm files and write per-run manifests.
 - Ingestion: Parses SQLite/JSON/SNSS/LevelDB artifacts, converts WebKit/Chrome timestamps to ISO 8601, and inserts into evidence DB via core.database helpers (plus cross-posts to urls/images where implemented).
 
@@ -83,10 +83,18 @@ Source: `src/extractors/browser/chromium/`
 ### ChromiumExtensionsExtractor
 - Purpose: Extract extension inventory and related script files.
 - Extraction (source): Preferences (extensions.settings) and Extensions/{id}/{version}/manifest.json; copies manifest and referenced JS (background/content/service worker), hashes files.
-- Ingestion (transform + store): Computes permission risk via calculate_risk_level, matches known extensions, inserts via insert_extensions with runtime state from Preferences, and stores selected Preferences configuration keys in browser_config.
-- Outputs: Per-extension directories with manifest/scripts, copied Preferences JSON, manifest.json, extracted_files audit records, and browser_config rows for selected Preferences keys.
+- Ingestion (transform + store): Computes permission risk via calculate_risk_level, matches known extensions, and inserts via insert_extensions with runtime state from Preferences.
+- Outputs: Per-extension directories with manifest/scripts, copied Preferences JSON, manifest.json, and extracted_files audit records.
 - Special behavior: Merges Preferences state (enabled, install_time, disable_reasons, install_location); host_permissions inferred for MV2.
 - Notes: Uses known_extensions reference list and risk classification helpers.
+
+### ChromiumConfigExtractor
+- Purpose: Extract curated browser/profile configuration facts from Chromium Preferences and Local State JSON files.
+- Extraction (source): Profile-level Preferences files via get_artifact_patterns(browser, "preferences") and user-data-root Local State files via get_artifact_patterns(browser, "local_state"); supports multi-partition discovery via file_list.
+- Ingestion (transform + store): Parses an allowlist of investigator-useful profile, startup/homepage, search, download, security/privacy, account/sync, extension/runtime, and Local State profile inventory keys; inserts rows into browser_config with source/profile/partition provenance.
+- Outputs: Copied JSON config files, manifest.json, extracted_files audit records, browser_inventory rows, and browser_config rows.
+- Special behavior: Stores arrays/objects with deterministic JSON serialization; records malformed JSON and unexpected allowlisted value types as extraction warnings; keeps Local State distinct from profile Preferences with config_type=local_state and no profile.
+- Notes: Owns Chromium browser_config ingestion so extension extraction no longer duplicates selected Preferences rows.
 
 ### ChromiumSyncDataExtractor
 - Purpose: Extract sync account and device metadata from Preferences.
@@ -137,5 +145,5 @@ Source: `src/extractors/browser/chromium/`
 - Notes: High-engagement sites are prioritized by browsers for offline support and notifications; forensically useful for identifying frequently-used sites beyond history.
 
 ## Patterns
-- File/path patterns: CHROMIUM_BROWSERS lists Windows/macOS/Linux profile roots for Chrome/Chromium/Edge/Brave/Opera (including beta/dev/canary/nightly/GX), with PROFILE_PATTERNS of Default/Profile */Guest/System Profile; CHROMIUM_ARTIFACTS includes History, Cookies (+ Network/Cookies), Bookmarks, Web Data/Login Data, Sessions (legacy + Sessions/Session_* and Tabs_*), Media History, Favicons/Top Sites, Sync Data, TransportSecurity, Cache/Cache_Data and Cache, and storage directories.
+- File/path patterns: CHROMIUM_BROWSERS lists Windows/macOS/Linux profile roots for Chrome/Chromium/Edge/Brave/Opera (including beta/dev/canary/nightly/GX), with PROFILE_PATTERNS of Default/Profile */Guest/System Profile; CHROMIUM_ARTIFACTS includes History, Cookies (+ Network/Cookies), Bookmarks, Web Data/Login Data, Preferences, Local State, Sessions (legacy + Sessions/Session_* and Tabs_*), Media History, Favicons/Top Sites, Sync Data, TransportSecurity, Cache/Cache_Data and Cache, and storage directories.
 - Notes: Opera uses flat profile structure (no Default/Profile * prefix). CacheStorage patterns are not in CHROMIUM_ARTIFACTS and are discovered via extractors.browser_patterns.get_browser_paths('cache_storage') when enabled.

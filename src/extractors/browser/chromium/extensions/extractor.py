@@ -80,15 +80,9 @@ from ._schemas import (
 from ._discovery import discover_extensions
 from ._preferences import parse_all_preferences, merge_preferences_data
 from ._scripts import extract_extension_scripts, extract_extension_manifest
-from ._config_parser import parse_preferences_config
 
 # Import warning support
 from extractors._shared.extraction_warnings import ExtractionWarningCollector
-
-from core.database.helpers.browser_config import (
-    insert_browser_configs,
-    delete_browser_config_by_run,
-)
 
 LOGGER = get_logger("extractors.browser.chromium.extensions")
 
@@ -516,11 +510,6 @@ class ChromiumExtensionsExtractor(BaseExtractor):
         inserted = insert_extensions(evidence_conn, evidence_id, records)
         evidence_conn.commit()
 
-        # Parse browser config from extracted Preferences files
-        config_count = self._ingest_browser_config(
-            manifest_data, run_id, evidence_conn, evidence_id, output_dir, callbacks,
-        )
-
         # Flush any ingestion warnings
         try:
             warning_count = warning_collector.flush_to_database(evidence_conn)
@@ -534,7 +523,7 @@ class ChromiumExtensionsExtractor(BaseExtractor):
             stats.report_ingested(evidence_id, self.metadata.name, records=inserted, extensions=inserted)
             stats.finish_run(evidence_id, self.metadata.name, status="success")
 
-        return {"records": inserted, "extensions": inserted, "config_records": config_count}
+        return {"records": inserted, "extensions": inserted}
 
     def _build_extension_record(
         self,
@@ -678,77 +667,6 @@ class ChromiumExtensionsExtractor(BaseExtractor):
             risk_factors.append("Loaded in developer mode (unpacked)")
 
         return risk_factors
-
-    def _ingest_browser_config(
-        self,
-        manifest_data: Dict[str, Any],
-        run_id: str,
-        evidence_conn,
-        evidence_id: int,
-        output_dir: Path,
-        callbacks: ExtractorCallbacks,
-    ) -> int:
-        """Parse Preferences files and ingest config to browser_config table."""
-        pref_files = manifest_data.get("preferences_files", [])
-        if not pref_files:
-            return 0
-
-        # Clear previous config for this run
-        delete_browser_config_by_run(evidence_conn, evidence_id, run_id)
-
-        total_records = 0
-        for pref_info in pref_files:
-            # dest_path is the locally extracted copy of the Preferences JSON
-            extracted_path = pref_info.get("dest_path")
-            if not extracted_path:
-                continue
-
-            pref_path = Path(extracted_path)
-            if not pref_path.is_absolute():
-                pref_path = output_dir / pref_path
-
-            if not pref_path.exists():
-                continue
-
-            try:
-                pref_data = json.loads(
-                    pref_path.read_text(encoding="utf-8", errors="replace")
-                )
-            except (json.JSONDecodeError, OSError) as e:
-                LOGGER.debug("Failed to read Preferences file %s: %s", pref_path, e)
-                continue
-
-            browser = pref_info.get("browser", "chrome")
-            profile = pref_info.get("profile", "Default")
-            source_path = pref_info.get("source_path", str(pref_path))
-
-            config_records = parse_preferences_config(
-                pref_data,
-                browser=browser,
-                profile=profile,
-                source_path=source_path,
-                run_id=run_id,
-            )
-
-            if config_records:
-                inserted = insert_browser_configs(
-                    evidence_conn, evidence_id, config_records
-                )
-                total_records += inserted
-
-        if total_records > 0:
-            evidence_conn.commit()
-            callbacks.on_log(
-                f"Ingested {total_records} browser config records from Preferences",
-                "info",
-            )
-            LOGGER.info("Ingested %d browser config records", total_records)
-
-        return total_records
-
-    # =========================================================================
-    # Helper Methods
-    # =========================================================================
 
     def _discover_relevant_partitions(
         self,

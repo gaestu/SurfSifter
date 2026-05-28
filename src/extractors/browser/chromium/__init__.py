@@ -25,6 +25,7 @@ Extractors:
 - ChromiumSessionsExtractor: Session/tab data from SNSS files
 - ChromiumBrowserStorageExtractor: Local Storage, Session Storage, IndexedDB
 - ChromiumSiteEngagementExtractor: Site/media engagement metrics from Preferences
+- ChromiumConfigExtractor: Curated browser/profile configuration from Preferences and Local State
 """
 
 from .history import ChromiumHistoryExtractor
@@ -42,6 +43,7 @@ from .transport_security import ChromiumTransportSecurityExtractor
 from .sessions import ChromiumSessionsExtractor
 from .storage import ChromiumBrowserStorageExtractor
 from .site_engagement import ChromiumSiteEngagementExtractor
+from .config import ChromiumConfigExtractor
 
 __all__ = [
     "ChromiumHistoryExtractor",
@@ -61,4 +63,5 @@ __all__ = [
     "ChromiumSessionsExtractor",
     "ChromiumBrowserStorageExtractor",
     "ChromiumSiteEngagementExtractor",
+    "ChromiumConfigExtractor",
 ]
