@@ -349,14 +349,20 @@ class UrlsTableModel(QAbstractTableModel):
             self._data_version = page.data_version
         if query.page == 0:
             self._row_numbers_exact = True
-        self.beginResetModel()
-        self.page = query.page
-        self._page_starts = self._page_starts[: query.page] + [query.after]
-        self._rows = list(page.rows)
-        self._has_more = page.has_more
-        self._tags_cache = dict(page.tags)
-        self._matches_cache = dict(page.matches)
-        self.endResetModel()
+        if self._shows_page_content(page):
+            # Same page with identical content (e.g. the re-check when the tab
+            # is shown again, issue #67): no model reset, so the view keeps
+            # its selection and scroll position.
+            self._page_starts = self._page_starts[: query.page + 1]
+        else:
+            self.beginResetModel()
+            self.page = query.page
+            self._page_starts = self._page_starts[: query.page] + [query.after]
+            self._rows = list(page.rows)
+            self._has_more = page.has_more
+            self._tags_cache = dict(page.tags)
+            self._matches_cache = dict(page.matches)
+            self.endResetModel()
         # A first page without a next page holds the complete result.
         if (
             fresh
@@ -366,6 +372,19 @@ class UrlsTableModel(QAbstractTableModel):
             and query.filters == self._spec
         ):
             self.store_total_count(self.count_key(), len(page.rows))
+
+    def _shows_page_content(self, page: UrlPage) -> bool:
+        """True if ``page`` is the current page and has exactly the shown content."""
+        query = page.query
+        return (
+            query.evidence_id == self.evidence_id
+            and query.page == self.page
+            and self._page_starts[query.page : query.page + 1] == [query.after]
+            and page.has_more == self._has_more
+            and page.rows == self._rows
+            and page.tags == self._tags_cache
+            and page.matches == self._matches_cache
+        )
 
     def reload(self) -> None:
         """Synchronously reload the current page ON THE CALLING THREAD.

@@ -10,6 +10,8 @@ import json
 import logging
 from typing import Any, Dict, List, TYPE_CHECKING
 
+from .sql_utils import escape_like
+
 if TYPE_CHECKING:
     from core.statistics_collector import ExtractorRunStats
 
@@ -37,11 +39,6 @@ def _compute_json_total(
         return sum(v for v in d.values() if isinstance(v, (int, float)))
     except (json.JSONDecodeError, TypeError, AttributeError):
         return 0
-
-
-def _escape_like(value: str) -> str:
-    """Escape SQL LIKE metacharacters for safe use in parameterised queries."""
-    return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
 
 
 def upsert_extractor_statistics(db_manager, stats: "ExtractorRunStats") -> None:
@@ -225,7 +222,7 @@ def sync_process_log_from_statistics(
 
     # Update process_log entries for this extractor run
     # Match by run_id and extractor_name (or task containing extractor_name)
-    escaped_name = _escape_like(extractor_name)
+    escaped_name = escape_like(extractor_name)
     cursor = conn.execute("""
         UPDATE process_log
         SET records_extracted = ?,
@@ -281,7 +278,7 @@ def sync_process_log_counters(
     if not run_id:
         return False
 
-    escaped_name = _escape_like(extractor_name)
+    escaped_name = escape_like(extractor_name)
     cursor = evidence_conn.execute("""
         UPDATE process_log
         SET records_extracted = ?,

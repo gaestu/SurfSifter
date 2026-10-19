@@ -870,3 +870,184 @@ def test_unnotified_change_hides_row_numbers_until_first_page(qtbot, make_tab, u
     tab.prev_button.click()
     qtbot.waitUntil(lambda: _total_shown(tab, 250) and tab.model.current_page() == 0, timeout=10000)
     assert tab.page_label.text() == "Showing 1-100 of 250 URLs"
+
+
+def _counting_page_loader(monkeypatch):
+    """Wrap the tab's page handler; returns the list of requested page indexes."""
+    import app.features.urls.tab as tab_module
+
+    original = tab_module._load_url_page
+    calls = []
+
+    def counting(case_data, request):
+        calls.append(request.payload.page)
+        return original(case_data, request)
+
+    monkeypatch.setattr(tab_module, "_load_url_page", counting)
+    return calls
+
+
+def test_returning_to_tab_after_tag_merge_elsewhere_shows_recounted_total(qtbot, make_tab, url_case):
+    """Issue #67: a merge in the Tags tab (other connection, no notification)
+    is picked up when the URLs tab is shown again, without navigating."""
+    from app.data import UrlFilterSpec
+
+    case, data = url_case
+    evidence_id = case.evidence_ids[0]
+    tab = make_tab(case, data, evidence_id)
+    tab.show()
+    qtbot.waitUntil(lambda: _total_shown(tab, 250), timeout=10000)
+    tab.tag_combo.setCurrentIndex(tab.tag_combo.findData("Relevant"))
+    relevant = data.count_urls(evidence_id, filters=UrlFilterSpec(tag_name="Relevant"))
+    qtbot.waitUntil(lambda: _total_shown(tab, relevant), timeout=10000)
+
+    tab.hide()
+    tags = {t["name"]: t["id"] for t in data.list_tags(evidence_id, use_cache=False)}
+    data.merge_tags(evidence_id, [tags["Review"]], tags["Relevant"])
+    merged = data.count_urls(evidence_id, filters=UrlFilterSpec(tag_name="Relevant"))
+    assert merged > relevant
+
+    tab.show()
+    qtbot.waitUntil(lambda: _total_shown(tab, merged), timeout=10000)
+    assert tab.page_label.text() == f"Showing 1-{merged} of {merged:,} URLs"
+    assert tab.model.current_page() == 0
+    assert tab.model.rowCount() == merged
+
+
+def test_returning_to_tab_on_later_page_recounts_total(qtbot, make_tab, url_case, monkeypatch):
+    """Issue #67: the re-check on show also recounts a multi-page total."""
+    from app.data import UrlFilterSpec
+
+    case, data = url_case
+    evidence_id = case.evidence_ids[0]
+    counts = _counting_count_handler(monkeypatch)
+    tab = make_tab(case, data, evidence_id)
+    tab.show()
+    qtbot.waitUntil(lambda: _total_shown(tab, 250), timeout=10000)
+    tab.match_combo.setCurrentIndex(tab.match_combo.findData("unmatched"))
+    unmatched = data.count_urls(evidence_id, filters=UrlFilterSpec(match_filter="unmatched"))
+    assert unmatched > 100
+    qtbot.waitUntil(lambda: _total_shown(tab, unmatched), timeout=10000)
+    tab.next_button.click()
+    qtbot.waitUntil(lambda: _loaded(tab) and tab.model.current_page() == 1, timeout=10000)
+    counted = len(counts)
+
+    tab.hide()
+    # Written through another connection without notifying the tab.
+    with data._use_evidence_conn(evidence_id):
+        with data._connect() as conn:
+            conn.execute("DELETE FROM url_matches WHERE evidence_id = ? AND list_name = 'list0'", (evidence_id,))
+            conn.commit()
+    recounted = data.count_urls(evidence_id, filters=UrlFilterSpec(match_filter="unmatched"))
+    assert recounted > unmatched
+
+    tab.show()
+    qtbot.waitUntil(lambda: _loaded(tab) and tab.page_label.text().endswith(f"of {recounted:,} URLs; data changed, row numbers hidden"), timeout=10000)
+    assert tab.model.current_page() == 1
+    assert len(counts) == counted + 1
+
+
+def test_unchanged_recheck_on_show_keeps_selection_without_loading_state(qtbot, make_tab, url_case, monkeypatch):
+    case, data = url_case
+    counts = _counting_count_handler(monkeypatch)
+    pages = _counting_page_loader(monkeypatch)
+    tab = make_tab(case, data, case.evidence_ids[0])
+    tab.show()
+    qtbot.waitUntil(lambda: _total_shown(tab, 250), timeout=10000)
+    tab.next_button.click()
+    qtbot.waitUntil(lambda: _loaded(tab) and tab.model.current_page() == 1, timeout=10000)
+    tab.table_view.selectRow(3)
+    label = tab.page_label.text()
+    loads, counted = len(pages), len(counts)
+    loading_states = []
+    monkeypatch.setattr(tab, "_set_table_loading", lambda: loading_states.append(tab.page_label.text()))
+    resets = []
+    tab.model.modelReset.connect(lambda: resets.append(True))
+
+    tab.hide()
+    tab.show()
+    qtbot.waitUntil(lambda: len(pages) == loads + 1 and not tab._data_loading, timeout=10000)
+
+    assert pages[-1] == 1
+    assert loading_states == [] and resets == []
+    assert tab.page_label.text() == label
+    assert [i.row() for i in tab.table_view.selectionModel().selectedRows()] == [3]
+    assert len(counts) == counted
+
+
+def test_no_recheck_on_show_in_grouped_view(qtbot, make_tab, url_case, monkeypatch):
+    case, data = url_case
+    pages = _counting_page_loader(monkeypatch)
+    tab = make_tab(case, data, case.evidence_ids[0])
+    tab.show()
+    qtbot.waitUntil(lambda: _total_shown(tab, 250), timeout=10000)
+    tab.group_checkbox.setChecked(True)
+    loads = len(pages)
+
+    tab.hide()
+    tab.show()
+    qtbot.wait(100)
+    assert len(pages) == loads
+
+
+def test_recheck_on_show_for_tab_loaded_without_deferral(qtbot, url_case):
+    """Tabs for evidence added during the session load immediately (defer_load=False)."""
+    from app.data import UrlFilterSpec
+    from app.features.urls import UrlsTab
+
+    case, data = url_case
+    evidence_id = case.evidence_ids[0]
+    tab = UrlsTab()
+    qtbot.addWidget(tab)
+    try:
+        tab.set_page_size(100)
+        tab.set_case_data(data)
+        tab.set_evidence(evidence_id, evidence_label=case.labels[evidence_id])
+        tab.show()
+        qtbot.waitUntil(lambda: _total_shown(tab, 250), timeout=10000)
+        tab.tag_combo.setCurrentIndex(tab.tag_combo.findData("Relevant"))
+        relevant = data.count_urls(evidence_id, filters=UrlFilterSpec(tag_name="Relevant"))
+        qtbot.waitUntil(lambda: _total_shown(tab, relevant), timeout=10000)
+
+        tab.hide()
+        tags = {t["name"]: t["id"] for t in data.list_tags(evidence_id, use_cache=False)}
+        data.merge_tags(evidence_id, [tags["Review"]], tags["Relevant"])
+        merged = data.count_urls(evidence_id, filters=UrlFilterSpec(tag_name="Relevant"))
+
+        tab.show()
+        qtbot.waitUntil(lambda: _total_shown(tab, merged), timeout=10000)
+    finally:
+        tab.shutdown()
+
+
+def test_failed_recheck_on_show_keeps_shown_page(qtbot, make_tab, url_case, monkeypatch):
+    import app.features.urls.tab as tab_module
+
+    original = tab_module._load_url_page
+    attempts = []
+    fail = threading.Event()
+
+    def failing(case_data, request):
+        if not fail.is_set():
+            return original(case_data, request)
+        attempts.append(request.payload.page)
+        raise RuntimeError("database is locked")
+
+    monkeypatch.setattr(tab_module, "_load_url_page", failing)
+    case, data = url_case
+    tab = make_tab(case, data, case.evidence_ids[0])
+    tab.show()
+    qtbot.waitUntil(lambda: _total_shown(tab, 250), timeout=10000)
+    tab.next_button.click()
+    qtbot.waitUntil(lambda: _loaded(tab) and tab.model.current_page() == 1, timeout=10000)
+    label = tab.page_label.text()
+    first_id = tab.model.get_row(0)["id"]
+
+    fail.set()
+    tab.hide()
+    tab.show()
+    qtbot.waitUntil(lambda: attempts == [1] and not tab._data_loading, timeout=10000)
+
+    assert tab.model.current_page() == 1
+    assert tab.model.rowCount() == 100 and tab.model.get_row(0)["id"] == first_id
+    assert tab.page_label.text() == label

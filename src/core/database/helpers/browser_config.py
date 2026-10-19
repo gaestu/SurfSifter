@@ -14,6 +14,8 @@ from __future__ import annotations
 import sqlite3
 from typing import Any, Dict, Iterable, List, Optional
 
+from .sql_utils import escape_like
+
 __all__ = [
     # Browser config
     "insert_browser_config",
@@ -214,13 +216,7 @@ def get_browser_configs(
 
 def _like_literal_pattern(value: str) -> str:
     """Return a contains-match LIKE pattern with wildcard characters escaped."""
-    escaped = (
-        value
-        .replace("\\", "\\\\")
-        .replace("%", "\\%")
-        .replace("_", "\\_")
-    )
-    return f"%{escaped}%"
+    return f"%{escape_like(value)}%"
 
 
 def get_browser_config_filter_values(

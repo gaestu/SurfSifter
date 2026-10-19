@@ -1,4 +1,4 @@
-"""Opt-in URL query-plan and performance benchmark (issue #61).
+"""Opt-in URL query-plan and performance benchmark (issues #61, #67).
 
 Data layer only (no Qt). Builds a deterministic synthetic case on disk with
 ``tests/fixtures/url_fixtures.py`` (90% NULL ``first_seen_utc`` as in real data,
@@ -13,15 +13,18 @@ see #47; 1000 domains; 4 sources; sparse tags: every 100th URL; matches: every
 
 on several variants of the evidence database (copies of the base case):
 
-- ``stats``          as built by the fixture (migration 0004 index, ANALYZE run)
+- ``stats``          as built by the fixture (all migrations, ANALYZE run)
 - ``nostats``        sqlite_stat1 emptied: what the app sees, it never runs ANALYZE
 - ``approx_stats``   nostats + ``PRAGMA analysis_limit=1000; ANALYZE``
 - ``no0004*``        without idx_urls_evidence_domain_nocase_first_seen
-- ``source_idx*``    candidate index (evidence_id, discovered_by, first_seen_utc DESC)
+- ``source_pre0005_nostats``  idx_urls_evidence_source as before migration 0005
+  (evidence_id, discovered_by)
+- ``source_0005_nostats``     the same copy after running the real migration 0005
 
-plus index sizes (dbstat), CREATE INDEX time of migration 0004 on a populated
-table (upgrade cost at first open), ANALYZE / PRAGMA optimize cost, and URL
-ingest time with vs. without the 0004 index. Timings are medians in ms. Only
+plus index sizes (dbstat), upgrade cost at first open (CREATE INDEX of
+migration 0004, migration 0005 script) on a populated table, ANALYZE /
+PRAGMA optimize cost, and URL ingest time with all indexes (``current``),
+without the 0004 index, and with the pre-0005 source index. Timings are medians in ms. Only
 correctness invariants are asserted (cursor page == OFFSET page, count ==
 keyset walk, identical results across variants), never timing thresholds.
 
@@ -54,7 +57,7 @@ from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
 import pytest
 
 from app.data import CaseDataAccess, UrlCursor, UrlFilterSpec, UrlPageQuery
-from core.database import DatabaseManager
+from core.database import EVIDENCE_MIGRATIONS_DIR, DatabaseManager
 from tests.fixtures.url_fixtures import UrlFixtureCase, _populate_evidence, build_url_fixture_case
 
 pytestmark = [
@@ -71,8 +74,9 @@ DEPTHS = (0.05, 0.9)
 WALK_LIMIT = 50_000  # keyset-walk / full-order checks only for filters up to this size
 FIXTURE = dict(timestamp_every=10, tag_every=100, match_every=20, domain_count=1000)
 NEW_INDEX = "idx_urls_evidence_domain_nocase_first_seen"
-SOURCE_INDEX = "idx_bench_urls_evidence_source_first_seen"
-SOURCE_INDEX_SQL = f"CREATE INDEX {SOURCE_INDEX} ON urls(evidence_id, discovered_by, first_seen_utc DESC)"
+SOURCE_INDEX = "idx_urls_evidence_source"
+# idx_urls_evidence_source before evidence migration 0005 (issue #67).
+OLD_SOURCE_INDEX_SQL = f"CREATE INDEX {SOURCE_INDEX} ON urls(evidence_id, discovered_by)"
 NEW_INDEX_SQL = f"CREATE INDEX {NEW_INDEX} ON urls(evidence_id, domain COLLATE NOCASE, first_seen_utc DESC)"
 
 # Fixture row i has a timestamp iff i % 10 == 0, domain d{i % 1000}, source
@@ -251,6 +255,21 @@ def _exec_ms(db_path: Path, *sql: str) -> float:
         conn.close()
 
 
+def _script_ms(db_path: Path, script: str) -> float:
+    conn = _raw(db_path)
+    try:
+        start = time.perf_counter()
+        conn.executescript(script)
+        return round((time.perf_counter() - start) * 1000, 1)
+    finally:
+        conn.close()
+
+
+def _migration_sql(number: int) -> str:
+    (path,) = EVIDENCE_MIGRATIONS_DIR.glob(f"{number:04d}_*.sql")
+    return path.read_text()
+
+
 def _index_sizes(db_path: Path) -> Dict[str, int]:
     conn = _raw(db_path)
     try:
@@ -345,8 +364,9 @@ def _copy_case(case: UrlFixtureCase, work_dir: Path, name: str) -> Tuple[Path, P
     return folder, _evidence_db_path(case, folder)
 
 
-def _ingest_ms(work_dir: Path, rows: int, *, with_new_index: bool) -> Dict[str, float]:
-    folder = work_dir / "ingest" / ("with_0004" if with_new_index else "without_0004")
+def _ingest_ms(work_dir: Path, rows: int, name: str, *setup_sql: str) -> Dict[str, float]:
+    """Time URL ingest into a migrated, empty case after running ``setup_sql``."""
+    folder = work_dir / "ingest" / name
     if folder.exists():
         shutil.rmtree(folder)
     case = build_url_fixture_case(folder, rows_per_evidence=0)  # migrated, empty
@@ -354,8 +374,8 @@ def _ingest_ms(work_dir: Path, rows: int, *, with_new_index: bool) -> Dict[str, 
     try:
         eid = case.evidence_ids[0]
         conn = manager.get_evidence_conn(eid, case.labels[eid])
-        if not with_new_index:
-            conn.execute(f"DROP INDEX {NEW_INDEX}")
+        for statement in setup_sql:
+            conn.execute(statement)
         proxy = _AnalyzeTimer(conn)
         total_ms, _ = _timed(lambda: _populate_evidence(
             proxy, eid, rows=rows, timestamp_every=FIXTURE["timestamp_every"], tag_every=0,
@@ -409,14 +429,14 @@ def test_url_query_benchmark(bench_case, work_dir: Path):
     costs["create_index_0004_ms"] = _exec_ms(db, NEW_INDEX_SQL)
     shutil.rmtree(folder)
 
-    # Candidate source index (not a migration; evaluation only).
-    folder, db = _copy_case(case, work_dir, "source_idx")
+    # Source index as before migration 0005, then the real 0005 upgrade (issue #67).
+    folder, db = _copy_case(case, work_dir, "source_pre0005")
     _drop_stats(db)
-    costs["create_source_index_ms"] = _exec_ms(db, SOURCE_INDEX_SQL)
-    results["sizes"][SOURCE_INDEX] = _index_sizes(db)[SOURCE_INDEX]
-    variants["source_idx_nostats"] = _run_filters(case, folder, SOURCE_FILTERS)
-    _exec_ms(db, "ANALYZE")
-    variants["source_idx_stats"] = _run_filters(case, folder, SOURCE_FILTERS)
+    _exec_ms(db, f"DROP INDEX {SOURCE_INDEX}", OLD_SOURCE_INDEX_SQL)
+    results["sizes"][f"{SOURCE_INDEX} (pre-0005)"] = _index_sizes(db)[SOURCE_INDEX]
+    variants["source_pre0005_nostats"] = _run_filters(case, folder, SOURCE_FILTERS)
+    costs["migration_0005_ms"] = _script_ms(db, _migration_sql(5))
+    variants["source_0005_nostats"] = _run_filters(case, folder, SOURCE_FILTERS)
     shutil.rmtree(folder)
 
     # Results must not depend on plans/indexes.
@@ -432,8 +452,11 @@ def test_url_query_benchmark(bench_case, work_dir: Path):
     ingest_rows = int(os.environ.get("URL_QUERY_BENCH_INGEST_ROWS") or ROWS)
     results["ingest"] = {
         "rows": ingest_rows,
-        "without_0004": _ingest_ms(work_dir, ingest_rows, with_new_index=False),
-        "with_0004": _ingest_ms(work_dir, ingest_rows, with_new_index=True),
+        "current": _ingest_ms(work_dir, ingest_rows, "current"),
+        "without_0004": _ingest_ms(work_dir, ingest_rows, "without_0004", f"DROP INDEX {NEW_INDEX}"),
+        "source_pre0005": _ingest_ms(
+            work_dir, ingest_rows, "source_pre0005", f"DROP INDEX {SOURCE_INDEX}", OLD_SOURCE_INDEX_SQL
+        ),
     }
 
     results["environment"] = {

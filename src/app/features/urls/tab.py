@@ -181,6 +181,8 @@ class UrlsTab(QWidget):
         # tab; latest request wins, stale results are rejected by generation.
         self._url_loader: Optional[CancellableQueryWorker] = None
         self._data_worker_generation = 0
+        # Generation of the last quiet re-check request (issue #67).
+        self._quiet_generation: Optional[int] = None
         self._data_loading = False
 
         # Exact totals load independently of pages (issue #61); results are
@@ -365,6 +367,9 @@ class UrlsTab(QWidget):
         self.group_model.set_case_data(case_data)
         self._grouped_stale = True
         if not defer_load:
+            # Loaded now (in the background), so showEvent may refresh/re-check.
+            self._data_loaded = self.evidence_id is not None
+            self._load_pending = False
             self._populate_filters()
             self._update_page_label()
         else:
@@ -390,7 +395,10 @@ class UrlsTab(QWidget):
         self._grouped_stale = True
 
         if not defer_load:
-            # Data is loaded in the background once filters are populated.
+            # Data is loaded in the background once filters are populated;
+            # loaded state lets showEvent refresh/re-check (issue #67).
+            self._data_loaded = evidence_id is not None
+            self._load_pending = False
             self.model.set_evidence(evidence_id, reload=False)
             self.group_model.set_evidence(evidence_id, reload=False)
             self._populate_filters()
@@ -484,6 +492,31 @@ class UrlsTab(QWidget):
         elif self._data_stale and self._data_loaded:
             self._data_stale = False
             QTimer.singleShot(10, self.refresh)
+        elif self._data_loaded:
+            QTimer.singleShot(10, self._recheck_flat_page)
+
+    def _recheck_flat_page(self) -> None:
+        """Quietly reload the shown flat page to detect unnotified writes (issue #67).
+
+        Writes through other connections (e.g. a tag rename or merge in the
+        Tags tab) are only noticed through the page's ``PRAGMA data_version``.
+        Re-requesting the current page (a cheap keyset query) when the tab is
+        shown again reveals them, which invalidates the total and recounts.
+        The label and buttons are kept until the page arrives; an unchanged
+        page keeps the view's selection and scroll position.
+        """
+        if (
+            not self.isVisible()
+            or self.views.currentIndex() != 0
+            or self._flat_stale
+            or self._data_loading
+            or self._filters_loading
+            or self._load_pending
+            or not self.model.has_data_baseline()
+            or self.table_view.state() == QAbstractItemView.EditingState
+        ):
+            return
+        self._request_page(self.model.current_page(), quiet=True)
 
     def _perform_deferred_load(self) -> None:
         """
@@ -903,8 +936,14 @@ class UrlsTab(QWidget):
         if self._count_loader is not None:
             self._count_loader.cancel()
 
-    def _request_page(self, page: int) -> None:
-        """Load ``page`` of the flat view in the background (no GUI-thread queries)."""
+    def _request_page(self, page: int, *, quiet: bool = False) -> None:
+        """Load ``page`` of the flat view in the background (no GUI-thread queries).
+
+        Args:
+            page: Page index to load
+            quiet: Keep the page label and buttons instead of showing the
+                loading state (re-check of the shown page, issue #67)
+        """
         # Filter population / deferred load will trigger the load when done.
         if self._filters_loading or self._load_pending:
             return
@@ -919,7 +958,9 @@ class UrlsTab(QWidget):
         current_gen = self._data_worker_generation
         self._flat_stale = False
         self._data_loading = True
-        self._set_table_loading()
+        self._quiet_generation = current_gen if quiet else None
+        if not quiet:
+            self._set_table_loading()
 
         loader = self._ensure_url_loader()
         if loader is None:
@@ -1014,6 +1055,11 @@ class UrlsTab(QWidget):
             return
 
         self._data_loading = False
+        if generation == self._quiet_generation:
+            # A failed background re-check (issue #67) keeps the shown page.
+            logger.warning("URL page re-check failed: %s", error)
+            self._update_page_label()
+            return
         logger.error("Data loading failed: %s", error)
 
         # Reset to empty state

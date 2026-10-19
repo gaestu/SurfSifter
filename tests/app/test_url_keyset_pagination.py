@@ -255,6 +255,42 @@ def test_domain_mode_semantics(domain_case, spec, expected):
     assert _domains(data, evidence_id, spec) == expected
 
 
+def test_top_domains_group_case_insensitively_like_exact_filter(domain_case):
+    """Dropdown entries and counts agree with the exact domain filter (issue #67)."""
+    data, evidence_id = domain_case
+    result = data.get_top_domains(evidence_id)
+
+    items = [(item["domain"], item["count"]) for item in result["items"]]
+    # One entry per case-insensitive domain; smallest spelling represents it.
+    assert items[0] == ("Example.COM", 2)
+    assert sorted(d for d, _ in items) == sorted(
+        ["Example.COM", "sub.example.com", "notexample.com", "a%b.com", "axb.com", "a_b.com", "a\\b.com", "STRASSE.de"]
+    )
+    # NULL and empty domains have no entry and are not counted.
+    assert result["total_count"] == len(items) == 8
+    assert result["truncated"] is False
+    for domain, count in items:
+        assert data.count_urls(evidence_id, filters=UrlFilterSpec(domain_exact=domain)) == count
+
+
+def test_top_domains_order_is_deterministic_and_truncates(empty_case):
+    case, data = empty_case
+    evidence_id = case.evidence_ids[0]
+    domains = ["c.com", "B.com", "a.com", "b.com", "A.COM", "c.com", "d.com", "a.com", "C.COM", "b.com"]
+    _insert(data, evidence_id, [(d, None) for d in domains])
+
+    result = data.get_top_domains(evidence_id)
+    # a/b/c tie at 3 each: ordered by domain ignoring case, then d.com.
+    assert [(i["domain"], i["count"]) for i in result["items"]] == [
+        ("A.COM", 3), ("B.com", 3), ("C.COM", 3), ("d.com", 1),
+    ]
+    truncated = data.get_top_domains(evidence_id, limit=2)
+    assert [i["domain"] for i in truncated["items"]] == ["A.COM", "B.com"]
+    assert truncated["total_count"] == 4 and truncated["truncated"] is True
+    # Per evidence: the second evidence has no domains.
+    assert data.get_top_domains(case.evidence_ids[1]) == {"items": [], "total_count": 0, "truncated": False}
+
+
 def test_no_domain_filter_includes_null_and_empty_domains(domain_case):
     data, evidence_id = domain_case
     rows = data.iter_urls(evidence_id, filters=UrlFilterSpec(), limit=100)
@@ -308,6 +344,50 @@ def _plan(data: CaseDataAccess, evidence_id: int, sql: str, params: Sequence[Any
         (
             "SELECT COUNT(*) FROM urls u WHERE u.evidence_id = ? AND u.domain = ? COLLATE NOCASE",
             (1, "d1.example.com"),
+            "idx_urls_evidence_domain_nocase_first_seen",
+        ),
+        # Single source (issue #67): both phases, first and deep page, count, listing.
+        (
+            "SELECT u.id FROM urls u WHERE u.evidence_id = ? AND u.discovered_by IN (?) "
+            "AND u.first_seen_utc IS NOT NULL ORDER BY u.first_seen_utc DESC, u.id ASC LIMIT 501",
+            (1, "bulk_extractor"),
+            "idx_urls_evidence_source",
+        ),
+        (
+            "SELECT u.id FROM urls u WHERE u.evidence_id = ? AND u.discovered_by IN (?) "
+            "AND u.first_seen_utc IS NOT NULL AND u.first_seen_utc <= ? AND (u.first_seen_utc < ? OR u.id > ?) "
+            "ORDER BY u.first_seen_utc DESC, u.id ASC LIMIT 501",
+            (1, "chromium_history", "2024-06-01", "2024-06-01", 10),
+            "idx_urls_evidence_source",
+        ),
+        (
+            "SELECT u.id FROM urls u WHERE u.evidence_id = ? AND u.discovered_by IN (?) "
+            "AND u.first_seen_utc IS NULL ORDER BY u.id ASC LIMIT 501",
+            (1, "bulk_extractor"),
+            "idx_urls_evidence_source",
+        ),
+        (
+            "SELECT u.id FROM urls u WHERE u.evidence_id = ? AND u.discovered_by IN (?) "
+            "AND u.first_seen_utc IS NULL AND u.id > ? ORDER BY u.id ASC LIMIT 501",
+            (1, "bulk_extractor", 10),
+            "idx_urls_evidence_source",
+        ),
+        (
+            "SELECT COUNT(*) FROM urls u WHERE u.evidence_id = ? AND u.discovered_by IN (?)",
+            (1, "bulk_extractor"),
+            "idx_urls_evidence_source",
+        ),
+        (
+            "SELECT DISTINCT discovered_by FROM urls WHERE evidence_id = ? AND discovered_by IS NOT NULL "
+            "ORDER BY discovered_by",
+            (1,),
+            "idx_urls_evidence_source",
+        ),
+        # Domain dropdown total (issue #67).
+        (
+            "SELECT COUNT(*) FROM (SELECT 1 FROM urls WHERE evidence_id = ? AND domain IS NOT NULL "
+            "AND domain != '' GROUP BY domain COLLATE NOCASE)",
+            (1,),
             "idx_urls_evidence_domain_nocase_first_seen",
         ),
     ],

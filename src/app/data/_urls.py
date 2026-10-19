@@ -17,6 +17,8 @@ import time
 from dataclasses import dataclass, field, replace
 from typing import Any, Dict, Iterable, Iterator, List, Optional, Tuple
 
+from core.database.helpers.sql_utils import LIKE_ESCAPE_CHAR, escape_like
+
 from ._base import BaseDataAccess
 
 
@@ -30,18 +32,6 @@ _URL_ROW_COLUMNS = (
     "u.id, u.url, u.domain, u.scheme, u.discovered_by, u.first_seen_utc, "
     "u.last_seen_utc, u.source_path, u.notes, u.occurrence_count"
 )
-
-LIKE_ESCAPE_CHAR = "\\"
-
-
-def escape_like(value: str) -> str:
-    """Escape ``value`` so SQL LIKE matches it literally (with ``ESCAPE '\\'``)."""
-    return (
-        value.replace(LIKE_ESCAPE_CHAR, LIKE_ESCAPE_CHAR * 2)
-        .replace("%", LIKE_ESCAPE_CHAR + "%")
-        .replace("_", LIKE_ESCAPE_CHAR + "_")
-    )
-
 
 @dataclass(frozen=True)
 class UrlFilterSpec:
@@ -825,29 +815,47 @@ class UrlQueryMixin(BaseDataAccess):
         """
         Get top domains by URL frequency for filter dropdowns.
 
+        Domains are grouped ASCII case-insensitively, like the exact domain
+        filter (``UrlFilterSpec.domain_exact``), so each entry's count equals
+        the number of URLs selecting it shows (issue #67). The entry's domain
+        is the smallest spelling in its group (``MIN``), which is deterministic.
+        Ties in count are ordered by that domain, ignoring ASCII case (unique,
+        since the groups are case-insensitively distinct).
+
         Args:
             evidence_id: Evidence ID
             limit: Maximum number of domains to return (default 500)
 
         Returns:
-            Dict with 'items' (list of {domain, count}), 'total_count', 'truncated'
+            Dict with 'items' (list of {domain, count}), 'total_count'
+            (case-insensitively distinct non-empty domains), 'truncated'
         """
         with self._use_evidence_conn(evidence_id):
             with self._connect() as conn:
-                # Get total count of unique domains
+                # Both queries are covering scans of
+                # idx_urls_evidence_domain_nocase_first_seen (migration 0004).
+                # GROUP BY in a subquery walks that index in order; COUNT(DISTINCT
+                # domain COLLATE NOCASE) would build a temporary B-tree instead.
                 total_count = conn.execute(
-                    "SELECT COUNT(DISTINCT domain) FROM urls WHERE evidence_id = ?",
+                    """
+                    SELECT COUNT(*) FROM (
+                        SELECT 1
+                        FROM urls
+                        WHERE evidence_id = ? AND domain IS NOT NULL AND domain != ''
+                        GROUP BY domain COLLATE NOCASE
+                    )
+                    """,
                     (evidence_id,)
                 ).fetchone()[0]
 
                 # Get top N domains by frequency
                 cursor = conn.execute(
                     """
-                    SELECT domain, COUNT(*) as cnt
+                    SELECT MIN(domain) AS representative, COUNT(*) AS cnt
                     FROM urls
                     WHERE evidence_id = ? AND domain IS NOT NULL AND domain != ''
-                    GROUP BY domain
-                    ORDER BY cnt DESC
+                    GROUP BY domain COLLATE NOCASE
+                    ORDER BY cnt DESC, representative COLLATE NOCASE ASC
                     LIMIT ?
                     """,
                     (evidence_id, limit)

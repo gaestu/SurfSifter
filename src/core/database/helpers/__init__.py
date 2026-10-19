@@ -5,6 +5,7 @@ This package provides domain-specific CRUD operations for all artifact tables.
 
 Exports:
 - Generic CRUD: insert_rows, insert_row, get_rows, delete_by_run, get_distinct_values, get_count
+- SQL utilities: escape_like, LIKE_ESCAPE_CHAR
 - Statistics: upsert_extractor_statistics, get_extractor_statistics_*
 - Browser History: insert_browser_history*, get_browser_history*, delete_browser_history_by_run
 - Cookies: insert_cookie*, get_cookies, get_cookie_*, delete_cookies_by_run
@@ -43,6 +44,7 @@ from .generic import (
     insert_row,
     insert_rows,
 )
+from .sql_utils import LIKE_ESCAPE_CHAR, escape_like
 from .statistics import (
     delete_extractor_statistics_by_evidence,
     delete_extractor_statistics_by_run,
@@ -674,6 +676,9 @@ __all__ = [
     "get_rows",
     "insert_row",
     "insert_rows",
+    # SQL utilities
+    "LIKE_ESCAPE_CHAR",
+    "escape_like",
     # Statistics
     "delete_extractor_statistics_by_evidence",
     "delete_extractor_statistics_by_run",
