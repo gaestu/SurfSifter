@@ -60,8 +60,10 @@ class TestLazyLoadingUrlsTab:
         # Set evidence without deferred loading
         tab.set_evidence(1, defer_load=False)
 
-        # Model should have set_evidence called
-        mock_model.set_evidence.assert_called_once_with(1)
+        # Model gets the evidence without a synchronous reload; data loads in
+        # the background once filters are populated (issue #60).
+        mock_model.set_evidence.assert_called_once_with(1, reload=False)
+        tab._populate_filters.assert_called_once_with()
 
 
 class TestLazyLoadingImagesTab:

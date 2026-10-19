@@ -27,9 +27,11 @@ from PySide6.QtWidgets import (
     QApplication,
 )
 
+from app.data import UrlPage, UrlPageQuery
 from app.data.case_data import CaseDataAccess
 from app.features.urls.models import UrlsTableModel, UrlsGroupedModel
 from app.services.matching_workers import UrlMatchWorker
+from app.services.query_loader import CancellableQueryWorker, QueryRequest, QueryResult
 from app.common import add_sandbox_url_actions
 
 logger = logging.getLogger(__name__)
@@ -111,81 +113,9 @@ class FilterLoadWorker(QThread):
         return case_data.get_top_domains(self.evidence_id, limit=self.MAX_DOMAINS)
 
 
-class DataLoadWorker(QThread):
-    """
-    Background worker for loading initial page data.
-
-    Phase 2.1 - Runs count + iter_urls off the main thread to prevent
-    UI freezing when loading the first page of data for large databases.
-    """
-
-    finished = Signal(list, int)  # (rows, total_count)
-    error = Signal(str)
-
-    def __init__(
-        self,
-        case_folder: Path,
-        case_db_path: Path,
-        evidence_id: int,
-        filters: dict,
-        page_size: int = 10000,
-        page: int = 0,
-    ):
-        super().__init__()
-        self.case_folder = case_folder
-        self.case_db_path = case_db_path
-        self.evidence_id = evidence_id
-        self.filters = filters
-        self.page_size = page_size
-        self.page = page
-
-    def run(self):
-        """Load page data in background thread."""
-        import time
-        start_time = time.time()
-
-        try:
-            if self.isInterruptionRequested():
-                return
-
-            with CaseDataAccess(self.case_folder, self.case_db_path) as case_data:
-                # Get total count first (fast query)
-                total_count = case_data.count_urls(
-                    self.evidence_id,
-                    domain_like=self.filters.get("domain", "%"),
-                    url_like=self.filters.get("url", "%"),
-                    tag_like=self.filters.get("tag", "%"),
-                    discovered_by=self.filters.get("sources"),
-                    match_filter=self.filters.get("match_filter"),
-                )
-                if self.isInterruptionRequested():
-                    return
-
-                # Load page data
-                rows = case_data.iter_urls(
-                    self.evidence_id,
-                    domain_like=self.filters.get("domain", "%"),
-                    url_like=self.filters.get("url", "%"),
-                    tag_like=self.filters.get("tag", "%"),
-                    discovered_by=self.filters.get("sources"),
-                    match_filter=self.filters.get("match_filter"),
-                    limit=self.page_size,
-                    offset=self.page * self.page_size,
-                )
-                if self.isInterruptionRequested():
-                    return
-
-            elapsed = time.time() - start_time
-            logger.info(
-                "DataLoadWorker: Loaded %d rows (total=%d) in %.3fs for evidence_id=%s",
-                len(rows), total_count, elapsed, self.evidence_id
-            )
-
-            self.finished.emit(rows, total_count)
-
-        except Exception as e:
-            logger.error("DataLoadWorker error: %s", e, exc_info=True)
-            self.error.emit(str(e))
+def _load_url_page(case_data: CaseDataAccess, request: QueryRequest) -> UrlPage:
+    """Worker-thread handler: load one flat URL page with tag/match maps."""
+    return case_data.load_url_page(request.payload)
 
 
 @dataclass
@@ -222,11 +152,15 @@ class UrlsTab(QWidget):
         self._filter_worker_generation = 0
         self._filters_loading = False
 
-        # Background data loading (Phase 2.1)
-        self._data_worker: Optional[DataLoadWorker] = None
-        self._pending_data_workers: List[DataLoadWorker] = []
+        # Background page loading (issue #60): one worker-owned connection per
+        # tab; latest request wins, stale results are rejected by generation.
+        self._url_loader: Optional[CancellableQueryWorker] = None
         self._data_worker_generation = 0
         self._data_loading = False
+
+        # Only the visible view is refreshed; the other one is marked stale.
+        self._flat_stale = False
+        self._grouped_stale = True
 
         # URL match worker lifecycle
         self.match_worker: Optional[UrlMatchWorker] = None
@@ -360,9 +294,14 @@ class UrlsTab(QWidget):
             case_data: CaseDataAccess instance
             defer_load: If True, defer data loading until tab is visible (Phase 3)
         """
+        if case_data is not self.case_data:
+            # Loader connections belong to the previous case.
+            self._data_worker_generation += 1
+            self._stop_url_loader()
         self.case_data = case_data
         self.model.set_case_data(case_data)
         self.group_model.set_case_data(case_data)
+        self._grouped_stale = True
         if not defer_load:
             self._populate_filters()
             self._update_page_label()
@@ -379,14 +318,21 @@ class UrlsTab(QWidget):
             defer_load: If True, defer data loading until tab is visible (Phase 3)
             evidence_label: Optional evidence label for forensic context
         """
+        if evidence_id != self.evidence_id:
+            # Reject in-flight results and stop work for the previous evidence.
+            self._data_worker_generation += 1
+            self._data_loading = False
+            if self._url_loader is not None:
+                self._url_loader.cancel()
         self.evidence_id = evidence_id
         self._evidence_label_cache = evidence_label  #
         self._data_loaded = False
+        self._grouped_stale = True
 
         if not defer_load:
-            # Immediate loading (legacy behavior)
-            self.model.set_evidence(evidence_id)
-            self.group_model.set_evidence(evidence_id)
+            # Data is loaded in the background once filters are populated.
+            self.model.set_evidence(evidence_id, reload=False)
+            self.group_model.set_evidence(evidence_id, reload=False)
             self._populate_filters()
             self._update_page_label()
         else:
@@ -394,9 +340,8 @@ class UrlsTab(QWidget):
             self._load_pending = True
 
     def refresh(self) -> None:
-        self.model.reload()
-        self.group_model.reload()
-        self._update_page_label()
+        """Reload the visible view (flat view in the background); mark the other stale."""
+        self._reload_visible_view(self.model.current_page())
 
     def _get_evidence_label(self) -> Optional[str]:
         """Get the evidence label for forensic context.
@@ -728,16 +673,12 @@ class UrlsTab(QWidget):
         self.filters.tag = self.tag_combo.currentData() or "*"
         self._apply_filters()
 
-    def _apply_filters(self, use_background: bool = True) -> None:
+    def _apply_filters(self) -> None:
         """
         Apply current filters to the URL list.
 
-        Phase 2.1 - Uses background DataLoadWorker for initial load
-        to prevent UI freezing with large databases.
-
-        Args:
-            use_background: If True (default), load data in background thread.
-                           Set to False for synchronous pagination.
+        The flat view is loaded in the background (issue #60); filters are
+        only stored on the models here.
         """
         # Skip if filters are loading
         if self._filters_loading:
@@ -758,12 +699,11 @@ class UrlsTab(QWidget):
             sources=sources,
             match_filter=self.filters.match,  #
             tag=self.filters.tag,  #
-            reload=not use_background,  # Don't reload if using background worker
+            reload=False,
         )
 
-        # Update grouped model - only reload if grouped view is visible (performance fix)
-        # This prevents expensive 10k-row queries when the flat table view is active
-        grouped_view_visible = self.views.currentIndex() == 1
+        # Grouped model filters are updated without reloading; it is reloaded
+        # only while visible (otherwise marked stale).
         self.group_model.set_case_data(self.case_data)
         self.group_model.set_evidence(self.evidence_id, reload=False)
         self.group_model.set_filters(
@@ -772,62 +712,80 @@ class UrlsTab(QWidget):
             sources=sources,
             match_filter=self.filters.match,  #
             tag=self.filters.tag,  #
-            reload=grouped_view_visible,  # Only reload if visible
+            reload=False,
         )
+        self._grouped_stale = True
 
-        if use_background:
-            # Start background data loading
-            self._start_data_load()
+        self._reload_visible_view(0)
+
+    def _reload_visible_view(self, page: int) -> None:
+        """Reload only the visible view; mark the other view stale."""
+        if self.views.currentIndex() == 1:
+            self._flat_stale = True
+            self._reload_grouped()
         else:
-            self._update_page_label()
+            self._grouped_stale = True
+            self._request_page(page)
 
-    def _start_data_load(self) -> None:
-        """
-        Start background data loading.
+    def _reload_grouped(self) -> None:
+        """Reload the grouped view (still synchronous; async children are #64)."""
+        if self._filters_loading or self._load_pending:
+            return
+        self._grouped_stale = False
+        self.group_model.reload()
 
-        Phase 2.1 - Loads URL data in background thread.
-        """
-        # Increment generation; any stale worker callbacks are ignored.
-        self._data_worker_generation += 1
-        current_gen = self._data_worker_generation
-
-        # Keep old worker alive until it finishes (prevents QThread destruction crash).
-        if self._data_worker is not None:
-            if self._data_worker.isRunning():
-                self._pending_data_workers.append(self._data_worker)
-            else:
-                self._data_worker.deleteLater()
-            self._data_worker = None
-        self._pending_data_workers = [w for w in self._pending_data_workers if w.isRunning()]
-
-        # Show loading state
-        self._data_loading = True
-        self._set_table_loading()
-
+    def _ensure_url_loader(self) -> Optional[CancellableQueryWorker]:
+        if self._url_loader is not None:
+            return self._url_loader
         case_folder = getattr(self.case_data, "case_folder", None)
         case_db_path = getattr(self.case_data, "db_path", None)
         if case_folder is None or case_db_path is None:
-            self._on_data_load_error("Case context unavailable for background URL loading", current_gen)
+            return None
+        self._url_loader = CancellableQueryWorker(
+            Path(case_folder), Path(case_db_path), _load_url_page, name="UrlPageLoader"
+        )
+        self._url_loader.result_ready.connect(self._on_page_loaded)
+        self._url_loader.failed.connect(self._on_page_load_error)
+        return self._url_loader
+
+    def _stop_url_loader(self, timeout_ms: int = 2000) -> None:
+        loader = self._url_loader
+        if loader is None:
             return
+        self._url_loader = None
+        for signal in (loader.result_ready, loader.failed):
+            try:
+                signal.disconnect()
+            except (RuntimeError, TypeError):
+                pass
+        if loader.stop(timeout_ms):
+            loader.deleteLater()
 
-        # Start background worker with current filters
-        self._data_worker = DataLoadWorker(
-            Path(case_folder),
-            Path(case_db_path),
-            int(self.evidence_id),
-            self.model.get_filters(),
-            page_size=self.model.page_size,
-            page=self.model.page,
-        )
-        self._data_worker.finished.connect(
-            lambda rows, count, gen=current_gen: self._on_data_loaded(rows, count, gen)
-        )
-        self._data_worker.error.connect(
-            lambda error, gen=current_gen: self._on_data_load_error(error, gen)
-        )
-        self._data_worker.start()
+    def _request_page(self, page: int) -> None:
+        """Load ``page`` of the flat view in the background (no GUI-thread queries)."""
+        # Filter population / deferred load will trigger the load when done.
+        if self._filters_loading or self._load_pending:
+            return
+        if not self.case_data or self.evidence_id is None:
+            return
+        if self.model.evidence_id != self.evidence_id:
+            # e.g. set_case_data() reset the model's evidence.
+            self.model.set_evidence(self.evidence_id, reload=False)
 
-        logger.debug("Started background data loading for evidence_id=%s", self.evidence_id)
+        self._data_worker_generation += 1
+        current_gen = self._data_worker_generation
+        self._flat_stale = False
+        self._data_loading = True
+        self._set_table_loading()
+
+        loader = self._ensure_url_loader()
+        if loader is None:
+            self._on_page_load_error(
+                current_gen, int(self.evidence_id), "Case context unavailable for background URL loading"
+            )
+            return
+        loader.submit(QueryRequest(current_gen, int(self.evidence_id), self.model.build_query(page)))
+        logger.debug("Requested URL page %d (gen %d) for evidence_id=%s", page, current_gen, self.evidence_id)
 
     def _set_table_loading(self) -> None:
         """Show loading state in table view."""
@@ -836,52 +794,47 @@ class UrlsTab(QWidget):
         self.prev_button.setEnabled(False)
         self.next_button.setEnabled(False)
 
-    def _on_data_loaded(self, rows: list, total_count: int, generation: int = 0) -> None:
-        """
-        Handle background data loading completion.
+    def _is_current_result(self, generation: int, evidence_id: int) -> bool:
+        return generation == self._data_worker_generation and evidence_id == self.evidence_id
 
-        Updates model with loaded data.
-        """
-        if generation != self._data_worker_generation:
+    def _on_page_loaded(self, result: QueryResult) -> None:
+        """Apply a prepared page from the loader (GUI thread, no DB access)."""
+        if not self._is_current_result(result.generation, result.evidence_id):
             logger.debug(
-                "Ignoring stale DataLoadWorker result (gen %d vs current %d)",
-                generation,
+                "Ignoring stale URL page (gen %d vs current %d)",
+                result.generation,
                 self._data_worker_generation,
             )
             return
 
         self._data_loading = False
-        self._data_worker = None
-
-        # Update model with loaded data
-        self.model.set_loaded_data(rows, total_count)
-
-        # Update UI
+        page: UrlPage = result.payload
+        self.model.set_loaded_page(page)
         self._update_page_label()
 
-        logger.debug("Data loading complete: %d rows, %d total", len(rows), total_count)
+        logger.debug("Data loading complete: %d rows, %d total", len(page.rows), page.total_count)
 
-    def _on_data_load_error(self, error: str, generation: int = 0) -> None:
-        """Handle background data loading error."""
-        if generation != self._data_worker_generation:
+    def _on_page_load_error(self, generation: int, evidence_id: int, error: str) -> None:
+        """Handle background page loading error."""
+        if not self._is_current_result(generation, evidence_id):
             return
 
         self._data_loading = False
-        self._data_worker = None
-
         logger.error("Data loading failed: %s", error)
 
         # Reset to empty state
-        self.model.set_loaded_data([], 0)
+        self.model.set_loaded_page(
+            UrlPage(query=UrlPageQuery(evidence_id=evidence_id, page_size=self.model.page_size))
+        )
         self._update_page_label()
 
     def _page_up(self) -> None:
-        self.model.page_up()
-        self._update_page_label()
+        if self.model.current_page() > 0:
+            self._request_page(self.model.current_page() - 1)
 
     def _page_down(self) -> None:
-        self.model.page_down()
-        self._update_page_label()
+        if self.model.has_next_page():
+            self._request_page(self.model.current_page() + 1)
 
     def _update_page_label(self) -> None:
         """Update pagination label with 'Showing X-Y of Z URLs' format."""
@@ -954,10 +907,12 @@ class UrlsTab(QWidget):
     def _toggle_grouping(self, checked: bool) -> None:
         index = 1 if checked else 0
         self.views.setCurrentIndex(index)
+        # Reload the newly visible view only if it went stale while hidden.
         if checked:
-            # Reload grouped model with current filters when switching to grouped view
-            # The reload was deferred in _apply_filters when view wasn't visible
-            self.group_model.reload()
+            if self._grouped_stale:
+                self._reload_grouped()
+        elif self._flat_stale:
+            self._request_page(self.model.current_page())
 
     # _trigger_download method removed - downloads now handled in Download tab
 
@@ -1082,6 +1037,8 @@ class UrlsTab(QWidget):
         if not url_id or not self.case_data or self.evidence_id is None:
             return
         self.case_data.update_url_tags(int(self.evidence_id), int(url_id), item.text())
+        # Cached flat-view tags are now outdated.
+        self._flat_stale = True
 
     def _match_against_url_lists(self) -> None:
         """Match URLs against selected URL reference lists."""
@@ -1361,9 +1318,7 @@ class UrlsTab(QWidget):
         if self._filter_worker is not None:
             _stop_worker(self._filter_worker, "FilterLoadWorker")
             self._filter_worker = None
-        if self._data_worker is not None:
-            _stop_worker(self._data_worker, "DataLoadWorker")
-            self._data_worker = None
+        self._stop_url_loader()
         if self.match_worker is not None:
             _stop_worker(self.match_worker, "UrlMatchWorker")
             self.match_worker = None
@@ -1372,10 +1327,6 @@ class UrlsTab(QWidget):
         for worker in self._pending_filter_workers:
             _stop_worker(worker, "Pending FilterLoadWorker", timeout_ms=1000)
         self._pending_filter_workers.clear()
-
-        for worker in self._pending_data_workers:
-            _stop_worker(worker, "Pending DataLoadWorker", timeout_ms=1000)
-        self._pending_data_workers.clear()
 
         for worker in self._pending_match_workers:
             _stop_worker(worker, "Pending UrlMatchWorker", timeout_ms=1000)

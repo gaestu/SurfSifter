@@ -1,7 +1,8 @@
 """
 URLs table model for flat URL listing.
 
-Provides paginated, filterable URL listing with on-demand tag/match loading.
+Provides paginated, filterable URL listing. Tag/match strings come from
+batch-loaded caches; display methods never query the database (issue #60).
 """
 
 from __future__ import annotations
@@ -11,6 +12,8 @@ from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, TYPE_CHECKING
 
 from PySide6.QtCore import QAbstractTableModel, QModelIndex, Qt
+
+from app.data import UrlPage, UrlPageQuery
 
 if TYPE_CHECKING:
     from app.data.case_data import CaseDataAccess
@@ -41,8 +44,8 @@ class UrlsTableModel(QAbstractTableModel):
         self.page = 0
         self._rows: List[Dict[str, Any]] = []
         self._total_count: int = 0  # Total URLs matching filters
-        self._matches_cache: Dict[int, str] = {}  # url_id -> matched_lists string (on-demand loading)
-        self._tags_cache: Dict[int, str] = {}  # url_id -> tags string (on-demand loading)
+        self._matches_cache: Dict[int, str] = {}  # url_id -> matched_lists string (batch-loaded)
+        self._tags_cache: Dict[int, str] = {}  # url_id -> tags string (batch-loaded)
         self._filters: Dict[str, Any] = {
             "domain": "%",
             "url": "%",
@@ -90,51 +93,23 @@ class UrlsTableModel(QAbstractTableModel):
             if column == 7:  # Occurrences column
                 count = row.get("occurrence_count") or 1
                 return str(count) if count > 1 else ""
-            if column == 8:  # Tags column (on-demand loading)
-                return self._get_tags(row.get("id")) or ""
-            if column == 9:  # Match column (on-demand loading)
-                return self._get_matches(row.get("id")) or ""
+            if column == 8:  # Tags column (batch-loaded cache)
+                return self._get_tags(row.get("id"))
+            if column == 9:  # Match column (batch-loaded cache)
+                return self._get_matches(row.get("id"))
         return None
 
     def _get_tags(self, url_id: Optional[int]) -> str:
-        """
-        Load tags for a URL on-demand (performance optimization ).
-
-        Args:
-            url_id: URL ID
-
-        Returns:
-            Comma-separated list of tag names, or empty string if no tags
-        """
-        if not url_id or not self.case_data or self.evidence_id is None:
+        """Return cached tags for a URL ("" if none). Never queries the database."""
+        if not url_id:
             return ""
-
-        if url_id not in self._tags_cache:
-            # Fetch tags on first access
-            tags_str = self.case_data.get_artifact_tags_str(int(self.evidence_id), 'url', url_id)
-            self._tags_cache[url_id] = tags_str
-
-        return self._tags_cache[url_id]
+        return self._tags_cache.get(url_id) or ""
 
     def _get_matches(self, url_id: Optional[int]) -> str:
-        """
-        Load matches for a URL on-demand (performance optimization).
-
-        Args:
-            url_id: URL ID
-
-        Returns:
-            Comma-separated list of matched list names, or "—" if no matches
-        """
-        if not url_id or not self.case_data or self.evidence_id is None:
+        """Return cached matched list names for a URL ("—" if none). Never queries the database."""
+        if not url_id:
             return "—"
-
-        if url_id not in self._matches_cache:
-            # Fetch matches on first access
-            matched_lists = self.case_data.get_url_matches(int(self.evidence_id), url_id)
-            self._matches_cache[url_id] = matched_lists if matched_lists else "—"
-
-        return self._matches_cache[url_id]
+        return self._matches_cache.get(url_id) or "—"
 
     def headerData(self, section: int, orientation: Qt.Orientation, role: int = Qt.DisplayRole) -> Any:  # noqa: N802
         if role != Qt.DisplayRole:
@@ -170,8 +145,7 @@ class UrlsTableModel(QAbstractTableModel):
         self.case_data = case_data
         self.page = 0
         self.evidence_id = None
-        self._rows.clear()
-        self.layoutChanged.emit()
+        self._clear_rows()
 
     def set_evidence(self, evidence_id: Optional[int], *, reload: bool = True) -> None:
         """
@@ -182,10 +156,21 @@ class UrlsTableModel(QAbstractTableModel):
             reload: If True (default), immediately reload data. Set to False for
                    deferred loading where reload will be triggered later.
         """
+        if evidence_id != self.evidence_id:
+            # Never show rows/caches of a different evidence.
+            self._clear_rows()
         self.evidence_id = evidence_id
         self.page = 0
         if reload:
             self.reload()
+
+    def _clear_rows(self) -> None:
+        self.beginResetModel()
+        self._rows = []
+        self._total_count = 0
+        self._tags_cache.clear()
+        self._matches_cache.clear()
+        self.endResetModel()
 
     def set_filters(
         self,
@@ -207,7 +192,7 @@ class UrlsTableModel(QAbstractTableModel):
             match_filter: Match filter ("all", "matched", "unmatched", or list name)
             tag: Tag filter pattern
             reload: If True (default), immediately reload data. Set to False when
-                   using background DataLoadWorker.
+                   loading in the background (see ``build_query``).
         """
         if domain is not None:
             self._filters["domain"] = f"%{domain}%" if domain and domain != "*" else "%"
@@ -220,129 +205,64 @@ class UrlsTableModel(QAbstractTableModel):
         if tag is not None:  #
             self._filters["tag"] = tag if tag and tag != "*" else "%"
         self.page = 0
-        self._matches_cache.clear()  # Clear cache when filters change
-        self._tags_cache.clear()
+        # Tag/match caches are replaced wholesale when the next page arrives;
+        # clearing them here would make the still-visible rows render blank.
         if reload:
             self.reload()
 
     def get_filters(self) -> Dict[str, Any]:
-        """
-        Get current filter settings (for background worker).
-
-        Used by DataLoadWorker to load data with matching filters.
-        """
+        """Get current filter settings."""
         return dict(self._filters)
 
-    def set_loaded_data(self, rows: List[Dict[str, Any]], total_count: int) -> None:
-        """
-        Set data loaded by background worker.
-
-        Phase 2.1 - Allows DataLoadWorker to update model with loaded data.
+    def build_query(self, page: Optional[int] = None) -> UrlPageQuery:
+        """Build the background-load request for the current filters.
 
         Args:
-            rows: List of URL row dictionaries
-            total_count: Total count of matching URLs
+            page: Page index to request (defaults to the current page)
         """
-        self.beginResetModel()
-        self._rows = rows
-        self._total_count = total_count
-        # Issue #47: Batch pre-load tags and matches for all URLs
-        self._batch_preload_tags_and_matches()
-        self.endResetModel()
-
-    def _batch_preload_tags_and_matches(self) -> None:
-        """
-        Batch pre-load tags and matches for all URLs in the current page.
-
-        Issue #47: Eliminates N+1 query pattern by loading all tags and matches
-        in two batch queries instead of individual queries per visible row.
-        """
-        if not self.case_data or self.evidence_id is None or not self._rows:
-            self._tags_cache.clear()
-            self._matches_cache.clear()
-            return
-
-        # Extract all URL IDs from current rows
-        url_ids = [row["id"] for row in self._rows if row.get("id")]
-        if not url_ids:
-            self._tags_cache.clear()
-            self._matches_cache.clear()
-            return
-
-        evidence_id = int(self.evidence_id)
-
-        # Batch load tags (using existing batch method)
-        self._tags_cache = self.case_data.get_tag_strings_for_artifacts(
-            evidence_id, "url", url_ids
-        )
-
-        # Batch load matches (using new batch method)
-        self._matches_cache = {
-            url_id: matches if matches else "—"
-            for url_id, matches in self.case_data.get_url_matches_batch(
-                evidence_id, url_ids
-            ).items()
-        }
-        # Add "—" for URLs without any matches
-        for url_id in url_ids:
-            if url_id not in self._matches_cache:
-                self._matches_cache[url_id] = "—"
-
-    def reload(self) -> None:
-        if not self.case_data or self.evidence_id is None:
-            self.beginResetModel()
-            self._rows = []
-            self._total_count = 0
-            self._matches_cache.clear()
-            self._tags_cache.clear()
-            self.endResetModel()
-            return
-
-        self.beginResetModel()
-
-        # Performance: Count first (fast query without GROUP_CONCAT)
-        self._total_count = self.case_data.count_urls(
-            int(self.evidence_id),
+        if self.evidence_id is None:
+            raise ValueError("No evidence selected")
+        sources = self._filters.get("sources")
+        return UrlPageQuery(
+            evidence_id=int(self.evidence_id),
+            page=self.page if page is None else max(0, page),
+            page_size=self.page_size,
             domain_like=self._filters["domain"],
             url_like=self._filters["url"],
             tag_like=self._filters.get("tag", "%"),
-            discovered_by=self._filters["sources"],
+            discovered_by=tuple(sources) if sources else None,
             match_filter=self._filters["match_filter"],
         )
 
-        # Then load page data (matches loaded on-demand)
-        self._rows = self.case_data.iter_urls(
-            int(self.evidence_id),
-            domain_like=self._filters["domain"],
-            url_like=self._filters["url"],
-            tag_like=self._filters.get("tag", "%"),
-            discovered_by=self._filters["sources"],
-            match_filter=self._filters["match_filter"],  #
-            limit=self.page_size,
-            offset=self.page * self.page_size,
-        )
-
-        # Issue #47: Batch pre-load tags and matches for all URLs in the page
-        # This eliminates N+1 query pattern (10K queries -> 2 queries per page)
-        self._batch_preload_tags_and_matches()
-
+    def set_loaded_page(self, page: UrlPage) -> None:
+        """Apply a page prepared off the GUI thread (no database access)."""
+        self.beginResetModel()
+        self.page = page.query.page
+        self._rows = list(page.rows)
+        self._total_count = page.total_count
+        self._tags_cache = dict(page.tags)
+        self._matches_cache = dict(page.matches)
         self.endResetModel()
+
+    def reload(self) -> None:
+        """Synchronously reload the current page ON THE CALLING THREAD.
+
+        Kept for backward compatibility and tests only. GUI code must not use
+        it (nor ``reload=True`` on ``set_evidence``/``set_filters``); the URLs
+        tab loads pages in the background via ``build_query`` +
+        ``set_loaded_page`` (issue #60).
+        """
+        if not self.case_data or self.evidence_id is None:
+            self._clear_rows()
+            return
+        self.set_loaded_page(self.case_data.load_url_page(self.build_query()))
 
     def total_count(self) -> int:
         """Get total count of URLs matching current filters."""
         return self._total_count
 
-    def page_up(self) -> None:
-        if self.page == 0:
-            return
-        self.page -= 1
-        self.reload()
-
-    def page_down(self) -> None:
-        if len(self._rows) < self.page_size:
-            return
-        self.page += 1
-        self.reload()
+    def has_next_page(self) -> bool:
+        return len(self._rows) >= self.page_size and (self.page + 1) * self.page_size < self._total_count
 
     def current_page(self) -> int:
         return self.page

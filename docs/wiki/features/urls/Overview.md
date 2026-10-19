@@ -27,3 +27,5 @@ Browse, filter, and tag extracted URLs with optional matching against reference 
 
 ## Notes
 - Downloads are managed in the Downloads tab (URL tab no longer triggers downloads).
+- The flat URL list loads in the background, both for the first page and when you filter, page with Previous/Next, or refresh. The page counter shows "Loading..." until the new page arrives, and the UI stays responsive. A newer filter or page request cancels the older one, so only the latest request is shown.
+- Refresh and filter changes reload only the visible view (table or grouped tree). The other view reloads when you switch to it.

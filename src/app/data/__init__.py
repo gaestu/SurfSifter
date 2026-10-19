@@ -17,12 +17,12 @@ Image queries extracted to ImageQueryMixin (_images.py).
 Download queries extracted to DownloadQueryMixin (_downloads.py).
 """
 
-from ._base import BaseDataAccess
+from ._base import BaseDataAccess, QueryCancelledError
 from ._case import CaseMetadataMixin
 from ._downloads import DownloadQueryMixin
 from ._evidence import EvidenceMetadataMixin, EvidenceCounts
 from ._images import ImageQueryMixin
-from ._urls import UrlQueryMixin
+from ._urls import UrlPage, UrlPageQuery, UrlQueryMixin
 from .case_data import CaseDataAccess
 
 __all__ = [
@@ -33,5 +33,8 @@ __all__ = [
     "EvidenceMetadataMixin",
     "EvidenceCounts",
     "ImageQueryMixin",
+    "QueryCancelledError",
+    "UrlPage",
+    "UrlPageQuery",
     "UrlQueryMixin",
 ]

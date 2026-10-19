@@ -16,9 +16,17 @@ import time
 import threading
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Dict, Iterable, Optional, Tuple
+from typing import Any, Callable, Dict, Iterable, Iterator, List, Optional, Tuple
 
 from core.database import DatabaseManager, find_case_database
+
+
+class QueryCancelledError(Exception):
+    """Raised when a read inside ``cancellable_reads()`` was interrupted."""
+
+
+# SQLite VM instructions between cancellation checks in cancellable_reads().
+CANCEL_CHECK_INTERVAL_OPS = 1000
 
 
 class BaseDataAccess:
@@ -224,6 +232,7 @@ class BaseDataAccess:
         else:
             conn = sqlite3.connect(self.db_path)
         conn.row_factory = sqlite3.Row
+        self._apply_cancellation(conn)
         return conn
 
     def _connect_case(self) -> sqlite3.Connection:
@@ -237,7 +246,56 @@ class BaseDataAccess:
         """
         conn = sqlite3.connect(self.db_path)
         conn.row_factory = sqlite3.Row
+        self._apply_cancellation(conn)
         return conn
+
+    # -------------------------------------------------------------------------
+    # Cancellation
+    # -------------------------------------------------------------------------
+
+    @contextmanager
+    def cancellable_reads(self, is_cancelled: Callable[[], bool]) -> Iterator[None]:
+        """Make reads on this thread interruptible while the scope is active.
+
+        Connections handed out by ``_connect()`` / ``_connect_case()`` inside the
+        scope get an SQLite progress handler that aborts the running statement
+        once ``is_cancelled()`` returns True. Handlers are removed on exit so a
+        reused (cached) connection behaves normally afterwards.
+
+        Raises:
+            QueryCancelledError: If a statement was interrupted by cancellation.
+        """
+        state = self._thread_local
+        previous_check = getattr(state, "cancel_check", None)
+        previous_conns = getattr(state, "cancel_conns", None)
+        installed: List[sqlite3.Connection] = []
+        state.cancel_check = is_cancelled
+        state.cancel_conns = installed
+        try:
+            yield
+        except sqlite3.OperationalError as exc:
+            if is_cancelled() and "interrupted" in str(exc).lower():
+                raise QueryCancelledError(str(exc)) from exc
+            raise
+        finally:
+            for conn in installed:
+                try:
+                    conn.set_progress_handler(None, 0)
+                except sqlite3.Error:
+                    pass
+            state.cancel_check = previous_check
+            state.cancel_conns = previous_conns
+
+    def _apply_cancellation(self, conn: sqlite3.Connection) -> None:
+        """Install the active cancellation check (if any) on ``conn``."""
+        check = getattr(self._thread_local, "cancel_check", None)
+        if check is None:
+            return
+        installed = self._thread_local.cancel_conns
+        if any(existing is conn for existing in installed):
+            return
+        conn.set_progress_handler(lambda: 1 if check() else 0, CANCEL_CHECK_INTERVAL_OPS)
+        installed.append(conn)
 
     # -------------------------------------------------------------------------
     # Evidence Label Resolution

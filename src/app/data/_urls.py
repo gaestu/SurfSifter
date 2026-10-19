@@ -13,9 +13,40 @@ from __future__ import annotations
 import logging
 import sqlite3
 import time
-from typing import Any, Dict, Iterable, List, Optional
+from dataclasses import dataclass, field
+from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 from ._base import BaseDataAccess
+
+
+@dataclass(frozen=True)
+class UrlPageQuery:
+    """Filters and page state for one flat URL page (background-load request)."""
+
+    evidence_id: int
+    page: int = 0
+    page_size: int = 10000
+    domain_like: str = "%"
+    url_like: str = "%"
+    tag_like: str = "%"
+    discovered_by: Optional[Tuple[str, ...]] = None
+    match_filter: Optional[str] = None
+
+
+@dataclass
+class UrlPage:
+    """Prepared flat URL page: rows plus tag/match strings for every row id.
+
+    ``tags`` and ``matches`` contain an entry for every returned row id
+    (empty string when the URL has no tags / matches), so consumers never
+    need per-row lookups.
+    """
+
+    query: UrlPageQuery
+    rows: List[Dict[str, Any]] = field(default_factory=list)
+    total_count: int = 0
+    tags: Dict[int, str] = field(default_factory=dict)
+    matches: Dict[int, str] = field(default_factory=dict)
 
 
 class UrlQueryMixin(BaseDataAccess):
@@ -221,6 +252,41 @@ class UrlQueryMixin(BaseDataAccess):
                     elapsed,
                 )
                 return results
+
+    def load_url_page(self, query: UrlPageQuery) -> UrlPage:
+        """
+        Load one flat URL page with its total count and batch tag/match maps.
+
+        Issue #60: single entry point for background URL loading. The tag and
+        match maps are complete for the returned rows (empty values included).
+
+        Args:
+            query: Filters and page state
+
+        Returns:
+            UrlPage with rows, total count, and per-row tag/match strings
+        """
+        filters = dict(
+            domain_like=query.domain_like,
+            url_like=query.url_like,
+            tag_like=query.tag_like,
+            discovered_by=query.discovered_by,
+            match_filter=query.match_filter,
+        )
+        total_count = self.count_urls(query.evidence_id, **filters)
+        rows = self.iter_urls(
+            query.evidence_id,
+            **filters,
+            limit=query.page_size,
+            offset=query.page * query.page_size,
+        )
+        url_ids = [row["id"] for row in rows if row.get("id")]
+        tags: Dict[int, str] = {url_id: "" for url_id in url_ids}
+        matches: Dict[int, str] = {url_id: "" for url_id in url_ids}
+        if url_ids:
+            tags.update(self.get_tag_strings_for_artifacts(query.evidence_id, "url", url_ids))
+            matches.update(self.get_url_matches_batch(query.evidence_id, url_ids))
+        return UrlPage(query=query, rows=rows, total_count=total_count, tags=tags, matches=matches)
 
     def update_url_tags(self, evidence_id: int, url_id: int, tags_str: str) -> None:
         """
