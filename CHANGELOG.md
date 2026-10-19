@@ -4,6 +4,7 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased
 
+- Add a first-class Firefox Browser Config extractor for curated `prefs.js` and `user.js` settings with source-distinct ingestion into `browser_config` (#58).
 - Add a first-class Chromium Browser Config extractor for curated `Preferences` and `Local State` settings (#57).
 	- Note: older case workspaces ingested with the previous Chromium Extensions side-effect may still contain those historical `browser_config` rows until the case is intentionally cleaned or reprocessed.
 - Add a read-only Browser Config subtab to Browser Inventory for filtering and inspecting stored `browser_config` evidence rows (#56).

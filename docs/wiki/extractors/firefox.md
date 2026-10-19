@@ -88,6 +88,14 @@ Source: `src/extractors/browser/firefox/`
 - Special behavior: include_raw config controls raw_data JSON storage; handles missing accountData (logged out) gracefully.
 - Notes: last_sync_time not available in signedInUser.json.
 
+### FirefoxConfigExtractor
+- Purpose: Extract investigator-useful Firefox preference settings from profile preference files.
+- Extraction (source): `prefs.js` and `user.js` via firefox/_patterns ("config") for Firefox, Firefox ESR, and Tor Browser paths; copied with collision-safe naming and provenance.
+- Ingestion (transform + store): Parses restricted `user_pref(...)` syntax (no JS execution), applies a curated allowlist, inserts records into `browser_config` via helper APIs, and registers browser_inventory rows (clears current run only).
+- Outputs: Copied config files + manifest.json + extracted_files audit records; browser_inventory entries; `browser_config` rows.
+- Special behavior: Stores `config_type=prefs_js` and `config_type=user_js`; preserves duplicate keys using `value_count`; preserves both sources when keys overlap and annotates startup override behavior; records extraction warnings for malformed/unsupported statements.
+- Notes: Designed for deterministic, source-distinct ingestion rather than full raw preference dumping.
+
 ### FirefoxTransportSecurityExtractor
 - Purpose: Extract HSTS entries with cleartext domains.
 - Extraction (source): SiteSecurityServiceState.txt via firefox/_patterns ("transport_security"); copied to output_dir.
@@ -121,4 +129,4 @@ Source: `src/extractors/browser/firefox/`
 - Notes: Tor-only (SUPPORTED_BROWSERS = ["tor"]).
 
 ## Patterns
-- File/path patterns: FIREFOX_BROWSERS defines profile_roots/cache_roots for firefox/firefox_esr/tor, and FIREFOX_ARTIFACTS lists relative paths for places.sqlite, cookies.sqlite, formhistory.sqlite/logins.json/key*.db, sessionstore*.jsonlz4, permissions.sqlite/content-prefs.sqlite, favicons.sqlite, extensions.json/addons.json, signedInUser.json, SiteSecurityServiceState.txt, cache2/entries/*, and storage/default paths.
+- File/path patterns: FIREFOX_BROWSERS defines profile_roots/cache_roots for firefox/firefox_esr/tor, and FIREFOX_ARTIFACTS lists relative paths for places.sqlite, cookies.sqlite, formhistory.sqlite/logins.json/key*.db, sessionstore*.jsonlz4, permissions.sqlite/content-prefs.sqlite, favicons.sqlite, extensions.json/addons.json, signedInUser.json, SiteSecurityServiceState.txt, prefs.js/user.js, cache2/entries/*, and storage/default paths.

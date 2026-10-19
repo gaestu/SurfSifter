@@ -44,6 +44,7 @@ from .transport_security import FirefoxTransportSecurityExtractor
 from .sessions import FirefoxSessionsExtractor
 from .storage import FirefoxBrowserStorageExtractor
 from .tor_state import FirefoxTorStateExtractor
+from .config import FirefoxConfigExtractor
 
 __all__ = [
     "FirefoxHistoryExtractor",
@@ -61,4 +62,5 @@ __all__ = [
     "FirefoxSessionsExtractor",
     "FirefoxBrowserStorageExtractor",
     "FirefoxTorStateExtractor",
+    "FirefoxConfigExtractor",
 ]

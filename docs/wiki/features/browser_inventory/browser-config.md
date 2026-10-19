@@ -8,7 +8,9 @@ Browser Config subtab - parsed browser configuration key/value records.
 
 ## Inputs
 - Existing `browser_config` rows written by browser configuration extractors.
-- Current sources include Tor Browser configuration/state ingestion, Chromium profile `Preferences`, and Chromium user-data-root `Local State` rows stored with `config_type=local_state` and no profile.
+- Current sources include Tor Browser configuration/state ingestion, Chromium profile `Preferences`, Chromium user-data-root `Local State`, and Firefox-family `prefs.js` / `user.js` rows.
+- Firefox config rows use `config_type=prefs_js` and `config_type=user_js`.
+- If the same Firefox preference key appears in both files for the same browser/profile, both records are preserved and notes indicate that `user.js` may override `prefs.js` on startup.
 
 ## Filters and controls
 - Filters: browser and config type.
