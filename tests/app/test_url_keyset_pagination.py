@@ -159,6 +159,8 @@ FILTERS = {
     "unmatched": UrlFilterSpec(match_filter="unmatched"),
     "list": UrlFilterSpec(match_filter="list1"),
     "url_text": UrlFilterSpec(url_like="%q=1%"),
+    "tag_name": UrlFilterSpec(tag_name="relevant"),
+    "url_contains": UrlFilterSpec(url_contains="Q=1"),
     "combined": UrlFilterSpec(domain_exact="d2.example.com", match_filter="unmatched", discovered_by=("chromium_cache", "bulk_extractor")),
 }
 
@@ -368,3 +370,187 @@ def test_page_data_version_reveals_writes_from_other_connections(fixture_case):
     finally:
         other.close()
     assert data.load_url_page(query).data_version != first.data_version
+
+
+# ---------------------------------------------------------------------------
+# Exact tag filter and literal URL search (issue #66)
+# ---------------------------------------------------------------------------
+
+
+def _ids(data: CaseDataAccess, evidence_id: int, spec: UrlFilterSpec) -> List[int]:
+    rows = data.iter_urls(evidence_id, filters=spec, limit=100)
+    assert len(rows) == data.count_urls(evidence_id, filters=spec)
+    return sorted(r["id"] for r in rows)
+
+
+TAG_NAMES = ["a_b", "axb", "50%", "50x5", "a\\b", "Mixed Case"]
+
+
+@pytest.fixture
+def tag_case(empty_case):
+    """One URL per tag name (plus one untagged URL) in each evidence."""
+    case, data = empty_case
+    by_evidence = {}
+    for evidence_id in case.evidence_ids:
+        ids = _insert(data, evidence_id, [("t.com", None)] * (len(TAG_NAMES) + 1))
+        for url_id, name in zip(ids, TAG_NAMES):
+            data.tag_artifact(evidence_id, name, "url", url_id)
+        by_evidence[evidence_id] = dict(zip(TAG_NAMES, ids))
+    return case, data, by_evidence
+
+
+@pytest.mark.parametrize(
+    "tag, expected",
+    [
+        ("a_b", ["a_b"]),
+        ("axb", ["axb"]),
+        ("50%", ["50%"]),
+        ("a\\b", ["a\\b"]),
+        ("Mixed Case", ["Mixed Case"]),
+        ("mixed case", ["Mixed Case"]),
+        ("MIXED CASE", ["Mixed Case"]),
+        ("%", []),
+        ("_", []),
+        ("\\", []),
+        ("missing", []),
+    ],
+)
+def test_tag_filter_matches_exact_name(tag_case, tag, expected):
+    case, data, by_evidence = tag_case
+    for evidence_id in case.evidence_ids:
+        names = by_evidence[evidence_id]
+        assert _ids(data, evidence_id, UrlFilterSpec(tag_name=tag)) == sorted(names[n] for n in expected)
+
+
+def test_tag_filter_is_isolated_per_evidence(tag_case):
+    case, data, by_evidence = tag_case
+    ev1, ev2 = case.evidence_ids
+    only_ev2 = _insert(data, ev2, [("t.com", None)])[0]
+    data.tag_artifact(ev2, "Only Ev2", "url", only_ev2)
+    assert _ids(data, ev1, UrlFilterSpec(tag_name="only ev2")) == []
+    assert _ids(data, ev2, UrlFilterSpec(tag_name="only ev2")) == [only_ev2]
+    assert _ids(data, ev1, UrlFilterSpec(tag_name="a_b")) == [by_evidence[ev1]["a_b"]]
+
+
+def test_legacy_tag_like_keeps_wildcards(tag_case):
+    case, data, by_evidence = tag_case
+    evidence_id = case.evidence_ids[0]
+    names = by_evidence[evidence_id]
+    expected = sorted([names["a_b"], names["axb"], names["a\\b"]])
+    assert _ids(data, evidence_id, UrlFilterSpec(tag_like="a_b")) == expected
+    legacy = data.iter_urls(evidence_id, tag_like="a_b", limit=100)
+    assert sorted(r["id"] for r in legacy) == expected
+    assert data.count_urls(evidence_id, tag_like="a_b") == 3
+
+
+SEARCH_URLS = {
+    "utm": ("x.com", "https://x.com/?utm_source=a"),
+    "utmx": ("x.com", "https://x.com/?utmXsource=a"),
+    "pct": ("x.com", "https://x.com/50%off"),
+    "pctx": ("x.com", "https://x.com/50xoff"),
+    "backslash": ("x.com", "https://x.com/a\\b"),
+    "upper": ("X.COM", "https://X.COM/UPPER"),
+    "plain": ("y.org", "https://y.org/plain"),
+}
+
+
+@pytest.fixture
+def search_case(empty_case):
+    case, data = empty_case
+    evidence_id = case.evidence_ids[0]
+    ids = {}
+    with data._use_evidence_conn(evidence_id):
+        with data._connect() as conn:
+            for key, (domain, url) in SEARCH_URLS.items():
+                source = "other" if key == "upper" else "src"
+                ids[key] = conn.execute(
+                    "INSERT INTO urls(evidence_id, url, domain, discovered_by) VALUES (?, ?, ?, ?)",
+                    (evidence_id, url, domain, source),
+                ).lastrowid
+    return data, evidence_id, ids
+
+
+@pytest.mark.parametrize(
+    "spec, expected",
+    [
+        (UrlFilterSpec(url_contains="utm_source"), ["utm"]),
+        (UrlFilterSpec(url_contains="_"), ["utm"]),
+        (UrlFilterSpec(url_contains="50%off"), ["pct"]),
+        (UrlFilterSpec(url_contains="%"), ["pct"]),
+        (UrlFilterSpec(url_contains="a\\b"), ["backslash"]),
+        (UrlFilterSpec(url_contains="\\"), ["backslash"]),
+        # ASCII case-insensitive.
+        (UrlFilterSpec(url_contains="upper"), ["upper"]),
+        (UrlFilterSpec(url_contains="Y.ORG/PLAIN"), ["plain"]),
+        (UrlFilterSpec(url_contains="x.com"), ["backslash", "pct", "pctx", "upper", "utm", "utmx"]),
+        # Combined with the other filters (all must match).
+        (UrlFilterSpec(url_contains="x.com", discovered_by=("src",)), ["backslash", "pct", "pctx", "utm", "utmx"]),
+        (UrlFilterSpec(url_contains="x.com", domain_exact="x.com"), ["backslash", "pct", "pctx", "upper", "utm", "utmx"]),
+        (UrlFilterSpec(url_contains="50", domain_contains="X.C", match_filter="unmatched"), ["pct", "pctx"]),
+        (UrlFilterSpec(url_contains="x.com", domain_exact="y.org"), []),
+        (UrlFilterSpec(url_contains="missing"), []),
+    ],
+)
+def test_url_search_is_literal_substring(search_case, spec, expected):
+    data, evidence_id, ids = search_case
+    assert _ids(data, evidence_id, spec) == sorted(ids[k] for k in expected)
+
+
+def test_url_search_combines_with_tag_filter(search_case):
+    data, evidence_id, ids = search_case
+    data.tag_artifact(evidence_id, "Hit", "url", ids["utm"])
+    data.tag_artifact(evidence_id, "Hit", "url", ids["plain"])
+    spec = UrlFilterSpec(url_contains="_", tag_name="HIT")
+    assert _ids(data, evidence_id, spec) == [ids["utm"]]
+
+
+def test_legacy_url_like_keeps_wildcards(search_case):
+    data, evidence_id, ids = search_case
+    expected = sorted([ids["utm"], ids["utmx"]])
+    assert _ids(data, evidence_id, UrlFilterSpec(url_like="%utm_source%")) == expected
+    legacy = data.iter_urls(evidence_id, url_like="%utm_source%", limit=100)
+    assert sorted(r["id"] for r in legacy) == expected
+    assert data.count_urls(evidence_id, url_like="%utm_source%") == 2
+
+
+def test_ui_filters_use_literal_url_search_and_exact_tag():
+    spec = UrlFilterSpec().with_ui_filters(text="a_b%", tag="Some_Tag")
+    assert spec.url_contains == "a_b%" and spec.tag_name == "Some_Tag"
+    assert spec.url_like == "%" and spec.tag_like == "%"
+    assert spec.with_ui_filters(text="", tag="*") == UrlFilterSpec()
+    assert UrlFilterSpec(url_contains="", tag_name="") == UrlFilterSpec()
+
+
+# ---------------------------------------------------------------------------
+# Inline tag editing: update_url_tags (issue #66)
+# ---------------------------------------------------------------------------
+
+
+def _url_tag_names(data: CaseDataAccess, evidence_id: int, url_id: int) -> List[str]:
+    return sorted(t["name"] for t in data.get_artifact_tags(evidence_id, "url", url_id))
+
+
+@pytest.mark.parametrize(
+    "initial, edited, expected",
+    [
+        # Changing only the letter case keeps the tag (no silent removal).
+        (["Suspicious"], "suspicious", ["Suspicious"]),
+        (["Suspicious", "Other"], "SUSPICIOUS, other, New", ["New", "Other", "Suspicious"]),
+        # Removing a name untags it; the rest is unchanged.
+        (["A", "B"], "a", ["A"]),
+        (["A"], "", []),
+        # A tag name containing a comma survives an edit of the cell text.
+        (["Case 12, Suspect A"], "Case 12, Suspect A, reviewed", ["Case 12, Suspect A", "reviewed"]),
+        (["Case 12, Suspect A", "B"], "b, case 12,suspect a", ["B", "Case 12, Suspect A"]),
+        # ... and is removed (not split into new tags) when deleted.
+        (["Case 12, Suspect A", "B"], "B", ["B"]),
+    ],
+)
+def test_update_url_tags_preserves_tags(empty_case, initial, edited, expected):
+    case, data = empty_case
+    evidence_id = case.evidence_ids[0]
+    url_id = _insert(data, evidence_id, [("t.com", None)])[0]
+    for name in initial:
+        data.tag_artifact(evidence_id, name, "url", url_id)
+    data.update_url_tags(evidence_id, url_id, edited)
+    assert _url_tag_names(data, evidence_id, url_id) == expected

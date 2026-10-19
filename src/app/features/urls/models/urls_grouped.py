@@ -111,6 +111,12 @@ class UrlsGroupedModel(QStandardItemModel):
             limit=10_000,
             offset=0,
         )
+        # Tags are not part of the URL rows; without them the editable Tags
+        # cell would start blank and an edit would drop existing tags (#66).
+        url_ids = [row["id"] for row in rows if row.get("id")]
+        tags = self.case_data.get_tag_strings_for_artifacts(
+            int(self.evidence_id), "url", url_ids
+        ) if url_ids else {}
         grouped: Dict[str, List[Dict[str, Any]]] = {}
         for row in rows:
             domain = row.get("domain") or "<none>"
@@ -120,6 +126,9 @@ class UrlsGroupedModel(QStandardItemModel):
             parent_row = [parent_item]
             for _ in range(7):
                 parent_row.append(QStandardItem(""))
+            # Domain rows are not URLs; an edit there would be discarded.
+            for item in parent_row:
+                item.setEditable(False)
             self.appendRow(parent_row)
             for child in children:
                 child_items = [
@@ -130,7 +139,7 @@ class UrlsGroupedModel(QStandardItemModel):
                     QStandardItem(str(child.get("first_seen_utc", ""))),
                     QStandardItem(str(child.get("last_seen_utc", ""))),
                     QStandardItem(str(child.get("source_path", ""))),
-                    QStandardItem(str(child.get("tags", ""))),
+                    QStandardItem(tags.get(child.get("id"), "")),
                 ]
                 for idx, item in enumerate(child_items):
                     editable = idx == 7

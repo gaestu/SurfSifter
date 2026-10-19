@@ -7,6 +7,7 @@ from typing import Any, Dict, Iterable, Optional, List
 
 from PySide6.QtCore import Qt, Signal, QThread, QTimer
 from PySide6.QtWidgets import (
+    QAbstractItemView,
     QFileDialog,
     QGridLayout,
     QHBoxLayout,
@@ -188,6 +189,9 @@ class UrlsTab(QWidget):
         self._count_generation = 0
         self._count_in_flight_key: Optional[tuple] = None
         self._count_failed_key: Optional[tuple] = None
+        # A page that arrived while a table cell editor was open; applied
+        # when the editor closes (a model reset would discard the edit).
+        self._pending_page_result: Optional[QueryResult] = None
 
         # Only the visible view is refreshed; the other one is marked stale.
         self._flat_stale = False
@@ -273,6 +277,8 @@ class UrlsTab(QWidget):
         layout.addLayout(filter_layout)
 
         self.model = UrlsTableModel(case_data)
+        # Queued: reload only after the editor has finished committing.
+        self.model.tags_edited.connect(self._on_tags_changed, Qt.QueuedConnection)
         self.group_model = UrlsGroupedModel(case_data)
         self.group_model.itemChanged.connect(self._on_group_item_changed)
 
@@ -282,6 +288,9 @@ class UrlsTab(QWidget):
         self.table_view.setAlternatingRowColors(True)
         self.table_view.setModel(self.model)
         self.table_view.horizontalHeader().setStretchLastSection(True)
+        self.table_view.itemDelegate().closeEditor.connect(
+            lambda *_: QTimer.singleShot(0, self._apply_pending_page)
+        )
         # Context menu for tagging
         self.table_view.setContextMenuPolicy(Qt.CustomContextMenu)
         self.table_view.customContextMenuRequested.connect(self._show_context_menu)
@@ -415,7 +424,7 @@ class UrlsTab(QWidget):
         self._reload_visible_view(0)
 
     def _on_tags_changed(self) -> None:
-        """Reload after tagging: totals are recounted.
+        """Reload after tagging (dialog or inline Tags edit): totals are recounted.
 
         Tagged from the flat view, all changed rows are on the current page,
         so earlier pages and the displayed row range stay valid and the page
@@ -927,6 +936,12 @@ class UrlsTab(QWidget):
         if self.model.has_data_baseline():
             self._request_count()
 
+    def _apply_pending_page(self) -> None:
+        """Apply a page held back while a table cell editor was open."""
+        result, self._pending_page_result = self._pending_page_result, None
+        if result is not None:
+            self._on_page_loaded(result)
+
     def _request_count(self) -> None:
         """Start an exact count unless it is cached, already running, or failed."""
         if not self.case_data or self.evidence_id is None:
@@ -968,6 +983,12 @@ class UrlsTab(QWidget):
             )
             return
 
+        if self.table_view.state() == QAbstractItemView.EditingState:
+            # Resetting the model now would close the open Tags editor
+            # without committing it; apply the page once it is closed.
+            self._pending_page_result = result
+            return
+        self._pending_page_result = None
         self._data_loading = False
         page: UrlPage = result.payload
         if not self.model.is_current_query(page.query):

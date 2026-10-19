@@ -631,7 +631,140 @@ def test_unnotified_tag_change_invalidates_cached_total(qtbot, make_tab, url_cas
     qtbot.waitUntil(lambda: _total_shown(tab, 250), timeout=10000)
     tab.tag_combo.setCurrentIndex(tab.tag_combo.findData("Relevant"))
     qtbot.waitUntil(lambda: _total_shown(tab, before + 10), timeout=10000)
-    assert sum(1 for spec in calls if spec.tag_like == "Relevant") == 2
+    assert sum(1 for spec in calls if spec.tag_name == "Relevant") == 2
+
+
+def _url_tags(data, evidence_id, url_id):
+    return sorted(t["name"] for t in data.get_artifact_tags(evidence_id, "url", url_id))
+
+
+def test_occurrences_column_is_read_only_and_tags_column_is_editable(url_case):
+    """Issue #66: editing Occurrences used to overwrite the URL's tags."""
+    from PySide6.QtCore import Qt
+
+    from app.features.urls.models import UrlsTableModel
+
+    case, data = url_case
+    evidence_id = case.evidence_ids[0]
+    model = UrlsTableModel(data, page_size=100)
+    model.set_evidence(evidence_id)
+    edited = []
+    model.tags_edited.connect(lambda: edited.append(True))
+    row = next(r for r in range(model.rowCount()) if model.data(model.index(r, 8)))
+    url_id = model.get_row(row)["id"]
+    before = _url_tags(data, evidence_id, url_id)
+    assert before
+
+    occurrences = model.index(row, 7)
+    assert model.headers[7] == "Occurrences"
+    assert not model.flags(occurrences) & Qt.ItemIsEditable
+    assert not model.setData(occurrences, "3")
+    assert _url_tags(data, evidence_id, url_id) == before
+    assert not edited
+
+    tags = model.index(row, 8)
+    assert model.headers[8] == "Tags"
+    assert model.flags(tags) & Qt.ItemIsEditable
+    assert not model.setData(tags, model.data(tags, Qt.EditRole))  # unchanged
+    assert not edited
+    assert model.setData(tags, f"{before[0]}, Inline")
+    assert _url_tags(data, evidence_id, url_id) == sorted([before[0], "Inline"])
+    assert model.data(tags) == f"{before[0]}, Inline"
+    assert edited == [True]
+
+
+def test_inline_tag_edit_recounts_tag_filtered_total(qtbot, make_tab, url_case, monkeypatch):
+    case, data = url_case
+    evidence_id = case.evidence_ids[0]
+    calls = _counting_count_handler(monkeypatch)
+    tab = make_tab(case, data, evidence_id)
+    tab.show()
+    qtbot.waitUntil(lambda: _total_shown(tab, 250), timeout=10000)
+
+    # Cache the tag-filtered total, then return to the unfiltered list.
+    tab.tag_combo.setCurrentIndex(tab.tag_combo.findData("Relevant"))
+    qtbot.waitUntil(lambda: _loaded(tab) and tab.model.total_count() is not None, timeout=10000)
+    before = tab.model.total_count()
+    tab.tag_combo.setCurrentIndex(tab.tag_combo.findData("*"))
+    qtbot.waitUntil(lambda: _total_shown(tab, 250), timeout=10000)
+    tab.next_button.click()
+    qtbot.waitUntil(lambda: _loaded(tab) and tab.model.current_page() == 1, timeout=10000)
+    counted = len(calls)
+
+    row = next(r for r in range(tab.model.rowCount()) if "Relevant" not in tab.model.data(tab.model.index(r, 8)))
+    url_id = tab.model.get_row(row)["id"]
+    current = tab.model.data(tab.model.index(row, 8))
+    assert tab.model.setData(tab.model.index(row, 8), f"{current}, Relevant" if current else "Relevant")
+    assert "Relevant" in _url_tags(data, evidence_id, url_id)
+    qtbot.waitUntil(lambda: _total_shown(tab, 250) and len(calls) == counted + 1, timeout=10000)
+    assert tab.model.current_page() == 1  # edited on the visible page: position kept
+    assert tab.model.get_row(row)["id"] == url_id
+
+    # The cached tag-filtered total was invalidated by the inline edit.
+    tab.tag_combo.setCurrentIndex(tab.tag_combo.findData("Relevant"))
+    qtbot.waitUntil(lambda: _total_shown(tab, before + 1), timeout=10000)
+
+
+def test_page_arriving_during_inline_edit_waits_for_editor(qtbot, make_tab, url_case):
+    """A reload (e.g. after a previous inline edit) must not discard an open editor."""
+    from PySide6.QtCore import Qt
+    from PySide6.QtWidgets import QAbstractItemView, QLineEdit
+
+    case, data = url_case
+    evidence_id = case.evidence_ids[0]
+    tab = make_tab(case, data, evidence_id)
+    tab.show()
+    qtbot.waitUntil(lambda: _total_shown(tab, 250), timeout=10000)
+
+    row = next(r for r in range(tab.model.rowCount()) if not tab.model.data(tab.model.index(r, 8)))
+    url_id = tab.model.get_row(row)["id"]
+    index = tab.model.index(row, 8)
+    tab.table_view.edit(index)
+    assert tab.table_view.state() == QAbstractItemView.EditingState
+    editor = tab.table_view.findChild(QLineEdit)
+
+    tab._on_tags_changed()  # reload triggered while the editor is open
+    qtbot.waitUntil(lambda: tab._pending_page_result is not None, timeout=10000)
+    assert tab.table_view.state() == QAbstractItemView.EditingState
+
+    editor.setText("Typed")
+    qtbot.keyClick(editor, Qt.Key_Return)  # the delegate commits via a queued call
+    qtbot.waitUntil(lambda: _url_tags(data, evidence_id, url_id) == ["Typed"], timeout=5000)
+    qtbot.waitUntil(lambda: _total_shown(tab, 250) and tab._pending_page_result is None, timeout=10000)
+    assert tab.model.get_row(row)["id"] == url_id
+    assert tab.model.data(tab.model.index(row, 8)) == "Typed"
+
+
+def test_grouped_view_shows_and_edits_existing_tags(qtbot, make_tab, url_case):
+    from PySide6.QtCore import Qt
+
+    case, data = url_case
+    evidence_id = case.evidence_ids[0]
+    tab = make_tab(case, data, evidence_id)
+    tab.show()
+    qtbot.waitUntil(lambda: _total_shown(tab, 250), timeout=10000)
+    tab.group_checkbox.setChecked(True)
+
+    model = tab.group_model
+    parents = [model.item(parent, column) for parent in range(model.rowCount()) for column in range(8)]
+    assert parents and not any(item.isEditable() for item in parents)
+    children = [
+        model.item(parent).child(row, 7)
+        for parent in range(model.rowCount())
+        for row in range(model.item(parent).rowCount())
+    ]
+    assert len(children) == 250
+    tagged = [item for item in children if item.text()]
+    assert tagged and all(item.isEditable() for item in tagged)
+    item = tagged[0]
+    url_id = item.data(Qt.UserRole)
+    before = _url_tags(data, evidence_id, url_id)
+    assert item.text() == ", ".join(before)
+
+    revision = tab.model._data_revision
+    item.setText(f"{item.text()}, Grouped")
+    assert _url_tags(data, evidence_id, url_id) == sorted(before + ["Grouped"])
+    assert tab.model._data_revision == revision + 1  # flat totals invalidated
 
 
 def test_grouped_view_tagging_returns_flat_view_to_first_page(qtbot, make_tab, url_case):

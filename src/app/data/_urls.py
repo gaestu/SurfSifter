@@ -55,8 +55,12 @@ class UrlFilterSpec:
         domain_contains: Literal substring of the domain, ASCII
             case-insensitive; ``%``, ``_`` and ``\\`` are not wildcards.
         domain_like: Legacy raw SQL LIKE pattern on the domain (``None`` = off).
-        url_like: SQL LIKE pattern on the URL (``"%"`` = off).
-        tag_like: SQL LIKE pattern on tag names (``"%"`` = off).
+        url_contains: Literal substring of the URL, ASCII case-insensitive;
+            ``%``, ``_`` and ``\\`` are not wildcards (issue #66).
+        url_like: Legacy raw SQL LIKE pattern on the URL (``"%"`` = off).
+        tag_name: Exact tag name, case-insensitive like tag creation
+            (compared with ``tags.name_normalized``; issue #66).
+        tag_like: Legacy raw SQL LIKE pattern on tag names (``"%"`` = off).
         discovered_by: Allowed sources (``None`` = all).
         match_filter: ``"matched"``, ``"unmatched"``, a list name, or ``None``.
     """
@@ -64,7 +68,9 @@ class UrlFilterSpec:
     domain_exact: Optional[str] = None
     domain_contains: Optional[str] = None
     domain_like: Optional[str] = None
+    url_contains: Optional[str] = None
     url_like: str = "%"
+    tag_name: Optional[str] = None
     tag_like: str = "%"
     discovered_by: Optional[Tuple[str, ...]] = None
     match_filter: Optional[str] = None
@@ -73,7 +79,7 @@ class UrlFilterSpec:
         # Normalize so equal filters hash equally (used as count-cache key).
         if self.discovered_by is not None:
             object.__setattr__(self, "discovered_by", tuple(self.discovered_by) or None)
-        for name in ("domain_exact", "domain_contains", "domain_like"):
+        for name in ("domain_exact", "domain_contains", "domain_like", "url_contains", "tag_name"):
             if getattr(self, name) == "":
                 object.__setattr__(self, name, None)
         if self.domain_like == "%":
@@ -100,10 +106,10 @@ class UrlFilterSpec:
         Args:
             domain: Exact domain from the dropdown
             domain_contains: Literal domain substring
-            text: URL substring (applied as ``%text%`` LIKE pattern)
+            text: Literal URL substring
             sources: Allowed sources
             match_filter: "all", "matched", "unmatched", or list name
-            tag: Tag name pattern
+            tag: Exact tag name
         """
         changes: Dict[str, Any] = {}
         if domain is not None:
@@ -111,13 +117,13 @@ class UrlFilterSpec:
         if domain_contains is not None:
             changes["domain_contains"] = domain_contains or None
         if text is not None:
-            changes["url_like"] = f"%{text}%" if text else "%"
+            changes["url_contains"] = text or None
         if sources is not None:
             changes["discovered_by"] = tuple(sources) if sources else None
         if match_filter is not None:
             changes["match_filter"] = match_filter or None
         if tag is not None:
-            changes["tag_like"] = tag if tag and tag != "*" else "%"
+            changes["tag_name"] = tag if tag and tag != "*" else None
         return replace(self, **changes)
 
 
@@ -141,10 +147,27 @@ def build_url_filter_predicates(evidence_id: int, spec: UrlFilterSpec) -> Tuple[
     if spec.domain_like is not None:
         where.append("COALESCE(u.domain, '') LIKE ?")
         params.append(spec.domain_like)
+    if spec.url_contains is not None:
+        where.append(f"u.url LIKE ? ESCAPE '{LIKE_ESCAPE_CHAR}'")
+        params.append(f"%{escape_like(spec.url_contains)}%")
     if spec.url_like and spec.url_like != "%":
         where.append("u.url LIKE ?")
         params.append(spec.url_like)
 
+    if spec.tag_name is not None:
+        # Same normalization as tag creation (core.database.helpers.tags).
+        where.append("""
+            EXISTS (
+                SELECT 1 FROM tag_associations ta
+                JOIN tags t ON ta.tag_id = t.id
+                WHERE ta.artifact_type = 'url'
+                AND ta.artifact_id = u.id
+                AND ta.evidence_id = u.evidence_id
+                AND t.evidence_id = u.evidence_id
+                AND t.name_normalized = ?
+            )
+        """)
+        params.append(spec.tag_name.lower())
     if spec.tag_like and spec.tag_like != "%":
         where.append("""
             EXISTS (
@@ -241,7 +264,7 @@ class UrlQueryMixin(BaseDataAccess):
 
     Features:
     - Keyset-paginated URL listing with shared filter predicates
-      (exact/contains domain, LIKE on URL and tag)
+      (exact/contains domain, literal URL substring, exact tag)
     - Tag-aware queries via tag_associations
     - Match filtering (matched/unmatched/specific list)
     - In-memory caching for filter dropdowns
@@ -531,6 +554,11 @@ class UrlQueryMixin(BaseDataAccess):
         Update tags for a URL (Legacy compatibility wrapper).
         Parses comma-separated string and updates tag associations.
 
+        Tags are compared by normalized (lowercased) name, like tag lookup
+        and creation, so changing only the letter case keeps the tag. A
+        current tag whose name contains a comma is kept while its full name
+        still appears as consecutive entries (issue #66).
+
         Args:
             evidence_id: Evidence ID
             url_id: URL ID
@@ -539,12 +567,23 @@ class UrlQueryMixin(BaseDataAccess):
         # 1. Get current tags
         current_tags = {t['name'] for t in self.get_artifact_tags(evidence_id, 'url', url_id)}
 
-        # 2. Parse new tags
-        new_tags = {t.strip() for t in tags_str.split(',') if t.strip()}
+        # 2. Parse new tags; keep current comma-containing names intact
+        entries = [t.strip() for t in tags_str.split(',')]
+        new_tags = set()
+        for name in sorted((n for n in current_tags if ',' in n), key=len, reverse=True):
+            parts = [p.strip().lower() for p in name.split(',')]
+            for start in range(len(entries) - len(parts) + 1):
+                if [e.lower() for e in entries[start:start + len(parts)]] == parts:
+                    new_tags.add(name)
+                    entries[start:start + len(parts)] = [""] * len(parts)
+                    break
+        new_tags.update(e for e in entries if e)
 
-        # 3. Determine changes
-        to_add = new_tags - current_tags
-        to_remove = current_tags - new_tags
+        # 3. Determine changes by normalized name
+        current_by_key = {t.lower(): t for t in current_tags}
+        new_by_key = {t.lower(): t for t in new_tags}
+        to_add = [new_by_key[k] for k in sorted(new_by_key.keys() - current_by_key.keys())]
+        to_remove = [current_by_key[k] for k in sorted(current_by_key.keys() - new_by_key.keys())]
 
         # 4. Apply changes
         for tag in to_add:

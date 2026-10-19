@@ -14,7 +14,7 @@ from pathlib import Path
 from dataclasses import asdict
 from typing import Any, Dict, Iterable, List, Optional, Tuple, TYPE_CHECKING
 
-from PySide6.QtCore import QAbstractTableModel, QModelIndex, Qt
+from PySide6.QtCore import QAbstractTableModel, QModelIndex, Qt, Signal
 
 from app.data import UrlCursor, UrlFilterSpec, UrlPage, UrlPageQuery
 
@@ -35,6 +35,13 @@ class UrlsTableModel(QAbstractTableModel):
         "Tags",
         "Match",  #
     ]
+
+    # Only the Tags column is editable inline (issue #66).
+    TAGS_COLUMN = 8
+
+    # Emitted after tags were changed by an inline edit; tag-filtered totals
+    # are then outdated (issue #66).
+    tags_edited = Signal()
 
     # Issue #61: keyset pages; small default page, user-selectable sizes.
     PAGE_SIZE_CHOICES = (100, 500, 1000, 5000, 10000)
@@ -133,22 +140,32 @@ class UrlsTableModel(QAbstractTableModel):
 
     def flags(self, index: QModelIndex) -> Qt.ItemFlag:  # noqa: N802
         base = super().flags(index)
-        if index.column() == 7:
+        if index.isValid() and index.column() == self.TAGS_COLUMN:
             return base | Qt.ItemIsEditable
         return base
 
     def setData(self, index: QModelIndex, value: Any, role: int = Qt.EditRole) -> bool:  # noqa: N802
-        if role != Qt.EditRole or index.column() != 7 or not self.case_data or self.evidence_id is None:
+        if (
+            role != Qt.EditRole
+            or not index.isValid()
+            or index.column() != self.TAGS_COLUMN
+            or not (0 <= index.row() < len(self._rows))
+            or not self.case_data
+            or self.evidence_id is None
+        ):
             return False
         row = self._rows[index.row()]
         url_id = row.get("id")
         if not url_id:
             return False
         tags = str(value).strip()
+        if tags == self._get_tags(url_id):
+            return False  # Editor closed without a change
         self.case_data.update_url_tags(int(self.evidence_id), int(url_id), tags)
         # Update tags cache instead of row dict (tags no longer in iter_urls result)
         self._tags_cache[url_id] = tags
         self.dataChanged.emit(index, index, [Qt.DisplayRole, Qt.EditRole])
+        self.tags_edited.emit()
         return True
 
     # Data loading -------------------------------------------------------
