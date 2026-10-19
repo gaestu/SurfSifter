@@ -27,11 +27,16 @@ from PySide6.QtWidgets import (
     QApplication,
 )
 
-from app.data import UrlPage, UrlPageQuery
+from app.data import UrlFilterSpec, UrlPage
 from app.data.case_data import CaseDataAccess
 from app.features.urls.models import UrlsTableModel, UrlsGroupedModel
 from app.services.matching_workers import UrlMatchWorker
-from app.services.query_loader import CancellableQueryWorker, QueryRequest, QueryResult
+from app.services.query_loader import (
+    CancellableQueryWorker,
+    QueryRequest,
+    QueryResult,
+    background_read_limiter,
+)
 from app.common import add_sandbox_url_actions
 
 logger = logging.getLogger(__name__)
@@ -118,9 +123,24 @@ def _load_url_page(case_data: CaseDataAccess, request: QueryRequest) -> UrlPage:
     return case_data.load_url_page(request.payload)
 
 
+@dataclass(frozen=True)
+class UrlCountRequest:
+    """Exact-total request; ``key`` is the model's count-cache key it fills."""
+
+    key: tuple
+    filters: UrlFilterSpec
+
+
+def _count_urls(case_data: CaseDataAccess, request: QueryRequest) -> tuple:
+    """Worker-thread handler: ``(key, exact total)`` for one filter spec (issue #61)."""
+    payload: UrlCountRequest = request.payload
+    return payload.key, case_data.count_urls(request.evidence_id, filters=payload.filters)
+
+
 @dataclass
 class UrlFilters:
-    domain: str = ""
+    domain: str = ""  # exact domain (dropdown), "" or "*" = all
+    domain_contains: str = ""  # literal domain substring
     text: str = ""
     source: str = ""
     match: str = "all"  # "all", "matched", "unmatched", or specific list name
@@ -129,6 +149,10 @@ class UrlFilters:
 
 class UrlsTab(QWidget):
     # downloadRequested signal removed - downloads now handled in Download tab
+
+    # Emitted when the user picks a different rows-per-page value (persisted
+    # by the main window).
+    page_size_changed = Signal(int)
 
     def __init__(self, case_data: Optional[CaseDataAccess] = None, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
@@ -158,6 +182,13 @@ class UrlsTab(QWidget):
         self._data_worker_generation = 0
         self._data_loading = False
 
+        # Exact totals load independently of pages (issue #61); results are
+        # cached on the model, so page navigation does not recount.
+        self._count_loader: Optional[CancellableQueryWorker] = None
+        self._count_generation = 0
+        self._count_in_flight_key: Optional[tuple] = None
+        self._count_failed_key: Optional[tuple] = None
+
         # Only the visible view is refreshed; the other one is marked stale.
         self._flat_stale = False
         self._grouped_stale = True
@@ -173,10 +204,23 @@ class UrlsTab(QWidget):
         filter_layout = QGridLayout()
         self.domain_label = QLabel("Domain")
         filter_layout.addWidget(self.domain_label, 0, 0)
+        # Issue #61: the dropdown selects one exact domain; substring search
+        # on domains is a separate field.
+        domain_layout = QHBoxLayout()
         self.domain_combo = QComboBox()
         self.domain_combo.addItem("All domains", userData="*")
+        self.domain_combo.setToolTip("Exact domain (ASCII case-insensitive)")
         self.domain_combo.currentIndexChanged.connect(self._on_filters_changed)
-        filter_layout.addWidget(self.domain_combo, 0, 1)
+        domain_layout.addWidget(self.domain_combo, 1)
+        self.domain_contains_edit = QLineEdit()
+        self.domain_contains_edit.setPlaceholderText("Domain contains...")
+        self.domain_contains_edit.setToolTip(
+            "Domain substring (ASCII case-insensitive; %, _ and \\ match literally). "
+            "Press Enter or Search to apply."
+        )
+        self.domain_contains_edit.returnPressed.connect(self._on_search_clicked)
+        domain_layout.addWidget(self.domain_contains_edit, 1)
+        filter_layout.addLayout(domain_layout, 0, 1)
 
         self.search_label = QLabel("Search")
         filter_layout.addWidget(self.search_label, 0, 2)
@@ -260,6 +304,12 @@ class UrlsTab(QWidget):
         self.next_button = QPushButton("Next")
         self.next_button.clicked.connect(self._page_down)
         self.page_label = QLabel()
+        self.page_size_label = QLabel("Rows per page")
+        self.page_size_combo = QComboBox()
+        for size in self.model.PAGE_SIZE_CHOICES:
+            self.page_size_combo.addItem(f"{size:,}", userData=size)
+        self.page_size_combo.setCurrentIndex(self.page_size_combo.findData(self.model.page_size))
+        self.page_size_combo.currentIndexChanged.connect(self._on_page_size_changed)
 
         self.export_button = QPushButton("Export CSV")
         self.export_button.clicked.connect(self._export_csv)
@@ -274,6 +324,8 @@ class UrlsTab(QWidget):
         controls_layout.addWidget(self.prev_button)
         controls_layout.addWidget(self.next_button)
         controls_layout.addWidget(self.page_label)
+        controls_layout.addWidget(self.page_size_label)
+        controls_layout.addWidget(self.page_size_combo)
         controls_layout.addStretch()
         controls_layout.addWidget(self.deduplicate_button)  #
         controls_layout.addWidget(self.tag_selected_button)  #
@@ -298,6 +350,7 @@ class UrlsTab(QWidget):
             # Loader connections belong to the previous case.
             self._data_worker_generation += 1
             self._stop_url_loader()
+            self._stop_count_loader()
         self.case_data = case_data
         self.model.set_case_data(case_data)
         self.group_model.set_case_data(case_data)
@@ -320,10 +373,8 @@ class UrlsTab(QWidget):
         """
         if evidence_id != self.evidence_id:
             # Reject in-flight results and stop work for the previous evidence.
-            self._data_worker_generation += 1
-            self._data_loading = False
-            if self._url_loader is not None:
-                self._url_loader.cancel()
+            self._cancel_flat_load()
+            self._cancel_count()
         self.evidence_id = evidence_id
         self._evidence_label_cache = evidence_label  #
         self._data_loaded = False
@@ -339,8 +390,40 @@ class UrlsTab(QWidget):
             # Deferred loading - just store the ID, load on showEvent
             self._load_pending = True
 
+    def set_page_size(self, page_size: int) -> None:
+        """Apply a rows-per-page value (e.g. from user settings) without emitting ``page_size_changed``."""
+        try:
+            index = self.page_size_combo.findData(int(page_size))
+        except (TypeError, ValueError):
+            index = -1
+        if index < 0:
+            index = self.page_size_combo.findData(UrlsTableModel.PAGE_SIZE)
+        self.page_size_combo.blockSignals(True)
+        self.page_size_combo.setCurrentIndex(index)
+        self.page_size_combo.blockSignals(False)
+        if self.model.set_page_size(self.page_size_combo.currentData()) and self._data_loaded:
+            self._reload_flat_from_start()
+
     def refresh(self) -> None:
-        """Reload the visible view (flat view in the background); mark the other stale."""
+        """Reload after a data change (ingestion, deduplication, list matching).
+
+        Cached totals are invalidated and the flat view returns to the first
+        page, because earlier pages may have changed (issue #61). Only the
+        visible view is reloaded; the other one is marked stale.
+        """
+        self.model.mark_data_changed(keep_position=False)
+        self._reload_visible_view(0)
+
+    def _on_tags_changed(self) -> None:
+        """Reload after tagging: totals are recounted.
+
+        Tagged from the flat view, all changed rows are on the current page,
+        so earlier pages and the displayed row range stay valid and the page
+        position is kept. Tagged from the grouped view, rows of any flat page
+        may have changed, so the flat view returns to its first page.
+        """
+        keep_position = self.views.currentIndex() == 0
+        self.model.mark_data_changed(keep_position=keep_position)
         self._reload_visible_view(self.model.current_page())
 
     def _get_evidence_label(self) -> Optional[str]:
@@ -573,7 +656,7 @@ class UrlsTab(QWidget):
             # Add note about more domains available
             remaining = total_domains - len(domain_items)
             self.domain_combo.addItem(
-                f"... and {remaining} more (use search)",
+                f"... and {remaining} more (use Domain contains)",
                 userData="__more__"
             )
 
@@ -652,7 +735,10 @@ class UrlsTab(QWidget):
         # Ignore if filters still loading
         if self._filters_loading:
             return
-        self.filters.domain = self.domain_combo.currentData() or ""
+        domain_data = self.domain_combo.currentData()
+        if domain_data not in ("__loading__", "__more__"):
+            self.filters.domain = domain_data or ""
+        self.filters.domain_contains = self.domain_contains_edit.text().strip()
         self.filters.text = self.search_edit.text().strip()
         self.filters.source = self.source_combo.currentData() or ""
         self.filters.match = self.match_combo.currentData() or "all"
@@ -695,6 +781,7 @@ class UrlsTab(QWidget):
         # Update filters on model WITHOUT triggering reload
         self.model.set_filters(
             domain=self.filters.domain if self.filters.domain != "*" else "",
+            domain_contains=self.filters.domain_contains,
             text=self.filters.text,
             sources=sources,
             match_filter=self.filters.match,  #
@@ -708,6 +795,7 @@ class UrlsTab(QWidget):
         self.group_model.set_evidence(self.evidence_id, reload=False)
         self.group_model.set_filters(
             domain=self.filters.domain if self.filters.domain != "*" else "",
+            domain_contains=self.filters.domain_contains,
             url=self.filters.text,
             sources=sources,
             match_filter=self.filters.match,  #
@@ -718,10 +806,23 @@ class UrlsTab(QWidget):
 
         self._reload_visible_view(0)
 
+    def _cancel_flat_load(self) -> None:
+        """Drop the running/queued flat page load; its late result is rejected."""
+        self._data_worker_generation += 1
+        self._data_loading = False
+        if self._url_loader is not None:
+            self._url_loader.cancel()
+
+    def _invalidate_flat_load(self) -> None:
+        """Mark the flat view stale and drop any in-flight flat page load."""
+        self._flat_stale = True
+        if self._data_loading:
+            self._cancel_flat_load()
+
     def _reload_visible_view(self, page: int) -> None:
         """Reload only the visible view; mark the other view stale."""
         if self.views.currentIndex() == 1:
-            self._flat_stale = True
+            self._invalidate_flat_load()
             self._reload_grouped()
         else:
             self._grouped_stale = True
@@ -748,11 +849,26 @@ class UrlsTab(QWidget):
         self._url_loader.failed.connect(self._on_page_load_error)
         return self._url_loader
 
-    def _stop_url_loader(self, timeout_ms: int = 2000) -> None:
-        loader = self._url_loader
+    def _ensure_count_loader(self) -> Optional[CancellableQueryWorker]:
+        if self._count_loader is not None:
+            return self._count_loader
+        case_folder = getattr(self.case_data, "case_folder", None)
+        case_db_path = getattr(self.case_data, "db_path", None)
+        if case_folder is None or case_db_path is None:
+            return None
+        # Own limiter: long counts must not hold the interactive read slots.
+        self._count_loader = CancellableQueryWorker(
+            Path(case_folder), Path(case_db_path), _count_urls,
+            limiter=background_read_limiter(), name="UrlCountLoader",
+        )
+        self._count_loader.result_ready.connect(self._on_count_loaded)
+        self._count_loader.failed.connect(self._on_count_error)
+        return self._count_loader
+
+    @staticmethod
+    def _stop_loader(loader: Optional[CancellableQueryWorker], timeout_ms: int) -> None:
         if loader is None:
             return
-        self._url_loader = None
         for signal in (loader.result_ready, loader.failed):
             try:
                 signal.disconnect()
@@ -760,6 +876,23 @@ class UrlsTab(QWidget):
                 pass
         if loader.stop(timeout_ms):
             loader.deleteLater()
+
+    def _stop_url_loader(self, timeout_ms: int = 2000) -> None:
+        loader, self._url_loader = self._url_loader, None
+        self._stop_loader(loader, timeout_ms)
+
+    def _stop_count_loader(self, timeout_ms: int = 2000) -> None:
+        self._count_generation += 1
+        self._count_in_flight_key = None
+        loader, self._count_loader = self._count_loader, None
+        self._stop_loader(loader, timeout_ms)
+
+    def _cancel_count(self) -> None:
+        """Drop the running/queued count; its late result is rejected."""
+        self._count_generation += 1
+        self._count_in_flight_key = None
+        if self._count_loader is not None:
+            self._count_loader.cancel()
 
     def _request_page(self, page: int) -> None:
         """Load ``page`` of the flat view in the background (no GUI-thread queries)."""
@@ -771,6 +904,7 @@ class UrlsTab(QWidget):
         if self.model.evidence_id != self.evidence_id:
             # e.g. set_case_data() reset the model's evidence.
             self.model.set_evidence(self.evidence_id, reload=False)
+            page = 0
 
         self._data_worker_generation += 1
         current_gen = self._data_worker_generation
@@ -786,6 +920,33 @@ class UrlsTab(QWidget):
             return
         loader.submit(QueryRequest(current_gen, int(self.evidence_id), self.model.build_query(page)))
         logger.debug("Requested URL page %d (gen %d) for evidence_id=%s", page, current_gen, self.evidence_id)
+        # The total loads alongside the page; first rows never wait for it.
+        # Without a data_version baseline, a count racing a write that lands
+        # before the page sets the baseline could be cached stale for good, so
+        # it starts from _on_page_loaded instead (after the baseline is set).
+        if self.model.has_data_baseline():
+            self._request_count()
+
+    def _request_count(self) -> None:
+        """Start an exact count unless it is cached, already running, or failed."""
+        if not self.case_data or self.evidence_id is None:
+            return
+        key = self.model.count_key()
+        if (
+            self.model.total_count() is not None
+            or key == self._count_in_flight_key
+            or key == self._count_failed_key
+        ):
+            return
+        loader = self._ensure_count_loader()
+        if loader is None:
+            return
+        self._count_generation += 1
+        self._count_in_flight_key = key
+        self._count_failed_key = None
+        loader.submit(
+            QueryRequest(self._count_generation, int(self.evidence_id), UrlCountRequest(key, self.model.filter_spec()))
+        )
 
     def _set_table_loading(self) -> None:
         """Show loading state in table view."""
@@ -809,10 +970,22 @@ class UrlsTab(QWidget):
 
         self._data_loading = False
         page: UrlPage = result.payload
+        if not self.model.is_current_query(page.query):
+            # Filters/page size/data changed without a new request (e.g. a
+            # refresh while filters were still loading): this page no longer fits.
+            logger.debug("Discarding outdated URL page %d; reloading current page", page.query.page)
+            self._request_page(self.model.current_page())
+            return
         self.model.set_loaded_page(page)
+        if self.model.total_count() is not None and self._count_in_flight_key == self.model.count_key():
+            # The page held the complete result; the running count is redundant.
+            self._cancel_count()
+        else:
+            # Recount if the page revealed an unnotified data change.
+            self._request_count()
         self._update_page_label()
 
-        logger.debug("Data loading complete: %d rows, %d total", len(page.rows), page.total_count)
+        logger.debug("Data loading complete: %d rows, has_more=%s", len(page.rows), page.has_more)
 
     def _on_page_load_error(self, generation: int, evidence_id: int, error: str) -> None:
         """Handle background page loading error."""
@@ -823,41 +996,90 @@ class UrlsTab(QWidget):
         logger.error("Data loading failed: %s", error)
 
         # Reset to empty state
-        self.model.set_loaded_page(
-            UrlPage(query=UrlPageQuery(evidence_id=evidence_id, page_size=self.model.page_size))
-        )
+        self.model.clear_page()
         self._update_page_label()
 
+    def _is_current_count(self, generation: int, evidence_id: int) -> bool:
+        return generation == self._count_generation and evidence_id == self.evidence_id
+
+    def _on_count_loaded(self, result: QueryResult) -> None:
+        if not self._is_current_count(result.generation, result.evidence_id):
+            return
+        key, count = result.payload
+        if key == self._count_in_flight_key:
+            self._count_in_flight_key = None
+        # Ignored by the model if filters/data changed meanwhile.
+        self.model.store_total_count(key, count)
+        if not self._data_loading:
+            self._update_page_label()
+
+    def _on_count_error(self, generation: int, evidence_id: int, error: str) -> None:
+        if not self._is_current_count(generation, evidence_id):
+            return
+        logger.error("URL count failed: %s", error)
+        self._count_failed_key = self._count_in_flight_key
+        self._count_in_flight_key = None
+        if not self._data_loading:
+            self._update_page_label()
+
     def _page_up(self) -> None:
-        if self.model.current_page() > 0:
+        if self.model.has_previous_page():
             self._request_page(self.model.current_page() - 1)
 
     def _page_down(self) -> None:
         if self.model.has_next_page():
             self._request_page(self.model.current_page() + 1)
 
-    def _update_page_label(self) -> None:
-        """Update pagination label with 'Showing X-Y of Z URLs' format."""
-        total = self.model.total_count()
-        page_size = self.model.page_size
-        current_page = self.model.current_page()
+    def _on_page_size_changed(self, _index: int) -> None:
+        size = self.page_size_combo.currentData()
+        if size is None or not self.model.set_page_size(int(size)):
+            return
+        self.page_size_changed.emit(int(size))
+        self._reload_flat_from_start()
 
-        if total == 0:
-            self.page_label.setText("No URLs")
-            self.prev_button.setEnabled(False)
-            self.next_button.setEnabled(False)
+    def _reload_flat_from_start(self) -> None:
+        """Reload the flat view from page 1 (or mark it stale while hidden)."""
+        if self.views.currentIndex() == 0:
+            self._request_page(0)
+        else:
+            self._invalidate_flat_load()
+
+    def _update_page_label(self) -> None:
+        """Update pagination label: 'Showing X-Y of Z URLs' (Z pending while counting)."""
+        rows = self.model.rowCount()
+        page = self.model.current_page()
+        self.prev_button.setEnabled(self.model.has_previous_page())
+        self.next_button.setEnabled(self.model.has_next_page())
+
+        if rows == 0:
+            self.page_label.setText("No URLs" if page == 0 else "No URLs on this page")
             return
 
-        start = current_page * page_size + 1
-        end = min((current_page + 1) * page_size, total)
+        total = self.model.total_count()
+        if not self.model.row_numbers_exact():
+            # Data changed elsewhere since earlier pages were walked: row
+            # positions are unknown until page 1 is shown again.
+            if total is not None:
+                of_total = f" of {total:,}"
+            elif self._count_failed_key == self.model.count_key():
+                of_total = " (total unavailable)"
+            else:
+                of_total = " of … (counting)"
+            self.page_label.setText(
+                f"Page {page + 1:,}: {rows:,}{of_total} URLs; data changed, row numbers hidden"
+            )
+            return
 
-        self.page_label.setText(
-            f"Showing {start}-{end} of {total} URLs"
-        )
-
-        # Update button states
-        self.prev_button.setEnabled(current_page > 0)
-        self.next_button.setEnabled(end < total)
+        start = self.model.first_row_number()
+        end = start + rows - 1
+        if total is not None:
+            text = f"Showing {start:,}-{end:,} of {total:,} URLs"
+        elif self._count_failed_key == self.model.count_key():
+            text = f"Showing {start:,}-{end:,} URLs (total unavailable)"
+        else:
+            # Never show an estimate as exact: the total is pending.
+            text = f"Showing {start:,}-{end:,} of … URLs (counting)"
+        self.page_label.setText(text)
 
     def _export_csv(self) -> None:
         if self.evidence_id is None:
@@ -906,6 +1128,9 @@ class UrlsTab(QWidget):
 
     def _toggle_grouping(self, checked: bool) -> None:
         index = 1 if checked else 0
+        if checked and self._data_loading:
+            # A hidden flat load would be applied after later state changes.
+            self._invalidate_flat_load()
         self.views.setCurrentIndex(index)
         # Reload the newly visible view only if it went stale while hidden.
         if checked:
@@ -942,7 +1167,7 @@ class UrlsTab(QWidget):
             url_ids,
             self
         )
-        dialog.tags_changed.connect(self.refresh)
+        dialog.tags_changed.connect(self._on_tags_changed)
         dialog.exec()
 
     def _show_context_menu(self, pos) -> None:
@@ -1037,8 +1262,10 @@ class UrlsTab(QWidget):
         if not url_id or not self.case_data or self.evidence_id is None:
             return
         self.case_data.update_url_tags(int(self.evidence_id), int(url_id), item.text())
-        # Cached flat-view tags are now outdated.
-        self._flat_stale = True
+        # Cached flat-view tags (and tag-filtered totals) are now outdated;
+        # the edited URL may be on any flat page.
+        self.model.mark_data_changed(keep_position=False)
+        self._invalidate_flat_load()
 
     def _match_against_url_lists(self) -> None:
         """Match URLs against selected URL reference lists."""
@@ -1287,6 +1514,7 @@ class UrlsTab(QWidget):
         # Invalidate all pending callbacks.
         self._filter_worker_generation += 1
         self._data_worker_generation += 1
+        self._count_generation += 1
         self._match_worker_generation += 1
 
         def _stop_worker(worker: QThread, worker_name: str, timeout_ms: int = 2000) -> None:
@@ -1319,6 +1547,7 @@ class UrlsTab(QWidget):
             _stop_worker(self._filter_worker, "FilterLoadWorker")
             self._filter_worker = None
         self._stop_url_loader()
+        self._stop_count_loader()
         if self.match_worker is not None:
             _stop_worker(self.match_worker, "UrlMatchWorker")
             self.match_worker = None

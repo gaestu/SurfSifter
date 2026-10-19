@@ -47,6 +47,7 @@ class TestLazyLoadingUrlsTab:
         # Create proper mock for model that returns expected values
         mock_model = MagicMock()
         mock_model.total_count.return_value = 0
+        mock_model.rowCount.return_value = 0
         mock_model.page = 0
         mock_model.page_size = 100
         tab.model = mock_model

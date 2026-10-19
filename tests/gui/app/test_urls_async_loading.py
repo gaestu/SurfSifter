@@ -1,4 +1,4 @@
-"""GUI tests for asynchronous, cancellable URL loading (issue #60)."""
+"""GUI tests for asynchronous, cancellable URL loading (issues #60, #61)."""
 from __future__ import annotations
 
 import threading
@@ -207,7 +207,7 @@ def make_tab(qtbot):
         tab = UrlsTab()
         qtbot.addWidget(tab)
         created.append(tab)
-        tab.model.page_size = page_size
+        tab.set_page_size(page_size)
         tab.set_case_data(data, defer_load=True)
         tab.set_evidence(evidence_id, defer_load=True, evidence_label=case.labels[evidence_id])
         return tab
@@ -222,7 +222,7 @@ def _loaded(tab) -> bool:
         not tab._load_pending
         and not tab._filters_loading
         and not tab._data_loading
-        and tab.page_label.text().startswith(("Showing", "No URLs"))
+        and tab.page_label.text().startswith(("Showing", "No URLs", "Page "))
     )
 
 
@@ -246,7 +246,8 @@ def test_initial_filter_navigation_refresh_run_no_gui_thread_queries(qtbot, make
     tab.show()
     qtbot.waitUntil(lambda: _loaded(tab), timeout=10000)
     assert tab.model.rowCount() == 100
-    assert tab.page_label.text() == "Showing 1-100 of 250 URLs"
+    # The exact total arrives separately (issue #61).
+    qtbot.waitUntil(lambda: tab.page_label.text() == "Showing 1-100 of 250 URLs", timeout=10000)
 
     tab.next_button.click()
     qtbot.waitUntil(lambda: _loaded(tab) and tab.model.current_page() == 1, timeout=10000)
@@ -298,8 +299,8 @@ def test_event_loop_keeps_running_and_stale_results_are_rejected(qtbot, make_tab
     qtbot.wait(600)
     timer.stop()
 
-    assert [(q.page, q.match_filter) for q in applied] == [(0, "unmatched")]
-    assert tab.model.total_count() == 250 - 63
+    assert [(q.page, q.filters.match_filter) for q in applied] == [(0, "unmatched")]
+    qtbot.waitUntil(lambda: tab.model.total_count() == 250 - 63, timeout=10000)
     # GUI thread kept processing events while the worker was busy.
     assert len(ticks) >= 20
     gaps = [b - a for a, b in zip(ticks, ticks[1:])]
@@ -409,3 +410,330 @@ def test_set_case_data_after_evidence_still_loads(qtbot, make_tab, url_case):
     finally:
         tab.shutdown()
         other.close()
+
+
+# ---------------------------------------------------------------------------
+# Issue #61: separate exact totals, cursor navigation, page size, domain modes
+# ---------------------------------------------------------------------------
+
+
+def _counting_count_handler(monkeypatch, delay_s: float = 0.0, fail: bool = False):
+    """Wrap the tab's count handler; returns the list of counted filter specs."""
+    import app.features.urls.tab as tab_module
+
+    original = tab_module._count_urls
+    calls = []
+
+    def counting(case_data, request):
+        calls.append(request.payload.filters)
+        # Honour the worker's cancellation like an interrupted SQLite read,
+        # so shutdown never waits for the artificial delay.
+        is_cancelled = getattr(case_data._thread_local, "cancel_check", None) or (lambda: False)
+        deadline = time.perf_counter() + delay_s
+        while time.perf_counter() < deadline:
+            if is_cancelled():
+                raise QueryCancelledError("interrupted")
+            time.sleep(0.01)
+        if fail:
+            raise RuntimeError("count failed")
+        return original(case_data, request)
+
+    monkeypatch.setattr(tab_module, "_count_urls", counting)
+    return calls
+
+
+def _total_shown(tab, total: int) -> bool:
+    return _loaded(tab) and tab.page_label.text().endswith(f"of {total:,} URLs")
+
+
+def test_first_rows_appear_while_total_is_pending(qtbot, make_tab, url_case, monkeypatch):
+    case, data = url_case
+    calls = _counting_count_handler(monkeypatch, delay_s=0.8)
+    tab = make_tab(case, data, case.evidence_ids[0])
+    tab.show()
+
+    qtbot.waitUntil(lambda: _loaded(tab), timeout=10000)
+    assert tab.model.rowCount() == 100
+    assert tab.model.total_count() is None
+    assert tab.page_label.text() == "Showing 1-100 of … URLs (counting)"
+    assert tab.next_button.isEnabled()
+
+    qtbot.waitUntil(lambda: _total_shown(tab, 250), timeout=10000)
+    assert len(calls) == 1
+
+
+def test_page_navigation_does_not_repeat_unchanged_count(qtbot, make_tab, url_case, monkeypatch):
+    case, data = url_case
+    calls = _counting_count_handler(monkeypatch)
+    tab = make_tab(case, data, case.evidence_ids[0])
+    tab.show()
+    qtbot.waitUntil(lambda: _total_shown(tab, 250), timeout=10000)
+
+    tab.next_button.click()
+    qtbot.waitUntil(lambda: _loaded(tab) and tab.model.current_page() == 1, timeout=10000)
+    assert tab.page_label.text() == "Showing 101-200 of 250 URLs"
+    tab.prev_button.click()
+    qtbot.waitUntil(lambda: _loaded(tab) and tab.model.current_page() == 0, timeout=10000)
+
+    # Filter change counts again; returning to cached filters does not.
+    tab.match_combo.setCurrentIndex(tab.match_combo.findData("matched"))
+    qtbot.waitUntil(lambda: _total_shown(tab, 63), timeout=10000)
+    tab.match_combo.setCurrentIndex(tab.match_combo.findData("all"))
+    qtbot.waitUntil(lambda: _total_shown(tab, 250), timeout=10000)
+    assert [spec.match_filter for spec in calls] == [None, "matched"]
+
+
+def test_walk_all_pages_forward_and_backward(qtbot, make_tab, url_case):
+    case, data = url_case
+    evidence_id = case.evidence_ids[0]
+    tab = make_tab(case, data, evidence_id, page_size=100)
+    tab.show()
+    qtbot.waitUntil(lambda: _loaded(tab), timeout=10000)
+
+    def page_ids():
+        return [tab.model.get_row(r)["id"] for r in range(tab.model.rowCount())]
+
+    forward = [page_ids()]
+    while tab.next_button.isEnabled():
+        page = tab.model.current_page()
+        tab.next_button.click()
+        qtbot.waitUntil(lambda p=page: _loaded(tab) and tab.model.current_page() == p + 1, timeout=10000)
+        forward.append(page_ids())
+    assert [len(p) for p in forward] == [100, 100, 50]
+    assert tab.page_label.text() == "Showing 201-250 of 250 URLs"
+
+    backward = [page_ids()]
+    while tab.prev_button.isEnabled():
+        page = tab.model.current_page()
+        tab.prev_button.click()
+        qtbot.waitUntil(lambda p=page: _loaded(tab) and tab.model.current_page() == p - 1, timeout=10000)
+        backward.append(page_ids())
+    assert backward == list(reversed(forward))
+
+    walked = [url_id for page in forward for url_id in page]
+    expected = [r["id"] for r in data.iter_urls(evidence_id, limit=1000)]
+    assert walked == expected and len(set(walked)) == 250
+
+
+def test_page_size_change_resets_to_first_page_and_is_reported(qtbot, make_tab, url_case, monkeypatch):
+    case, data = url_case
+    calls = _counting_count_handler(monkeypatch)
+    tab = make_tab(case, data, case.evidence_ids[0])
+    emitted = []
+    tab.page_size_changed.connect(emitted.append)
+    tab.show()
+    qtbot.waitUntil(lambda: _total_shown(tab, 250), timeout=10000)
+    tab.next_button.click()
+    qtbot.waitUntil(lambda: _loaded(tab) and tab.model.current_page() == 1, timeout=10000)
+
+    tab.page_size_combo.setCurrentIndex(tab.page_size_combo.findData(500))
+    qtbot.waitUntil(lambda: _loaded(tab) and tab.model.rowCount() == 250, timeout=10000)
+    assert tab.model.current_page() == 0
+    assert tab.page_label.text() == "Showing 1-250 of 250 URLs"
+    assert not tab.next_button.isEnabled() and not tab.prev_button.isEnabled()
+    assert emitted == [500]
+    assert len(calls) == 1  # the total does not depend on the page size
+
+    # Applying a stored setting does not re-emit; unknown values fall back.
+    tab.set_page_size(12345)
+    assert tab.model.page_size == tab.model.PAGE_SIZE and emitted == [500]
+
+
+def test_tagging_keeps_page_but_data_refresh_resets(qtbot, make_tab, url_case, monkeypatch):
+    case, data = url_case
+    evidence_id = case.evidence_ids[0]
+    calls = _counting_count_handler(monkeypatch)
+    tab = make_tab(case, data, evidence_id)
+    tab.show()
+    qtbot.waitUntil(lambda: _total_shown(tab, 250), timeout=10000)
+    tab.next_button.click()
+    qtbot.waitUntil(lambda: _loaded(tab) and tab.model.current_page() == 1, timeout=10000)
+    first_id = tab.model.get_row(0)["id"]
+
+    data.tag_artifact(evidence_id, "Fresh", "url", first_id)
+    tab._on_tags_changed()  # TagArtifactsDialog.tags_changed
+    qtbot.waitUntil(lambda: _total_shown(tab, 250), timeout=10000)
+    assert tab.model.current_page() == 1
+    assert tab.model.get_row(0)["id"] == first_id
+    assert "Fresh" in tab.model.data(tab.model.index(0, 8))
+    assert tab.page_label.text() == "Showing 101-200 of 250 URLs"
+    assert len(calls) == 2  # tag totals may have changed
+
+    tab.refresh()  # ingestion / deduplication / matching
+    qtbot.waitUntil(lambda: _total_shown(tab, 250), timeout=10000)
+    assert tab.model.current_page() == 0
+    assert len(calls) == 3
+
+
+def test_count_failure_is_shown_without_hiding_rows(qtbot, make_tab, url_case, monkeypatch):
+    case, data = url_case
+    _counting_count_handler(monkeypatch, fail=True)
+    tab = make_tab(case, data, case.evidence_ids[0])
+    tab.show()
+    qtbot.waitUntil(
+        lambda: _loaded(tab) and tab.page_label.text() == "Showing 1-100 URLs (total unavailable)",
+        timeout=10000,
+    )
+    assert tab.model.rowCount() == 100 and tab.next_button.isEnabled()
+
+
+def test_single_page_result_needs_no_count(qtbot, make_tab, url_case, monkeypatch):
+    case, data = url_case
+    calls = _counting_count_handler(monkeypatch, delay_s=5.0)
+    tab = make_tab(case, data, case.evidence_ids[0], page_size=500)
+    tab.show()
+    # The complete result fits on page 1: exact total without waiting for COUNT.
+    qtbot.waitUntil(lambda: _total_shown(tab, 250), timeout=3000)
+    assert tab._count_in_flight_key is None
+    assert len(calls) <= 1
+
+
+def test_domain_dropdown_is_exact_and_contains_field_is_substring(qtbot, make_tab, url_case):
+    case, data = url_case
+    evidence_id = case.evidence_ids[0]
+    tab = make_tab(case, data, evidence_id)
+    tab.show()
+    qtbot.waitUntil(lambda: _loaded(tab), timeout=10000)
+
+    index = tab.domain_combo.findData("d1.example.com")
+    assert index > 0
+    tab.domain_combo.setCurrentIndex(index)
+    qtbot.waitUntil(lambda: _total_shown(tab, 50), timeout=10000)
+    assert {tab.model.get_row(r)["domain"] for r in range(tab.model.rowCount())} == {"d1.example.com"}
+    assert tab.group_model._spec.domain_exact == "d1.example.com"
+
+    tab.domain_combo.setCurrentIndex(0)  # All domains
+    qtbot.waitUntil(lambda: _total_shown(tab, 250), timeout=10000)
+    tab.domain_contains_edit.setText("D2.EXAMPLE")
+    tab.search_button.click()
+    qtbot.waitUntil(lambda: _total_shown(tab, 50), timeout=10000)
+    assert tab.model.filter_spec().domain_contains == "D2.EXAMPLE"
+    assert tab.model.filter_spec().domain_exact is None
+
+
+def test_unnotified_tag_change_invalidates_cached_total(qtbot, make_tab, url_case, monkeypatch):
+    """E.g. a tag merged in the Tags tab: no refresh(), but totals must not go stale."""
+    case, data = url_case
+    evidence_id = case.evidence_ids[0]
+    calls = _counting_count_handler(monkeypatch)
+    tab = make_tab(case, data, evidence_id)
+    tab.show()
+    qtbot.waitUntil(lambda: _total_shown(tab, 250), timeout=10000)
+
+    tab.tag_combo.setCurrentIndex(tab.tag_combo.findData("Relevant"))
+    qtbot.waitUntil(lambda: _loaded(tab) and tab.model.total_count() is not None, timeout=10000)
+    before = tab.model.total_count()
+    untagged = [r["id"] for r in data.iter_urls(evidence_id, limit=1000) if r["id"] % 5 == 2][:10]
+    for url_id in untagged:  # written through another connection, no notification
+        data.tag_artifact(evidence_id, "Relevant", "url", url_id)
+
+    tab.tag_combo.setCurrentIndex(tab.tag_combo.findData("*"))
+    qtbot.waitUntil(lambda: _total_shown(tab, 250), timeout=10000)
+    tab.tag_combo.setCurrentIndex(tab.tag_combo.findData("Relevant"))
+    qtbot.waitUntil(lambda: _total_shown(tab, before + 10), timeout=10000)
+    assert sum(1 for spec in calls if spec.tag_like == "Relevant") == 2
+
+
+def test_grouped_view_tagging_returns_flat_view_to_first_page(qtbot, make_tab, url_case):
+    case, data = url_case
+    tab = make_tab(case, data, case.evidence_ids[0])
+    tab.show()
+    qtbot.waitUntil(lambda: _total_shown(tab, 250), timeout=10000)
+    tab.next_button.click()
+    qtbot.waitUntil(lambda: _loaded(tab) and tab.model.current_page() == 1, timeout=10000)
+
+    tab.group_checkbox.setChecked(True)
+    tab._on_tags_changed()  # TagArtifactsDialog.tags_changed from the grouped view
+    tab.group_checkbox.setChecked(False)
+    qtbot.waitUntil(lambda: _loaded(tab) and tab._flat_stale is False, timeout=10000)
+    assert tab.model.current_page() == 0
+
+
+@pytest.mark.parametrize("change", ["page_size", "filter", "refresh"])
+def test_flat_load_in_flight_while_grouped_is_not_applied_after_changes(qtbot, make_tab, url_case, monkeypatch, change):
+    """A hidden flat load must not corrupt the cursor stack after filter/size/data changes."""
+    case, data = url_case
+    tab = make_tab(case, data, case.evidence_ids[0])
+    tab.show()
+    qtbot.waitUntil(lambda: _total_shown(tab, 250), timeout=10000)
+    tab.next_button.click()
+    qtbot.waitUntil(lambda: _loaded(tab) and tab.model.current_page() == 1, timeout=10000)
+
+    _slow_page_loader(monkeypatch, 0.5)
+    tab.next_button.click()  # page 3 in flight
+    tab.group_checkbox.setChecked(True)
+    if change == "page_size":
+        tab.page_size_combo.setCurrentIndex(tab.page_size_combo.findData(500))
+    elif change == "filter":
+        tab.match_combo.setCurrentIndex(tab.match_combo.findData("matched"))
+    else:
+        tab.refresh()
+    qtbot.wait(900)  # the obsolete load would have finished by now
+    assert tab.model.current_page() == 0
+
+    tab.group_checkbox.setChecked(False)
+    expected = {"page_size": 250, "filter": 63, "refresh": 250}[change]
+    qtbot.waitUntil(lambda: _total_shown(tab, expected), timeout=10000)
+    assert tab.model.current_page() == 0
+    assert tab.page_label.text().startswith("Showing 1-")
+
+
+def test_model_rejects_page_built_for_other_state(url_case):
+    from app.features.urls.models import UrlsTableModel
+
+    case, data = url_case
+    model = UrlsTableModel(data, page_size=100)
+    model.set_evidence(case.evidence_ids[0], reload=False)
+    query = model.build_query(0)
+    assert model.is_current_query(query)
+    model.set_filters(match_filter="matched", reload=False)
+    assert not model.is_current_query(query)
+    query = model.build_query(0)
+    model.mark_data_changed(keep_position=True)
+    assert not model.is_current_query(query)
+    assert model.is_current_query(model.build_query(0))
+
+
+def test_first_count_waits_for_data_version_baseline(qtbot, make_tab, url_case, monkeypatch):
+    """Without a baseline, a count racing an unnotified write could stay stale for good."""
+    case, data = url_case
+    _slow_page_loader(monkeypatch, 0.4)
+    calls = _counting_count_handler(monkeypatch)
+    tab = make_tab(case, data, case.evidence_ids[0])
+    tab.show()
+    qtbot.waitUntil(lambda: tab._data_loading, timeout=10000)
+    assert not tab.model.has_data_baseline()
+    assert tab._count_in_flight_key is None and calls == []
+
+    qtbot.waitUntil(lambda: _total_shown(tab, 250), timeout=10000)
+    assert len(calls) == 1 and tab.model.has_data_baseline()
+
+    # With a baseline, the count runs alongside the page again.
+    tab.match_combo.setCurrentIndex(tab.match_combo.findData("matched"))
+    qtbot.waitUntil(lambda: tab._data_loading, timeout=10000)
+    assert tab._count_in_flight_key is not None or len(calls) == 2
+
+
+def test_unnotified_change_hides_row_numbers_until_first_page(qtbot, make_tab, url_case):
+    case, data = url_case
+    evidence_id = case.evidence_ids[0]
+    tab = make_tab(case, data, evidence_id)
+    tab.show()
+    qtbot.waitUntil(lambda: _total_shown(tab, 250), timeout=10000)
+    tab.next_button.click()
+    qtbot.waitUntil(lambda: _loaded(tab) and tab.model.current_page() == 1, timeout=10000)
+
+    data.tag_artifact(evidence_id, "Elsewhere", "url", tab.model.get_row(0)["id"])  # other connection
+    tab.next_button.click()
+    qtbot.waitUntil(
+        lambda: _loaded(tab) and tab.page_label.text() == "Page 3: 50 of 250 URLs; data changed, row numbers hidden",
+        timeout=10000,
+    )
+    assert not tab.model.row_numbers_exact()
+
+    tab.prev_button.click()
+    qtbot.waitUntil(lambda: _loaded(tab) and tab.model.current_page() == 1, timeout=10000)
+    assert tab.page_label.text().startswith("Page 2: 100 of ")
+    tab.prev_button.click()
+    qtbot.waitUntil(lambda: _total_shown(tab, 250) and tab.model.current_page() == 0, timeout=10000)
+    assert tab.page_label.text() == "Showing 1-100 of 250 URLs"

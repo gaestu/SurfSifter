@@ -4,6 +4,7 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased
 
+- URLs tab: the first rows no longer wait for the total count. The exact total loads separately; the counter shows it as pending (`of … URLs (counting)`) until it is known. It is cached per filter, so Previous/Next does not count again. Paging uses a stable cursor order: First Seen newest first, URLs without a timestamp last, ties by ID. Pages are smaller and selectable (default 500 rows, remembered). The domain dropdown is now an exact, case-insensitive match, and a new "Domain contains" field provides literal substring search. Evidence migration 0004 adds an index for exact-domain browsing. CSV export reads rows in cursor batches; its output is unchanged (#61).
 - URLs tab: the flat view's initial load, filter changes, Previous/Next and refresh now run in a cancellable background worker. Stale requests are interrupted inside SQLite and their results are discarded. Untagged URLs no longer trigger per-row tag lookups, and refresh reloads only the visible view (#60).
 - Add a first-class Firefox Browser Config extractor for curated `prefs.js` and `user.js` settings with source-distinct ingestion into `browser_config` (#58).
 - Add a first-class Chromium Browser Config extractor for curated `Preferences` and `Local State` settings (#57).

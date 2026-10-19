@@ -568,6 +568,10 @@ def deduplicate_urls(
         conn.execute("REINDEX idx_urls_evidence_occurrence")
     except Exception:
         pass  # Index may not exist in older databases
+    try:
+        conn.execute("REINDEX idx_urls_evidence_domain_nocase_first_seen")
+    except sqlite3.OperationalError:
+        pass  # Added by evidence migration 0004; absent in minimal schemas
 
     # Count total after
     total_after = conn.execute(

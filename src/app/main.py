@@ -491,6 +491,8 @@ class MainWindow(QMainWindow):
         # 5. URLs - supports lazy loading
         from app.features.urls import UrlsTab
         urls_tab = UrlsTab()
+        urls_tab.set_page_size(self.settings.general.url_page_size)
+        urls_tab.page_size_changed.connect(self._on_url_page_size_changed)
         # downloadRequested signal removed - downloads now handled in Download tab
         if self.case_data:
             urls_tab.set_case_data(self.case_data, defer_load=defer_load)
@@ -2006,6 +2008,14 @@ class MainWindow(QMainWindow):
     def _on_task_progress(self, percent: int, message: str) -> None:  # noqa: ARG002
         if self.progress_dialog:
             self.progress_dialog.setLabelText(message)
+
+    def _on_url_page_size_changed(self, page_size: int) -> None:
+        """Persist the URLs tab rows-per-page choice (issue #61)."""
+        self.settings.general.url_page_size = int(page_size)
+        try:
+            self.settings.save(self.settings_file)
+        except OSError as exc:
+            self.logger.warning("Failed to save URL page size: %s", exc)
 
     def _on_executor_result(self, summary: object) -> None:  # noqa: ARG002
         self.logger.info("Extraction completed successfully")

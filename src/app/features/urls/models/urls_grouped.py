@@ -11,6 +11,8 @@ from typing import Any, Dict, Iterable, List, Optional, TYPE_CHECKING
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QStandardItem, QStandardItemModel
 
+from app.data import UrlFilterSpec
+
 if TYPE_CHECKING:
     from app.data.case_data import CaseDataAccess
 
@@ -19,12 +21,8 @@ class UrlsGroupedModel(QStandardItemModel):
     def __init__(self, case_data: Optional[CaseDataAccess] = None) -> None:
         super().__init__()
         self.case_data = case_data
-        self._filters: Dict[str, Any] = {
-            "domain": "%",
-            "url": "%",
-            "sources": None,
-            "match_filter": None,  #
-        }
+        # Same filter semantics as the flat view (issue #61).
+        self._spec = UrlFilterSpec()
         self.evidence_id: Optional[int] = None
         self.setHorizontalHeaderLabels(
             [
@@ -73,22 +71,21 @@ class UrlsGroupedModel(QStandardItemModel):
         self,
         *,
         domain: Optional[str] = None,
+        domain_contains: Optional[str] = None,
         url: Optional[str] = None,
         sources: Optional[Iterable[str]] = None,
         match_filter: Optional[str] = None,  #
         tag: Optional[str] = None,  #
         reload: bool = True,  # Allow deferring reload when view not visible
     ) -> None:
-        if domain is not None:
-            self._filters["domain"] = f"%{domain}%" if domain and domain != "*" else "%"
-        if url is not None:
-            self._filters["url"] = f"%{url}%" if url else "%"
-        if sources is not None:
-            self._filters["sources"] = tuple(sources) if sources else None
-        if match_filter is not None:  #
-            self._filters["match_filter"] = match_filter if match_filter != "all" else None
-        if tag is not None:  #
-            self._filters["tag"] = tag if tag and tag != "*" else "%"
+        self._spec = self._spec.with_ui_filters(
+            domain=domain,
+            domain_contains=domain_contains,
+            text=url,
+            sources=sources,
+            match_filter=match_filter,
+            tag=tag,
+        )
         if reload:
             self.reload()
 
@@ -110,11 +107,7 @@ class UrlsGroupedModel(QStandardItemModel):
             return
         rows = self.case_data.iter_urls(
             int(self.evidence_id),
-            domain_like=self._filters["domain"],
-            url_like=self._filters["url"],
-            tag_like=self._filters.get("tag", "%"),
-            discovered_by=self._filters["sources"],
-            match_filter=self._filters["match_filter"],  #
+            filters=self._spec,
             limit=10_000,
             offset=0,
         )

@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from app.data import CaseDataAccess, QueryCancelledError, UrlPageQuery
+from app.data import CaseDataAccess, QueryCancelledError, UrlFilterSpec, UrlPageQuery
 from tests.fixtures.url_fixtures import build_url_fixture_case
 
 
@@ -31,7 +31,7 @@ def test_load_url_page_returns_complete_tag_and_match_maps(url_case):
     evidence_id = case.evidence_ids[0]
     page = data.load_url_page(UrlPageQuery(evidence_id=evidence_id, page=0, page_size=100))
 
-    assert page.total_count == 300
+    assert page.has_more
     assert len(page.rows) == 100
     row_ids = {row["id"] for row in page.rows}
     # Every returned row has an entry, including untagged / unmatched rows.
@@ -47,14 +47,19 @@ def test_load_url_page_respects_page_and_filters(url_case):
     case, data = url_case
     evidence_id = case.evidence_ids[0]
     first = data.load_url_page(UrlPageQuery(evidence_id=evidence_id, page=0, page_size=100))
-    second = data.load_url_page(UrlPageQuery(evidence_id=evidence_id, page=1, page_size=100))
+    second = data.load_url_page(
+        UrlPageQuery(evidence_id=evidence_id, page=1, page_size=100, after=first.next_cursor)
+    )
     assert second.query.page == 1
+    assert len(second.rows) == 100
     assert not ({r["id"] for r in first.rows} & {r["id"] for r in second.rows})
 
+    matched_filter = UrlFilterSpec(match_filter="matched")
     matched = data.load_url_page(
-        UrlPageQuery(evidence_id=evidence_id, page=0, page_size=500, match_filter="matched")
+        UrlPageQuery(evidence_id=evidence_id, filters=matched_filter, page=0, page_size=500)
     )
-    assert matched.total_count == 75
+    assert len(matched.rows) == 75 and not matched.has_more
+    assert data.count_urls(evidence_id, filters=matched_filter) == 75
     assert all(matched.matches[r["id"]] for r in matched.rows)
 
 

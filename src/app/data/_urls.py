@@ -1,7 +1,8 @@
 """URL query operations for UI layer.
 
 This module provides URL-specific queries for the UI:
-- Paginated URL listing with LIKE filtering
+- Keyset-paginated URL listing with a stable sort contract (issue #61)
+- Shared filter predicates for row and count queries
 - Tag-aware queries via tag_associations
 - Match filtering (matched/unmatched/specific list)
 - Domain and source listing with caching
@@ -13,24 +14,197 @@ from __future__ import annotations
 import logging
 import sqlite3
 import time
-from dataclasses import dataclass, field
-from typing import Any, Dict, Iterable, List, Optional, Tuple
+from dataclasses import dataclass, field, replace
+from typing import Any, Dict, Iterable, Iterator, List, Optional, Tuple
 
 from ._base import BaseDataAccess
 
 
-@dataclass(frozen=True)
-class UrlPageQuery:
-    """Filters and page state for one flat URL page (background-load request)."""
+# Stable sort contract for flat URL listing (issue #61): newest first, URLs
+# without a timestamp last, ties broken by ascending id. The implicit rowid of
+# idx_urls_evidence_first_seen (evidence_id, first_seen_utc DESC) is ascending,
+# so this order is served by that index without a sort step.
+URL_ORDER_BY = "u.first_seen_utc DESC, u.id ASC"
 
-    evidence_id: int
-    page: int = 0
-    page_size: int = 10000
-    domain_like: str = "%"
+_URL_ROW_COLUMNS = (
+    "u.id, u.url, u.domain, u.scheme, u.discovered_by, u.first_seen_utc, "
+    "u.last_seen_utc, u.source_path, u.notes, u.occurrence_count"
+)
+
+LIKE_ESCAPE_CHAR = "\\"
+
+
+def escape_like(value: str) -> str:
+    """Escape ``value`` so SQL LIKE matches it literally (with ``ESCAPE '\\'``)."""
+    return (
+        value.replace(LIKE_ESCAPE_CHAR, LIKE_ESCAPE_CHAR * 2)
+        .replace("%", LIKE_ESCAPE_CHAR + "%")
+        .replace("_", LIKE_ESCAPE_CHAR + "_")
+    )
+
+
+@dataclass(frozen=True)
+class UrlFilterSpec:
+    """Filters for flat URL listing and counting (issue #61).
+
+    Row and count queries are built from the same spec by
+    ``build_url_filter_predicates`` so they always agree.
+
+    Attributes:
+        domain_exact: Exact domain, ASCII case-insensitive (``COLLATE NOCASE``).
+        domain_contains: Literal substring of the domain, ASCII
+            case-insensitive; ``%``, ``_`` and ``\\`` are not wildcards.
+        domain_like: Legacy raw SQL LIKE pattern on the domain (``None`` = off).
+        url_like: SQL LIKE pattern on the URL (``"%"`` = off).
+        tag_like: SQL LIKE pattern on tag names (``"%"`` = off).
+        discovered_by: Allowed sources (``None`` = all).
+        match_filter: ``"matched"``, ``"unmatched"``, a list name, or ``None``.
+    """
+
+    domain_exact: Optional[str] = None
+    domain_contains: Optional[str] = None
+    domain_like: Optional[str] = None
     url_like: str = "%"
     tag_like: str = "%"
     discovered_by: Optional[Tuple[str, ...]] = None
     match_filter: Optional[str] = None
+
+    def __post_init__(self) -> None:
+        # Normalize so equal filters hash equally (used as count-cache key).
+        if self.discovered_by is not None:
+            object.__setattr__(self, "discovered_by", tuple(self.discovered_by) or None)
+        for name in ("domain_exact", "domain_contains", "domain_like"):
+            if getattr(self, name) == "":
+                object.__setattr__(self, name, None)
+        if self.domain_like == "%":
+            object.__setattr__(self, "domain_like", None)
+        if self.match_filter == "all":
+            object.__setattr__(self, "match_filter", None)
+
+    def with_ui_filters(
+        self,
+        *,
+        domain: Optional[str] = None,
+        domain_contains: Optional[str] = None,
+        text: Optional[str] = None,
+        sources: Optional[Iterable[str]] = None,
+        match_filter: Optional[str] = None,
+        tag: Optional[str] = None,
+    ) -> "UrlFilterSpec":
+        """Return a copy updated from URLs-tab filter controls.
+
+        Shared by the flat and grouped views so both select the same URLs.
+        ``None`` leaves a filter unchanged; ``""`` (and ``"*"`` / ``"all"``
+        where the controls use them) clears it.
+
+        Args:
+            domain: Exact domain from the dropdown
+            domain_contains: Literal domain substring
+            text: URL substring (applied as ``%text%`` LIKE pattern)
+            sources: Allowed sources
+            match_filter: "all", "matched", "unmatched", or list name
+            tag: Tag name pattern
+        """
+        changes: Dict[str, Any] = {}
+        if domain is not None:
+            changes["domain_exact"] = domain if domain and domain != "*" else None
+        if domain_contains is not None:
+            changes["domain_contains"] = domain_contains or None
+        if text is not None:
+            changes["url_like"] = f"%{text}%" if text else "%"
+        if sources is not None:
+            changes["discovered_by"] = tuple(sources) if sources else None
+        if match_filter is not None:
+            changes["match_filter"] = match_filter or None
+        if tag is not None:
+            changes["tag_like"] = tag if tag and tag != "*" else "%"
+        return replace(self, **changes)
+
+
+def build_url_filter_predicates(evidence_id: int, spec: UrlFilterSpec) -> Tuple[List[str], List[Any]]:
+    """Build parameterized WHERE terms (alias ``u``) for ``spec``.
+
+    Shared by row and count queries so both always select the same URLs.
+    """
+    params: List[Any] = [evidence_id]
+    where = ["u.evidence_id = ?"]
+
+    if spec.domain_exact is not None:
+        # Served by idx_urls_evidence_domain_nocase_first_seen (migration 0004).
+        where.append("u.domain = ? COLLATE NOCASE")
+        params.append(spec.domain_exact)
+    if spec.domain_contains is not None:
+        where.append(f"u.domain LIKE ? ESCAPE '{LIKE_ESCAPE_CHAR}'")
+        params.append(f"%{escape_like(spec.domain_contains)}%")
+    # Skip no-op wildcard filters for performance (Issue #47)
+    # LIKE '%' forces full-table evaluation - omit when not needed
+    if spec.domain_like is not None:
+        where.append("COALESCE(u.domain, '') LIKE ?")
+        params.append(spec.domain_like)
+    if spec.url_like and spec.url_like != "%":
+        where.append("u.url LIKE ?")
+        params.append(spec.url_like)
+
+    if spec.tag_like and spec.tag_like != "%":
+        where.append("""
+            EXISTS (
+                SELECT 1 FROM tag_associations ta
+                JOIN tags t ON ta.tag_id = t.id
+                WHERE ta.artifact_type = 'url'
+                AND ta.artifact_id = u.id
+                AND t.name LIKE ?
+            )
+        """)
+        params.append(spec.tag_like)
+
+    if spec.discovered_by:
+        placeholders = ",".join("?" for _ in spec.discovered_by)
+        where.append(f"u.discovered_by IN ({placeholders})")
+        params.extend(spec.discovered_by)
+
+    # Match filter - use EXISTS for performance (no JOIN needed)
+    if spec.match_filter:
+        if spec.match_filter == "matched":
+            where.append("EXISTS (SELECT 1 FROM url_matches m WHERE m.url_id = u.id AND m.evidence_id = u.evidence_id)")
+        elif spec.match_filter == "unmatched":
+            where.append("NOT EXISTS (SELECT 1 FROM url_matches m WHERE m.url_id = u.id AND m.evidence_id = u.evidence_id)")
+        else:
+            # Specific list name
+            where.append("EXISTS (SELECT 1 FROM url_matches m WHERE m.url_id = u.id AND m.evidence_id = u.evidence_id AND m.list_name = ?)")
+            params.append(spec.match_filter)
+
+    return where, params
+
+
+@dataclass(frozen=True)
+class UrlCursor:
+    """Keyset position in the URL sort order: the last row of a page."""
+
+    first_seen_utc: Optional[str]
+    id: int
+
+    @classmethod
+    def from_row(cls, row: Dict[str, Any]) -> "UrlCursor":
+        return cls(row.get("first_seen_utc"), int(row["id"]))
+
+
+@dataclass(frozen=True)
+class UrlPageQuery:
+    """Filters and page position for one flat URL page (background-load request).
+
+    ``after`` is the cursor of the last row of the previous page (``None`` for
+    the first page). ``page`` is the page index: the query ignores it (the
+    position comes from ``after``), but the table model uses it for display
+    and for its stack of page-start cursors. ``data_revision`` is the
+    caller's data-revision tag, echoed back unchanged (not used by the query).
+    """
+
+    evidence_id: int
+    filters: UrlFilterSpec = field(default_factory=UrlFilterSpec)
+    page: int = 0
+    page_size: int = 500
+    after: Optional[UrlCursor] = None
+    data_revision: int = 0
 
 
 @dataclass
@@ -39,21 +213,35 @@ class UrlPage:
 
     ``tags`` and ``matches`` contain an entry for every returned row id
     (empty string when the URL has no tags / matches), so consumers never
-    need per-row lookups.
+    need per-row lookups. The total count is loaded separately (issue #61).
+
+    ``data_version`` is SQLite's ``PRAGMA data_version`` read on the loading
+    connection before the rows: it changes when any other connection
+    commits to the evidence database, so a consumer that keeps loading
+    through the same connection can detect changes it was not notified of.
     """
 
     query: UrlPageQuery
     rows: List[Dict[str, Any]] = field(default_factory=list)
-    total_count: int = 0
+    has_more: bool = False
+    data_version: Optional[int] = None
     tags: Dict[int, str] = field(default_factory=dict)
     matches: Dict[int, str] = field(default_factory=dict)
+
+    @property
+    def next_cursor(self) -> Optional[UrlCursor]:
+        """Cursor for the following page (``None`` if there is none)."""
+        if not self.has_more or not self.rows:
+            return None
+        return UrlCursor.from_row(self.rows[-1])
 
 
 class UrlQueryMixin(BaseDataAccess):
     """Mixin providing URL query operations for UI views.
 
     Features:
-    - Paginated URL listing with LIKE filtering
+    - Keyset-paginated URL listing with shared filter predicates
+      (exact/contains domain, LIKE on URL and tag)
     - Tag-aware queries via tag_associations
     - Match filtering (matched/unmatched/specific list)
     - In-memory caching for filter dropdowns
@@ -69,6 +257,26 @@ class UrlQueryMixin(BaseDataAccess):
     # URL Queries (Evidence DB)
     # -------------------------------------------------------------------------
 
+    @staticmethod
+    def _legacy_url_filter_spec(
+        filters: Optional[UrlFilterSpec],
+        domain_like: str,
+        url_like: str,
+        tag_like: str,
+        discovered_by: Optional[Iterable[str]],
+        match_filter: Optional[str],
+    ) -> UrlFilterSpec:
+        """Return ``filters`` or build a spec from the legacy LIKE kwargs."""
+        if filters is not None:
+            return filters
+        return UrlFilterSpec(
+            domain_like=domain_like if domain_like and domain_like != "%" else None,
+            url_like=url_like or "%",
+            tag_like=tag_like or "%",
+            discovered_by=tuple(discovered_by) if discovered_by else None,
+            match_filter=match_filter,
+        )
+
     def count_urls(
         self,
         evidence_id: int,
@@ -78,17 +286,22 @@ class UrlQueryMixin(BaseDataAccess):
         tag_like: str = "%",
         discovered_by: Optional[Iterable[str]] = None,
         match_filter: Optional[str] = None,
+        filters: Optional[UrlFilterSpec] = None,
     ) -> int:
         """
-        Fast count of URLs matching filters (without GROUP_CONCAT).
+        Exact count of URLs matching filters (without GROUP_CONCAT).
+
+        Issue #61: runs separately from page loading so first rows do not wait
+        for it; use inside ``cancellable_reads`` to make it interruptible.
 
         Args:
             evidence_id: Evidence ID
-            domain_like: Domain filter pattern (SQL LIKE)
+            domain_like: Legacy domain filter pattern (SQL LIKE)
             url_like: URL filter pattern (SQL LIKE)
             tag_like: Tag filter pattern (SQL LIKE)
             discovered_by: Optional list of source filters
             match_filter: Match filter ("matched", "unmatched", or specific list name)
+            filters: Filter spec; overrides the legacy keyword filters when given
 
         Returns:
             Total count of matching URLs
@@ -96,45 +309,8 @@ class UrlQueryMixin(BaseDataAccess):
         logger = logging.getLogger(__name__)
         start_time = time.time()
 
-        params: List[Any] = [evidence_id]
-        where = ["u.evidence_id = ?"]
-
-        # Skip no-op wildcard filters for performance (Issue #47)
-        # LIKE '%' forces full-table evaluation - omit when not needed
-        if domain_like and domain_like != "%":
-            where.append("COALESCE(u.domain, '') LIKE ?")
-            params.append(domain_like)
-        if url_like and url_like != "%":
-            where.append("u.url LIKE ?")
-            params.append(url_like)
-
-        if tag_like and tag_like != "%":
-            where.append("""
-                EXISTS (
-                    SELECT 1 FROM tag_associations ta
-                    JOIN tags t ON ta.tag_id = t.id
-                    WHERE ta.artifact_type = 'url'
-                    AND ta.artifact_id = u.id
-                    AND t.name LIKE ?
-                )
-            """)
-            params.append(tag_like)
-
-        if discovered_by:
-            placeholders = ",".join("?" for _ in discovered_by)
-            where.append(f"u.discovered_by IN ({placeholders})")
-            params.extend(discovered_by)
-
-        # Match filter (same logic as iter_urls)
-        if match_filter and match_filter != "all":
-            if match_filter == "matched":
-                where.append("EXISTS (SELECT 1 FROM url_matches m WHERE m.url_id = u.id AND m.evidence_id = u.evidence_id)")
-            elif match_filter == "unmatched":
-                where.append("NOT EXISTS (SELECT 1 FROM url_matches m WHERE m.url_id = u.id AND m.evidence_id = u.evidence_id)")
-            else:
-                # Specific list name
-                where.append("EXISTS (SELECT 1 FROM url_matches m WHERE m.url_id = u.id AND m.evidence_id = u.evidence_id AND m.list_name = ?)")
-                params.append(match_filter)
+        spec = self._legacy_url_filter_spec(filters, domain_like, url_like, tag_like, discovered_by, match_filter)
+        where, params = build_url_filter_predicates(evidence_id, spec)
 
         # Fast COUNT query (no JOIN, no GROUP_CONCAT)
         sql = f"""
@@ -150,7 +326,7 @@ class UrlQueryMixin(BaseDataAccess):
                 logger.info(
                     "count_urls: evidence_id=%s, filters=%s, count=%d, elapsed=%.3fs",
                     evidence_id,
-                    {"domain": domain_like, "url": url_like, "discovered_by": discovered_by, "match_filter": match_filter},
+                    spec,
                     count,
                     elapsed,
                 )
@@ -167,76 +343,41 @@ class UrlQueryMixin(BaseDataAccess):
         match_filter: Optional[str] = None,  # "all", "matched", "unmatched", or specific list name
         limit: int = 100,
         offset: int = 0,
+        filters: Optional[UrlFilterSpec] = None,
     ) -> List[Dict[str, Any]]:
         """
-        Paginated URL listing with filtering.
+        Paginated URL listing with filtering (OFFSET-based).
+
+        Prefer ``fetch_url_rows_after`` for page navigation: OFFSET work grows
+        with the page depth (issue #61).
 
         Args:
             evidence_id: Evidence ID
-            domain_like: Domain filter pattern (SQL LIKE)
+            domain_like: Legacy domain filter pattern (SQL LIKE)
             url_like: URL filter pattern (SQL LIKE)
             tag_like: Tag filter pattern (SQL LIKE)
             discovered_by: Optional list of source filters
             match_filter: "all", "matched", "unmatched", or specific list name
             limit: Page size
             offset: Page offset
+            filters: Filter spec; overrides the legacy keyword filters when given
 
         Returns:
-            List of URL dictionaries
+            List of URL dictionaries in ``URL_ORDER_BY`` order
         """
         logger = logging.getLogger(__name__)
         start_time = time.time()
 
-        params: List[Any] = [evidence_id]
-        where = ["u.evidence_id = ?"]
+        spec = self._legacy_url_filter_spec(filters, domain_like, url_like, tag_like, discovered_by, match_filter)
+        where, params = build_url_filter_predicates(evidence_id, spec)
 
-        # Skip no-op wildcard filters for performance (Issue #47)
-        # LIKE '%' forces full-table evaluation - omit when not needed
-        if domain_like and domain_like != "%":
-            where.append("COALESCE(u.domain, '') LIKE ?")
-            params.append(domain_like)
-        if url_like and url_like != "%":
-            where.append("u.url LIKE ?")
-            params.append(url_like)
-
-        if tag_like and tag_like != "%":
-            where.append("""
-                EXISTS (
-                    SELECT 1 FROM tag_associations ta
-                    JOIN tags t ON ta.tag_id = t.id
-                    WHERE ta.artifact_type = 'url'
-                    AND ta.artifact_id = u.id
-                    AND t.name LIKE ?
-                )
-            """)
-            params.append(tag_like)
-
-        if discovered_by:
-            placeholders = ",".join("?" for _ in discovered_by)
-            where.append(f"u.discovered_by IN ({placeholders})")
-            params.extend(discovered_by)
-
-        # Match filter - use EXISTS for performance (no JOIN needed)
-        if match_filter and match_filter != "all":
-            if match_filter == "matched":
-                where.append("EXISTS (SELECT 1 FROM url_matches m WHERE m.url_id = u.id AND m.evidence_id = u.evidence_id)")
-            elif match_filter == "unmatched":
-                where.append("NOT EXISTS (SELECT 1 FROM url_matches m WHERE m.url_id = u.id AND m.evidence_id = u.evidence_id)")
-            else:
-                # Specific list name
-                where.append("EXISTS (SELECT 1 FROM url_matches m WHERE m.url_id = u.id AND m.evidence_id = u.evidence_id AND m.list_name = ?)")
-                params.append(match_filter)
-
-        # Removed GROUP_CONCAT - tags loaded on-demand via get_artifact_tags_str()
-        # This removes the LEFT JOIN overhead for every query (30-50% faster)
-        # Issue #47: Use first_seen_utc directly for ORDER BY to enable index usage
-        # NULLs sort to end with DESC, which is desired (timestamped URLs shown first)
+        # Tags/matches are batch-loaded separately (no GROUP_CONCAT JOIN).
+        # The id tie-breaker makes OFFSET batches deterministic (issue #61).
         sql = f"""
-            SELECT u.id, u.url, u.domain, u.scheme, u.discovered_by, u.first_seen_utc,
-                   u.last_seen_utc, u.source_path, u.notes, u.occurrence_count
+            SELECT {_URL_ROW_COLUMNS}
             FROM urls u
             WHERE {' AND '.join(where)}
-            ORDER BY u.first_seen_utc DESC
+            ORDER BY {URL_ORDER_BY}
             LIMIT ? OFFSET ?
         """
         params.extend([limit, offset])
@@ -253,40 +394,137 @@ class UrlQueryMixin(BaseDataAccess):
                 )
                 return results
 
+    def fetch_url_rows_after(
+        self,
+        evidence_id: int,
+        filters: UrlFilterSpec,
+        after: Optional[UrlCursor],
+        limit: int,
+    ) -> List[Dict[str, Any]]:
+        """
+        Return up to ``limit`` URL rows following ``after`` in ``URL_ORDER_BY`` order.
+
+        Issue #61 keyset pagination. Runs in two phases so NULL timestamps
+        (common, see #47) are not OR-ed into the timestamp range
+        (``first_seen_utc < ? OR first_seen_utc IS NULL``); each phase is an
+        index seek:
+
+        1. Timestamped rows after the cursor (skipped once the cursor is
+           inside the NULL bucket).
+        2. Rows without timestamp, by ascending id, if phase 1 ran short.
+
+        Args:
+            evidence_id: Evidence ID
+            filters: Filter spec
+            after: Cursor of the last row already returned (``None`` = start)
+            limit: Maximum number of rows to return
+
+        Returns:
+            List of URL dictionaries
+        """
+        logger = logging.getLogger(__name__)
+        start_time = time.time()
+        if limit <= 0:
+            return []
+
+        base_where, base_params = build_url_filter_predicates(evidence_id, filters)
+        rows: List[Dict[str, Any]] = []
+
+        with self._use_evidence_conn(evidence_id):
+            with self._connect() as conn:
+                if after is None or after.first_seen_utc is not None:
+                    where = base_where + ["u.first_seen_utc IS NOT NULL"]
+                    params = list(base_params)
+                    if after is not None:
+                        where.append("u.first_seen_utc <= ? AND (u.first_seen_utc < ? OR u.id > ?)")
+                        params.extend([after.first_seen_utc, after.first_seen_utc, after.id])
+                    sql = f"""
+                        SELECT {_URL_ROW_COLUMNS}
+                        FROM urls u
+                        WHERE {' AND '.join(where)}
+                        ORDER BY {URL_ORDER_BY}
+                        LIMIT ?
+                    """
+                    params.append(limit)
+                    rows.extend(dict(row) for row in conn.execute(sql, params).fetchall())
+
+                remaining = limit - len(rows)
+                if remaining > 0:
+                    where = base_where + ["u.first_seen_utc IS NULL"]
+                    params = list(base_params)
+                    if after is not None and after.first_seen_utc is None:
+                        where.append("u.id > ?")
+                        params.append(after.id)
+                    sql = f"""
+                        SELECT {_URL_ROW_COLUMNS}
+                        FROM urls u
+                        WHERE {' AND '.join(where)}
+                        ORDER BY u.id ASC
+                        LIMIT ?
+                    """
+                    params.append(remaining)
+                    rows.extend(dict(row) for row in conn.execute(sql, params).fetchall())
+
+        logger.info(
+            "fetch_url_rows_after: evidence_id=%s, after=%s, returned %d rows, elapsed=%.3fs",
+            evidence_id,
+            after,
+            len(rows),
+            time.time() - start_time,
+        )
+        return rows
+
+    def iter_url_rows(
+        self,
+        evidence_id: int,
+        filters: UrlFilterSpec,
+        *,
+        batch_size: int = 10000,
+    ) -> Iterator[Dict[str, Any]]:
+        """Yield every URL row matching ``filters`` in ``URL_ORDER_BY`` order.
+
+        Uses keyset batches, so the cost per batch does not grow with depth.
+        """
+        after: Optional[UrlCursor] = None
+        while True:
+            batch = self.fetch_url_rows_after(evidence_id, filters, after, batch_size)
+            yield from batch
+            if len(batch) < batch_size:
+                return
+            after = UrlCursor.from_row(batch[-1])
+
     def load_url_page(self, query: UrlPageQuery) -> UrlPage:
         """
-        Load one flat URL page with its total count and batch tag/match maps.
+        Load one flat URL page with batch tag/match maps.
 
         Issue #60: single entry point for background URL loading. The tag and
         match maps are complete for the returned rows (empty values included).
+        Issue #61: keyset page (``page_size + 1`` rows fetched to detect a next
+        page); the exact total is loaded separately via ``count_urls``.
 
         Args:
-            query: Filters and page state
+            query: Filters and page position
 
         Returns:
-            UrlPage with rows, total count, and per-row tag/match strings
+            UrlPage with rows, has_more flag, data version, and per-row tag/match strings
         """
-        filters = dict(
-            domain_like=query.domain_like,
-            url_like=query.url_like,
-            tag_like=query.tag_like,
-            discovered_by=query.discovered_by,
-            match_filter=query.match_filter,
+        with self._use_evidence_conn(query.evidence_id):
+            with self._connect() as conn:
+                data_version = conn.execute("PRAGMA data_version").fetchone()[0]
+        rows = self.fetch_url_rows_after(
+            query.evidence_id, query.filters, query.after, query.page_size + 1
         )
-        total_count = self.count_urls(query.evidence_id, **filters)
-        rows = self.iter_urls(
-            query.evidence_id,
-            **filters,
-            limit=query.page_size,
-            offset=query.page * query.page_size,
-        )
+        has_more = len(rows) > query.page_size
+        rows = rows[: query.page_size]
         url_ids = [row["id"] for row in rows if row.get("id")]
         tags: Dict[int, str] = {url_id: "" for url_id in url_ids}
         matches: Dict[int, str] = {url_id: "" for url_id in url_ids}
         if url_ids:
             tags.update(self.get_tag_strings_for_artifacts(query.evidence_id, "url", url_ids))
             matches.update(self.get_url_matches_batch(query.evidence_id, url_ids))
-        return UrlPage(query=query, rows=rows, total_count=total_count, tags=tags, matches=matches)
+        return UrlPage(
+            query=query, rows=rows, has_more=has_more, data_version=data_version, tags=tags, matches=matches
+        )
 
     def update_url_tags(self, evidence_id: int, url_id: int, tags_str: str) -> None:
         """

@@ -250,7 +250,7 @@ def test_urls_loading_benchmark(qapp, bench_case: UrlFixtureCase, monkeypatch):
                                 lambda: _loaded(tab) and tab.model.rowCount() > 0,
                                 counters, monitor, timeout_s))
         results.append(_measure(f"{label}:next", tab.next_button.click,
-                                lambda: tab.page_label.text().startswith("Showing 10001-"),
+                                lambda: tab.page_label.text().startswith(f"Showing {tab.model.page_size + 1:,}-"),
                                 counters, monitor, timeout_s))
         results.append(_measure(f"{label}:previous", tab.prev_button.click,
                                 lambda: tab.page_label.text().startswith("Showing 1-"),

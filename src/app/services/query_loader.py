@@ -61,6 +61,16 @@ def default_read_limiter() -> ReadLimiter:
     return _default_read_limiter
 
 
+# Separate limiter for long-running background reads that should not hold the
+# interactive slots, e.g. exact result totals (issue #61).
+DEFAULT_MAX_CONCURRENT_BACKGROUND_READS = 2
+_background_read_limiter = ReadLimiter(DEFAULT_MAX_CONCURRENT_BACKGROUND_READS)
+
+
+def background_read_limiter() -> ReadLimiter:
+    return _background_read_limiter
+
+
 @dataclass(frozen=True)
 class QueryRequest:
     generation: int

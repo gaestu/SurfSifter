@@ -1457,6 +1457,8 @@ class PreferencesDialog(QDialog):
 
         general = GeneralSettings(
             thumbnail_size=self.thumbnail_spin.value(),
+            # Set from the URLs tab pager, not this dialog; keep it.
+            url_page_size=self._original.general.url_page_size,
         )
 
         # Tool paths are managed by ToolRegistry if available
