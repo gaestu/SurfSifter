@@ -13,6 +13,7 @@ Exports:
 - Browser Downloads: insert_browser_download*, get_browser_downloads, delete_browser_downloads_by_run
 - Images: insert_image*, get_image*, delete_images_by_run
 - URLs: insert_url*, get_urls, delete_urls_by_run
+- URL search index: ensure_url_search_index, build_url_search_index_step, plan_url_search_candidates
 - Timeline: insert_timeline_*, get_timeline_*, delete_timeline_by_run
 - Process Log: insert_process_log, get_process_logs
 - Artifacts (bulk_extractor): insert_bitcoins, insert_emails, insert_ips, etc.
@@ -165,6 +166,19 @@ from .urls import (
     # Deduplication
     analyze_url_duplicates,
     deduplicate_urls,
+)
+
+# URL search index (issue #62)
+from .url_search_index import (
+    URL_SEARCH_INDEX_BUILD_TASK,
+    UrlSearchIndexStatus,
+    url_search_index_supported,
+    ensure_url_search_index,
+    get_url_search_index_status,
+    build_url_search_index_step,
+    reset_url_search_index,
+    url_search_match_query,
+    plan_url_search_candidates,
 )
 
 # URL Tags
@@ -772,6 +786,16 @@ __all__ = [
     # Deduplication
     "analyze_url_duplicates",
     "deduplicate_urls",
+    # URL search index
+    "URL_SEARCH_INDEX_BUILD_TASK",
+    "UrlSearchIndexStatus",
+    "url_search_index_supported",
+    "ensure_url_search_index",
+    "get_url_search_index_status",
+    "build_url_search_index_step",
+    "reset_url_search_index",
+    "url_search_match_query",
+    "plan_url_search_candidates",
     # URL Tags
     "insert_url_tags",
     "get_url_tags",

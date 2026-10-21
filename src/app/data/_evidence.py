@@ -10,6 +10,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
+from core.database.helpers.url_search_index import URL_SEARCH_INDEX_BUILD_TASK
+
 from ._base import BaseDataAccess
 
 
@@ -144,8 +146,9 @@ class EvidenceMetadataMixin(BaseDataAccess):
                     SELECT MAX(finished_at_utc)
                     FROM process_log
                     WHERE evidence_id = ?
+                      AND task IS NOT ?
                     """,
-                    (evidence_id,),
+                    (evidence_id, URL_SEARCH_INDEX_BUILD_TASK),
                 )
         last_run_str = str(last_run) if last_run else None
         return EvidenceCounts(

@@ -44,6 +44,7 @@ from core.logging import configure_logging, get_logger
 
 from .data.case_data import CaseDataAccess, EvidenceCounts
 from .features.urls import UrlsTab
+from .services.url_search_index_worker import wait_for_url_search_index_builds
 from .features.images import ImagesTab
 from .features.os_artifacts import OSArtifactsTab
 from .features.timeline import TimelineTab
@@ -1056,7 +1057,9 @@ class MainWindow(QMainWindow):
 
     def _load_existing_evidences(self) -> None:
         """Load evidences with immediate data loading (legacy behavior)."""
-        # Remove all evidence tabs (keep Case tab at index 0)
+        # Remove all evidence tabs (keep Case tab at index 0). Their URLs tabs
+        # may run background work on the previous case's databases.
+        self._shutdown_urls_tabs()
         while self.main_tabs.count() > 1:
             self.main_tabs.removeTab(1)
         self._evidence_tabs.clear()
@@ -1112,7 +1115,9 @@ class MainWindow(QMainWindow):
         Creates evidence tabs immediately but defers heavy data loading
         until each tab becomes visible.
         """
-        # Remove all evidence tabs (keep Case tab at index 0)
+        # Remove all evidence tabs (keep Case tab at index 0). Their URLs tabs
+        # may run background work on the previous case's databases.
+        self._shutdown_urls_tabs()
         while self.main_tabs.count() > 1:
             self.main_tabs.removeTab(1)
         self._evidence_tabs.clear()
@@ -2751,10 +2756,47 @@ class MainWindow(QMainWindow):
         case_metadata = self.case_data.get_case_metadata()
         case_id = case_metadata.get("case_id", "Unknown")
 
-        # Show export dialog
-        dialog = ExportDialog(self.case_path, case_id, self)
-        if dialog.exec() == QDialog.Accepted:
-            self.statusBar().showMessage("Case exported successfully", 5000)
+        # The URL search index build (#62) writes to evidence databases in the
+        # background; pause it so files are not changed while they are hashed
+        # and archived. Builds of closed tabs may still be finishing too.
+        urls_tabs = self._urls_tabs()
+        for urls_tab in urls_tabs:
+            urls_tab.pause_search_index_build(timeout_ms=0)
+        try:
+            if not wait_for_url_search_index_builds(15000):
+                self.logger.warning("URL search index build still running; export not started")
+                QMessageBox.warning(
+                    self,
+                    "Export Case",
+                    "The URL search index is still finishing a write to an evidence database.\n"
+                    "Please try the export again in a moment.",
+                )
+                return
+            # Show export dialog
+            dialog = ExportDialog(self.case_path, case_id, self)
+            if dialog.exec() == QDialog.Accepted:
+                self.statusBar().showMessage("Case exported successfully", 5000)
+        finally:
+            for urls_tab in urls_tabs:
+                urls_tab.resume_search_index_build()
+
+    def _shutdown_urls_tabs(self) -> None:
+        """Stop background work of all URLs tabs (e.g. before opening another case)."""
+        for urls_tab in self._urls_tabs():
+            try:
+                urls_tab.shutdown()
+            except Exception as e:
+                self.logger.warning("Error during URLs tab shutdown: %s", e)
+
+    def _urls_tabs(self) -> List[Any]:
+        """URLs tabs of the open evidence tabs."""
+        tabs = []
+        for index in range(1, self.main_tabs.count()):
+            widget = self.main_tabs.widget(index)
+            urls_tab = widget.property("urls_tab") if widget is not None else None
+            if urls_tab is not None:
+                tabs.append(urls_tab)
+        return tabs
 
     def _import_case(self) -> None:
         """Handle Import Case menu action."""

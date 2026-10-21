@@ -22,7 +22,7 @@ from ._case import CaseMetadataMixin
 from ._downloads import DownloadQueryMixin
 from ._evidence import EvidenceMetadataMixin, EvidenceCounts
 from ._images import ImageQueryMixin
-from ._urls import UrlCursor, UrlFilterSpec, UrlPage, UrlPageQuery, UrlQueryMixin
+from ._urls import UrlCursor, UrlFilterSpec, UrlPage, UrlPageQuery, UrlQueryMixin, UrlSearchIndexStatus
 from .case_data import CaseDataAccess
 
 __all__ = [
@@ -39,4 +39,5 @@ __all__ = [
     "UrlPage",
     "UrlPageQuery",
     "UrlQueryMixin",
+    "UrlSearchIndexStatus",
 ]

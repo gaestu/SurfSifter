@@ -1,4 +1,4 @@
-"""Opt-in URL query-plan and performance benchmark (issues #61, #67).
+"""Opt-in URL query-plan and performance benchmark (issues #61, #62, #67).
 
 Data layer only (no Qt). Builds a deterministic synthetic case on disk with
 ``tests/fixtures/url_fixtures.py`` (90% NULL ``first_seen_utc`` as in real data,
@@ -20,11 +20,17 @@ on several variants of the evidence database (copies of the base case):
 - ``source_pre0005_nostats``  idx_urls_evidence_source as before migration 0005
   (evidence_id, discovered_by)
 - ``source_0005_nostats``     the same copy after running the real migration 0005
+- ``search_index``   URL search index (issue #62) built; text-search filters only.
+  The other variants leave it unbuilt (as for an upgraded case), so their
+  text-search numbers are the scan baseline
 
 plus index sizes (dbstat), upgrade cost at first open (CREATE INDEX of
 migration 0004, migration 0005 script) on a populated table, ANALYZE /
-PRAGMA optimize cost, and URL ingest time with all indexes (``current``),
-without the 0004 index, and with the pre-0005 source index. Timings are medians in ms. Only
+PRAGMA optimize cost, URL search index build time and size, and URL ingest
+time with all indexes (``current``), without the 0004 index, and with the
+pre-0005 source index. The search index's write overhead is an A/B on the same
+file (index objects dropped inside a rolled-back transaction, alternating, median
+of ``REPEAT``): deleting indexed URLs, and inserting new URLs. Timings are medians in ms. Only
 correctness invariants are asserted (cursor page == OFFSET page, count ==
 keyset walk, identical results across variants), never timing thresholds.
 
@@ -96,8 +102,27 @@ FILTERS: Dict[str, UrlFilterSpec] = {
     "matched": UrlFilterSpec(match_filter="matched"),  # 5%
     "unmatched": UrlFilterSpec(match_filter="unmatched"),  # 95%
     "match_list": UrlFilterSpec(match_filter="list1"),  # ~1.7%
+    # Literal URL substring search (issue #62). Fixture URLs are
+    # https://d{i % 1000}.example.com/path/{i}?q={i % 97}.
+    "text_rare": UrlFilterSpec(url_contains="/PATH/123456?"),  # 1 row from 123457 rows (ASCII case-insensitive)
+    "text_nohit": UrlFilterSpec(url_contains="zzqq"),  # none
+    "text_prefix": UrlFilterSpec(url_contains="/path/4242"),  # i starting with 4242: 1+10+100+...
+    "text_q96": UrlFilterSpec(url_contains="?q=96"),  # ~1% (10.3k per 1M)
+    "text_domain_part": UrlFilterSpec(url_contains="d12"),  # ~1.1% plus paths containing d12 (none)
+    "text_common": UrlFilterSpec(url_contains="q=5"),  # ~11%: above the candidate cap, scans
+    "text_everywhere": UrlFilterSpec(url_contains="example"),  # 100%
+    "text_short": UrlFilterSpec(url_contains="/9"),  # 2 chars: always scans
+    "text_rare_source": UrlFilterSpec(url_contains="?q=96", discovered_by=("bulk_extractor",)),
 }
 DOMAIN_FILTERS = ("domain_exact", "domain_exact_ts", "domain_contains_rare")
+TEXT_FILTERS = tuple(name for name in FILTERS if name.startswith("text_"))
+NON_TEXT_FILTERS = tuple(name for name in FILTERS if name not in TEXT_FILTERS)
+SEARCH_INDEX_TABLE = "urls_search_index"
+SEARCH_INDEX_OBJECTS_SQL = (
+    "DROP TRIGGER IF EXISTS urls_search_index_ad",
+    "DROP TRIGGER IF EXISTS urls_search_index_au",
+    f"DROP TABLE IF EXISTS {SEARCH_INDEX_TABLE}",
+)
 SOURCE_FILTERS = ("default", "source_one", "source_no_ts", "source_two")
 
 
@@ -151,7 +176,8 @@ class _SqlTrace:
         self.conn.set_trace_callback(None)
 
     def _on_sql(self, sql: str) -> None:
-        if self.step == "setup" or "FROM urls u" not in sql:
+        # "JOIN urls u": candidate rows from the URL search index (issue #62).
+        if self.step == "setup" or ("FROM urls u" not in sql and "JOIN urls u" not in sql):
             return
         if "COUNT(*)" in sql:
             kind = "count"
@@ -268,6 +294,59 @@ def _script_ms(db_path: Path, script: str) -> float:
 def _migration_sql(number: int) -> str:
     (path,) = EVIDENCE_MIGRATIONS_DIR.glob(f"{number:04d}_*.sql")
     return path.read_text()
+
+
+def _search_index_bytes(db_path: Path) -> int:
+    """Bytes of the URL search index (FTS5 shadow tables and their indexes)."""
+    conn = _raw(db_path)
+    try:
+        return conn.execute(
+            "SELECT COALESCE(SUM(pgsize), 0) FROM dbstat WHERE aggregate = 1 AND name LIKE ?",
+            (f"{SEARCH_INDEX_TABLE}%",),
+        ).fetchone()[0]
+    finally:
+        conn.close()
+
+
+def _search_index_write_ab(db_path: Path, rows: int) -> Dict[str, float]:
+    """Same-file A/B of the search index's write overhead (issue #62).
+
+    Each run is rolled back; the "without" runs drop the index objects inside
+    their transaction. Runs alternate to cancel cache and load drift; medians.
+    """
+    conn = _raw(db_path)
+    new_rows = [
+        (1, f"https://ingest{i}.example/p/{i}?x={i % 97}", "ingest.example", "https", "bench", None, None)
+        for i in range(rows)
+    ]
+    work = {
+        "delete_indexed": lambda: conn.execute(
+            "DELETE FROM urls WHERE id IN (SELECT id FROM urls ORDER BY id LIMIT ?)", (rows,)),
+        "insert": lambda: conn.executemany(
+            "INSERT INTO urls(evidence_id, url, domain, scheme, discovered_by, first_seen_utc, last_seen_utc) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)", new_rows),
+    }
+    results: Dict[str, float] = {"rows": rows}
+    try:
+        for name, run in work.items():
+            timings: Dict[str, List[float]] = {"with": [], "without": []}
+            for _ in range(REPEAT):
+                for variant in ("without", "with"):
+                    conn.execute("BEGIN IMMEDIATE")
+                    try:
+                        if variant == "without":
+                            for statement in SEARCH_INDEX_OBJECTS_SQL:
+                                conn.execute(statement)
+                        start = time.perf_counter()
+                        run()
+                        timings[variant].append((time.perf_counter() - start) * 1000)
+                    finally:
+                        conn.execute("ROLLBACK")
+            for variant, values in timings.items():
+                results[f"{name}_{variant}_index_ms"] = round(statistics.median(values), 1)
+    finally:
+        conn.close()
+    return results
 
 
 def _index_sizes(db_path: Path) -> Dict[str, int]:
@@ -405,7 +484,7 @@ def test_url_query_benchmark(bench_case, work_dir: Path):
     # No planner statistics (the app never runs ANALYZE), then approximate / full stats.
     folder, db = _copy_case(case, work_dir, "nostats")
     _drop_stats(db)
-    variants["nostats"] = _run_filters(case, folder, FILTERS)
+    variants["nostats"] = _run_filters(case, folder, NON_TEXT_FILTERS)
     conn = _raw(db)
     try:  # Does PRAGMA optimize (3.45 semantics) analyze urls after it was queried?
         conn.execute("SELECT id FROM urls WHERE evidence_id = 1 AND domain = 'x' COLLATE NOCASE").fetchall()
@@ -416,7 +495,7 @@ def test_url_query_benchmark(bench_case, work_dir: Path):
         conn.close()
     _drop_stats(db)
     costs["analyze_limit_1000_ms"] = _exec_ms(db, "PRAGMA analysis_limit = 1000", "ANALYZE")
-    variants["approx_stats"] = _run_filters(case, folder, FILTERS)
+    variants["approx_stats"] = _run_filters(case, folder, NON_TEXT_FILTERS)
     costs["analyze_full_ms"] = _exec_ms(db, "ANALYZE")
     shutil.rmtree(folder)
 
@@ -437,6 +516,21 @@ def test_url_query_benchmark(bench_case, work_dir: Path):
     variants["source_pre0005_nostats"] = _run_filters(case, folder, SOURCE_FILTERS)
     costs["migration_0005_ms"] = _script_ms(db, _migration_sql(5))
     variants["source_0005_nostats"] = _run_filters(case, folder, SOURCE_FILTERS)
+    shutil.rmtree(folder)
+
+    # URL search index (issue #62): build (batched, resumable) on a copy,
+    # then text search with the index, then delete cost with/without triggers.
+    folder, db = _copy_case(case, work_dir, "search_index")
+    data = CaseDataAccess(folder, folder / case.case_db_path.name)
+    try:
+        eid = case.evidence_ids[0]
+        costs["search_index_build_ms"], status = _timed(lambda: data.build_url_search_index(eid))
+        assert status.is_ready, status
+    finally:
+        data.close()
+    results["sizes"][f"{SEARCH_INDEX_TABLE} (all shadow tables)"] = _search_index_bytes(db)
+    variants["search_index"] = _run_filters(case, folder, TEXT_FILTERS)
+    costs["search_index_write_ab"] = _search_index_write_ab(db, max(1, min(100_000, ROWS // 10)))
     shutil.rmtree(folder)
 
     # Results must not depend on plans/indexes.

@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import Dict, Optional
 
 from .connection import init_db, migrate
+from .helpers.url_search_index import ensure_url_search_index
 from core.logging import get_logger
 
 __all__ = [
@@ -365,6 +366,9 @@ class DatabaseManager:
             _ensure_autofill_enhancement_columns(conn)
             # Ensure DPAPI decrypt columns exist (handles pre-DPAPI upgrade path)
             _ensure_dpapi_decrypt_columns(conn)
+            # URL search index objects (issue #62); never raises, so missing
+            # FTS5 support cannot block opening the case.
+            ensure_url_search_index(conn)
 
         # Cache the connection
         with self._cache_lock:

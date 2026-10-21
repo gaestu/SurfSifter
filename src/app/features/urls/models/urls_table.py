@@ -68,6 +68,15 @@ class UrlsTableModel(QAbstractTableModel):
         # PRAGMA data_version of the last loaded page; a change means another
         # connection wrote to the evidence DB (e.g. tag merge in the Tags tab).
         self._data_version: Optional[int] = None
+        # Background writes the tab started itself (URL search index build,
+        # issue #62) change data_version without changing URL data. While they
+        # run, a data_version change is set aside instead of hiding row
+        # numbers on every page; a set-aside change is applied once, on the
+        # first page after they ended, since a real unnotified write (e.g. a
+        # tag merge in the Tags tab) may have happened meanwhile.
+        self._own_writes_active = False
+        self._own_writes_settling = False
+        self._own_writes_change_seen = False
         # False after an unnotified change was detected away from page 1:
         # earlier pages may have changed, so page * page_size is no longer
         # the true row position. Exact again once back on page 1.
@@ -176,6 +185,7 @@ class UrlsTableModel(QAbstractTableModel):
         self._count_cache.clear()
         # data_version is per connection; a new case means new connections.
         self._data_version = None
+        self._own_writes_settling = self._own_writes_change_seen = False
         self._reset_position()
         self._clear_rows()
 
@@ -192,6 +202,7 @@ class UrlsTableModel(QAbstractTableModel):
             # Never show rows/caches of a different evidence.
             self._clear_rows()
             self._data_version = None
+            self._own_writes_settling = self._own_writes_change_seen = False
         self.evidence_id = evidence_id
         self._reset_position()
         if reload:
@@ -288,6 +299,20 @@ class UrlsTableModel(QAbstractTableModel):
         if not keep_position:
             self._reset_position()
 
+    def begin_own_writes(self) -> None:
+        """The tab started background writes that do not change URL data (#62)."""
+        self._own_writes_active = True
+
+    def end_own_writes(self) -> None:
+        """Those writes ended; the next loaded page applies a set-aside change."""
+        if self._own_writes_active:
+            self._own_writes_active = False
+            self._own_writes_settling = True
+
+    def has_set_aside_change(self) -> bool:
+        """True if a data_version change was set aside and not applied yet."""
+        return self._own_writes_change_seen
+
     def _cursor_for_page(self, page: int) -> Optional[UrlCursor]:
         if 0 <= page < len(self._page_starts):
             return self._page_starts[page]
@@ -334,11 +359,19 @@ class UrlsTableModel(QAbstractTableModel):
         query = page.query
         # Only a page requested at the current data revision may define the total.
         fresh = query.data_revision == self._data_revision
-        if (
+        changed = (
             page.data_version is not None
             and self._data_version is not None
             and page.data_version != self._data_version
-        ):
+        )
+        if changed and (self._own_writes_active or self._own_writes_settling):
+            self._own_writes_change_seen = True
+            changed = False
+        if self._own_writes_settling and not self._own_writes_active:
+            self._own_writes_settling = False
+            changed = changed or self._own_writes_change_seen
+            self._own_writes_change_seen = False
+        if changed:
             # Written by a connection that did not notify us: cached totals
             # may be stale. Rows of this page are fresh, so keep the position
             # (unrelated writes, e.g. a running extraction, also land here),

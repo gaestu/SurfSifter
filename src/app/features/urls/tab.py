@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, Iterable, Optional, List
@@ -28,7 +29,7 @@ from PySide6.QtWidgets import (
     QApplication,
 )
 
-from app.data import UrlFilterSpec, UrlPage
+from app.data import UrlFilterSpec, UrlPage, UrlSearchIndexStatus
 from app.data.case_data import CaseDataAccess
 from app.features.urls.models import UrlsTableModel, UrlsGroupedModel
 from app.services.matching_workers import UrlMatchWorker
@@ -38,6 +39,7 @@ from app.services.query_loader import (
     QueryResult,
     background_read_limiter,
 )
+from app.services.url_search_index_worker import UrlSearchIndexWorker
 from app.common import add_sandbox_url_actions
 
 logger = logging.getLogger(__name__)
@@ -199,6 +201,21 @@ class UrlsTab(QWidget):
         self._flat_stale = False
         self._grouped_stale = True
 
+        # Background URL search index build (issue #62); search never waits
+        # for it (URLs not indexed yet are scanned).
+        self._index_worker: Optional[UrlSearchIndexWorker] = None
+        # True once the running build reported a batch (it committed writes).
+        self._index_worker_wrote = False
+        # Set by shutdown(): no background work may start afterwards.
+        self._shut_down = False
+        # Set while the main window needs the evidence DB unchanged (export).
+        self._search_index_paused = False
+        # Builds stopped without waiting that may still commit a batch.
+        self._stopping_index_workers: List[UrlSearchIndexWorker] = []
+        # A start requested while a flat page load was in flight (see
+        # _start_search_index_build); done once that page is applied.
+        self._start_index_after_load = False
+
         # URL match worker lifecycle
         self.match_worker: Optional[UrlMatchWorker] = None
         self._pending_match_workers: List[UrlMatchWorker] = []
@@ -242,6 +259,12 @@ class UrlsTab(QWidget):
         self.search_button.setToolTip("Click to apply search filter")
         self.search_button.clicked.connect(self._on_search_clicked)
         search_layout.addWidget(self.search_button)
+
+        # Search index state (issue #62); hidden while the index is ready.
+        self.search_index_label = QLabel()
+        self.search_index_label.setStyleSheet("color: palette(mid);")
+        self.search_index_label.hide()
+        search_layout.addWidget(self.search_index_label)
 
         filter_layout.addLayout(search_layout, 0, 3)
 
@@ -362,6 +385,7 @@ class UrlsTab(QWidget):
             self._data_worker_generation += 1
             self._stop_url_loader()
             self._stop_count_loader()
+            self._stop_search_index_build()
         self.case_data = case_data
         self.model.set_case_data(case_data)
         self.group_model.set_case_data(case_data)
@@ -389,6 +413,7 @@ class UrlsTab(QWidget):
             # Reject in-flight results and stop work for the previous evidence.
             self._cancel_flat_load()
             self._cancel_count()
+            self._stop_search_index_build()
         self.evidence_id = evidence_id
         self._evidence_label_cache = evidence_label  #
         self._data_loaded = False
@@ -430,6 +455,8 @@ class UrlsTab(QWidget):
         """
         self.model.mark_data_changed(keep_position=False)
         self._reload_visible_view(0)
+        # New URLs (e.g. after ingestion) are indexed in the background.
+        self._start_search_index_build()
 
     def _on_tags_changed(self) -> None:
         """Reload after tagging (dialog or inline Tags edit): totals are recounted.
@@ -494,6 +521,17 @@ class UrlsTab(QWidget):
             QTimer.singleShot(10, self.refresh)
         elif self._data_loaded:
             QTimer.singleShot(10, self._recheck_flat_page)
+        if self._data_loaded or self._load_pending:
+            QTimer.singleShot(10, self._start_search_index_build)
+
+    def hideEvent(self, event):
+        """Pause the search index build while hidden; showing the tab resumes it (#62).
+
+        Minimizing the window (a spontaneous hide) does not pause it.
+        """
+        if not event.spontaneous():
+            self._stop_search_index_build(timeout_ms=0)
+        super().hideEvent(event)
 
     def _recheck_flat_page(self) -> None:
         """Quietly reload the shown flat page to detect unnotified writes (issue #67).
@@ -562,13 +600,7 @@ class UrlsTab(QWidget):
         self._filter_worker_generation += 1
         current_gen = self._filter_worker_generation
 
-        # Keep old worker alive until it finishes (prevents QThread destruction crash).
-        if self._filter_worker is not None:
-            if self._filter_worker.isRunning():
-                self._pending_filter_workers.append(self._filter_worker)
-            else:
-                self._filter_worker.deleteLater()
-            self._filter_worker = None
+        self._retire_filter_worker()
         self._pending_filter_workers = [w for w in self._pending_filter_workers if w.isRunning()]
 
         # Show loading state
@@ -591,6 +623,21 @@ class UrlsTab(QWidget):
         self._filter_worker.start()
 
         logger.debug("Started background filter loading for evidence_id=%s", self.evidence_id)
+
+    def _retire_filter_worker(self) -> None:
+        """Drop the current filter worker, keeping it referenced until its thread ends.
+
+        Its result signal is emitted from inside run(), so the thread may still
+        be running when the result arrives; dropping the last reference then
+        would destroy a running QThread (Qt aborts).
+        """
+        worker, self._filter_worker = self._filter_worker, None
+        if worker is None:
+            return
+        if worker.isRunning():
+            self._pending_filter_workers.append(worker)
+        else:
+            worker.deleteLater()
 
     def _set_filters_empty(self) -> None:
         """Set filters to empty state (no case data)."""
@@ -667,7 +714,7 @@ class UrlsTab(QWidget):
             return
 
         self._filters_loading = False
-        self._filter_worker = None
+        self._retire_filter_worker()
 
         # Populate domains (with count info)
         domains_data = data.get("domains", {})
@@ -747,7 +794,7 @@ class UrlsTab(QWidget):
             return
 
         self._filters_loading = False
-        self._filter_worker = None
+        self._retire_filter_worker()
 
         logger.error("Filter loading failed: %s", error)
 
@@ -860,6 +907,8 @@ class UrlsTab(QWidget):
         self._flat_stale = True
         if self._data_loading:
             self._cancel_flat_load()
+            # A build start waiting for that load would otherwise never run.
+            self._start_deferred_search_index_build()
 
     def _reload_visible_view(self, page: int) -> None:
         """Reload only the visible view; mark the other view stale."""
@@ -906,6 +955,165 @@ class UrlsTab(QWidget):
         self._count_loader.result_ready.connect(self._on_count_loaded)
         self._count_loader.failed.connect(self._on_count_error)
         return self._count_loader
+
+    # URL search index (issue #62) ---------------------------------------
+
+    def pause_search_index_build(self, timeout_ms: int = 15000) -> bool:
+        """Stop the search index build until ``resume_search_index_build``.
+
+        For actions that need the evidence database unchanged (case export).
+        Waits for the running batch to commit or roll back.
+
+        Returns:
+            True if no build is running anymore.
+        """
+        self._search_index_paused = True
+        deadline = time.monotonic() + timeout_ms / 1000
+        self._stop_search_index_build(timeout_ms=timeout_ms)
+        # Also wait for builds stopped earlier without waiting (e.g. on hide).
+        for worker in list(self._stopping_index_workers):
+            remaining_ms = max(0, int((deadline - time.monotonic()) * 1000))
+            if worker.isRunning() and remaining_ms:
+                worker.wait(remaining_ms)
+        self._prune_stopping_index_workers()
+        return not self._stopping_index_workers
+
+    def resume_search_index_build(self) -> None:
+        """Undo ``pause_search_index_build`` (restarts the build if shown)."""
+        self._search_index_paused = False
+        self._start_search_index_build()
+
+    def _start_search_index_build(self) -> None:
+        """Start or resume the background search index build for the shown evidence.
+
+        Runs while the tab is shown; a finished index makes the worker end
+        after one status check. Stopped (after its running batch) when the
+        tab is hidden, on evidence/case change, pause and shutdown.
+        """
+        if (
+            self._shut_down
+            or self._search_index_paused
+            or not self.isVisible()
+            or not self.case_data
+            or self.evidence_id is None
+        ):
+            return
+        if self._data_loading:
+            # A page in flight may have read data_version before an
+            # unnotified external write; once the build runs, such a change
+            # would be set aside as the build's own. Start after it is applied.
+            self._start_index_after_load = True
+            return
+        worker = self._index_worker
+        if (
+            worker is not None
+            and worker.evidence_id == self.evidence_id
+            and not worker.is_cancelled()
+            and not worker.isFinished()
+        ):
+            return  # already running for this evidence
+        self._stop_search_index_build()
+        case_folder = getattr(self.case_data, "case_folder", None)
+        case_db_path = getattr(self.case_data, "db_path", None)
+        if case_folder is None or case_db_path is None:
+            return
+        worker = UrlSearchIndexWorker(Path(case_folder), Path(case_db_path), int(self.evidence_id))
+        worker.progress.connect(self._on_search_index_progress)
+        worker.completed.connect(self._show_search_index_status)
+        worker.failed.connect(self._on_search_index_failed)
+        worker.finished.connect(lambda w=worker: self._on_search_index_worker_finished(w))
+        self._index_worker = worker
+        self._index_worker_wrote = False
+        # Its commits change data_version without changing URL data.
+        self.model.begin_own_writes()
+        worker.start()
+
+    def _stop_search_index_build(self, timeout_ms: int = 0) -> bool:
+        """Cancel the build (it stops after the running batch) and hide its state.
+
+        Waits up to ``timeout_ms`` for the running batch (0: do not wait; the
+        worker is kept alive until it ends). Returns True if it has ended.
+        """
+        worker, self._index_worker = self._index_worker, None
+        self._start_index_after_load = False
+        self.search_index_label.hide()
+        if worker is None:
+            return True
+        self.model.end_own_writes()
+        for signal in (worker.progress, worker.completed, worker.failed, worker.finished):
+            try:
+                signal.disconnect()
+            except (RuntimeError, TypeError):
+                pass
+        if worker.stop(timeout_ms):
+            worker.deleteLater()
+            return True
+        self._prune_stopping_index_workers()
+        self._stopping_index_workers.append(worker)
+        return False
+
+    def _prune_stopping_index_workers(self) -> None:
+        self._stopping_index_workers = [w for w in self._stopping_index_workers if w.isRunning()]
+
+    def _start_deferred_search_index_build(self) -> None:
+        if self._start_index_after_load and not self._data_loading:
+            self._start_index_after_load = False
+            self._start_search_index_build()
+
+    def _on_search_index_worker_finished(self, worker: UrlSearchIndexWorker) -> None:
+        if self._index_worker is worker:
+            self._index_worker = None
+            self.model.end_own_writes()
+            if self._index_worker_wrote or self.model.has_set_aside_change():
+                # Apply a set-aside change now instead of on the next page load
+                # (guarded: no-op while a load is running or the view is hidden).
+                self._recheck_flat_page()
+        worker.deleteLater()
+
+    def _on_search_index_progress(self, evidence_id: int, status: UrlSearchIndexStatus) -> None:
+        if evidence_id != self.evidence_id:
+            return
+        self._index_worker_wrote = True
+        self._show_search_index_status(evidence_id, status)
+
+    def _show_search_index_status(self, evidence_id: int, status: UrlSearchIndexStatus) -> None:
+        if evidence_id != self.evidence_id:
+            return
+        label = self.search_index_label
+        if status.state == UrlSearchIndexStatus.READY:
+            label.hide()
+            return
+        if status.state == UrlSearchIndexStatus.BUILDING:
+            label.setText(f"Search index: building {int(status.progress * 100)}%")
+            label.setToolTip(
+                "Indexing URLs for fast text search. Results are complete meanwhile: "
+                "URLs not indexed yet are scanned."
+            )
+        elif status.state == UrlSearchIndexStatus.UNSUPPORTED:
+            label.setText("Search index: unavailable")
+            label.setToolTip(
+                "This SQLite build lacks FTS5 trigram support. URL text search scans "
+                "all URLs: results are complete, but slower on large evidence."
+            )
+        else:
+            label.setText("Search index: unavailable")
+            label.setToolTip(
+                "The search index could not be set up (see the log). URL text search "
+                "scans all URLs: results are complete, but slower on large evidence."
+            )
+        label.show()
+
+    def _on_search_index_failed(self, evidence_id: int, error: str) -> None:
+        if evidence_id != self.evidence_id:
+            return
+        logger.error("URL search index build failed: %s", error)
+        self.search_index_label.setText("Search index: build failed")
+        self.search_index_label.setToolTip(
+            f"Building the search index failed: {error}\n"
+            "Results stay complete: URLs not indexed yet are scanned. "
+            "The build is retried when the tab is shown again."
+        )
+        self.search_index_label.show()
 
     @staticmethod
     def _stop_loader(loader: Optional[CancellableQueryWorker], timeout_ms: int) -> None:
@@ -1046,6 +1254,7 @@ class UrlsTab(QWidget):
             # Recount if the page revealed an unnotified data change.
             self._request_count()
         self._update_page_label()
+        self._start_deferred_search_index_build()
 
         logger.debug("Data loading complete: %d rows, has_more=%s", len(page.rows), page.has_more)
 
@@ -1059,12 +1268,14 @@ class UrlsTab(QWidget):
             # A failed background re-check (issue #67) keeps the shown page.
             logger.warning("URL page re-check failed: %s", error)
             self._update_page_label()
+            self._start_deferred_search_index_build()
             return
         logger.error("Data loading failed: %s", error)
 
         # Reset to empty state
         self.model.clear_page()
         self._update_page_label()
+        self._start_deferred_search_index_build()
 
     def _is_current_count(self, generation: int, evidence_id: int) -> bool:
         return generation == self._count_generation and evidence_id == self.evidence_id
@@ -1578,6 +1789,7 @@ class UrlsTab(QWidget):
         Called by MainWindow.closeEvent() and _on_close_evidence_tab() to prevent
         Qt abort from destroying QThread while still running.
         """
+        self._shut_down = True
         # Invalidate all pending callbacks.
         self._filter_worker_generation += 1
         self._data_worker_generation += 1
@@ -1615,6 +1827,7 @@ class UrlsTab(QWidget):
             self._filter_worker = None
         self._stop_url_loader()
         self._stop_count_loader()
+        self._stop_search_index_build(timeout_ms=2000)
         if self.match_worker is not None:
             _stop_worker(self.match_worker, "UrlMatchWorker")
             self.match_worker = None

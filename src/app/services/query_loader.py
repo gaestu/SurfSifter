@@ -87,9 +87,31 @@ class QueryResult:
 
 QueryHandler = Callable[[Any, QueryRequest], Any]
 
-# Workers that did not stop within the shutdown timeout are kept referenced
-# here until their thread finishes (prevents QThread destruction while running).
-_retiring_workers: Set["CancellableQueryWorker"] = set()
+# Threads that did not stop within the shutdown timeout are kept referenced
+# here until they finish (prevents QThread destruction while running).
+_retiring_threads: Set[QThread] = set()
+
+
+def wait_or_retire(thread: QThread, timeout_ms: int, name: str) -> bool:
+    """Wait up to ``timeout_ms`` for ``thread`` (already told to stop) to finish.
+
+    Returns True if it has finished. Otherwise it is kept referenced until it
+    finishes on its own (no forced termination, so it can close its own
+    connections) and False is returned.
+    """
+    if not thread.isRunning():
+        return True
+    if timeout_ms > 0 and thread.wait(timeout_ms):
+        return True
+    if timeout_ms > 0:
+        logger.warning("%s still stopping after %dms; keeping it alive until it ends", name, timeout_ms)
+    _retiring_threads.add(thread)
+    thread.finished.connect(lambda t=thread: _retiring_threads.discard(t))
+    if thread.isFinished():
+        # Finished between wait() and connect(): finished was already emitted.
+        _retiring_threads.discard(thread)
+        return True
+    return False
 
 
 class CancellableQueryWorker(QThread):
@@ -158,18 +180,7 @@ class CancellableQueryWorker(QThread):
             if self._active_cancel is not None:
                 self._active_cancel.set()
             self._cond.notify_all()
-        if not self.isRunning():
-            return True
-        if self.wait(timeout_ms):
-            return True
-        logger.warning("%s still stopping after %dms; keeping it alive until it ends", self._name, timeout_ms)
-        _retiring_workers.add(self)
-        self.finished.connect(lambda worker=self: _retiring_workers.discard(worker))
-        if self.isFinished():
-            # Finished between wait() and connect(): finished was already emitted.
-            _retiring_workers.discard(self)
-            return True
-        return False
+        return wait_or_retire(self, timeout_ms, self._name)
 
     # Worker thread -----------------------------------------------------
 

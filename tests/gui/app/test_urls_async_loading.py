@@ -174,6 +174,11 @@ def url_case(tmp_path):
         tag_every=5, match_every=4, domain_count=5,
     )
     data = CaseDataAccess(case.case_folder, case.case_db_path)
+    # Build the URL search index up front: these tests are about loading and
+    # counting, and a first-show build would commit while they run (its
+    # interplay with paging is tested in test_urls_search_index_build.py).
+    for evidence_id in case.evidence_ids:
+        assert data.build_url_search_index(evidence_id).is_ready
     yield case, data
     data.close()
 

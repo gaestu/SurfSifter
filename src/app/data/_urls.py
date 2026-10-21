@@ -6,6 +6,7 @@ This module provides URL-specific queries for the UI:
 - Tag-aware queries via tag_associations
 - Match filtering (matched/unmatched/specific list)
 - Domain and source listing with caching
+- Indexed URL substring search with scan fallback (issue #62)
 
 Extracted from case_data.py for modular repository pattern.
 """
@@ -15,9 +16,17 @@ import logging
 import sqlite3
 import time
 from dataclasses import dataclass, field, replace
-from typing import Any, Dict, Iterable, Iterator, List, Optional, Tuple
+from typing import Any, Callable, Dict, Iterable, Iterator, List, Optional, Tuple
 
 from core.database.helpers.sql_utils import LIKE_ESCAPE_CHAR, escape_like
+from core.database.helpers.url_search_index import (
+    URL_SEARCH_BUILD_BATCH_SIZE,
+    URL_SEARCH_INDEX_BUILD_TASK,
+    UrlSearchIndexStatus,
+    build_url_search_index_step,
+    get_url_search_index_status,
+    plan_url_search_candidates,
+)
 
 from ._base import BaseDataAccess
 
@@ -189,6 +198,24 @@ def build_url_filter_predicates(evidence_id: int, spec: UrlFilterSpec) -> Tuple[
     return where, params
 
 
+def build_url_from_clause(conn: sqlite3.Connection, spec: UrlFilterSpec) -> Tuple[str, List[Any]]:
+    """Return the ``FROM`` clause (alias ``u``) and its params for ``spec``.
+
+    Issue #62: for a literal URL substring (``url_contains``) the URL search
+    index may narrow the rows to a candidate set; otherwise (and whenever the
+    index cannot serve the term) ``urls`` is scanned. The WHERE predicates of
+    ``build_url_filter_predicates`` (including the literal ``LIKE``) are applied
+    either way, so the choice never changes results or their order. The
+    ``CROSS JOIN`` keeps SQLite from scanning ``urls`` first.
+    """
+    if spec.url_contains is not None:
+        plan = plan_url_search_candidates(conn, spec.url_contains)
+        if plan is not None:
+            candidates_sql, params = plan
+            return f"FROM ({candidates_sql}) c CROSS JOIN urls u ON u.id = c.id", list(params)
+    return "FROM urls u", []
+
+
 @dataclass(frozen=True)
 class UrlCursor:
     """Keyset position in the URL sort order: the last row of a page."""
@@ -325,21 +352,22 @@ class UrlQueryMixin(BaseDataAccess):
         spec = self._legacy_url_filter_spec(filters, domain_like, url_like, tag_like, discovered_by, match_filter)
         where, params = build_url_filter_predicates(evidence_id, spec)
 
-        # Fast COUNT query (no JOIN, no GROUP_CONCAT)
-        sql = f"""
-            SELECT COUNT(*)
-            FROM urls u
-            WHERE {' AND '.join(where)}
-        """
-
         with self._use_evidence_conn(evidence_id):
             with self._connect() as conn:
-                count = conn.execute(sql, params).fetchone()[0]
+                from_sql, from_params = build_url_from_clause(conn, spec)
+                # Fast COUNT query (no JOIN, no GROUP_CONCAT)
+                sql = f"""
+                    SELECT COUNT(*)
+                    {from_sql}
+                    WHERE {' AND '.join(where)}
+                """
+                count = conn.execute(sql, from_params + params).fetchone()[0]
                 elapsed = time.time() - start_time
                 logger.info(
-                    "count_urls: evidence_id=%s, filters=%s, count=%d, elapsed=%.3fs",
+                    "count_urls: evidence_id=%s, filters=%s, search_index=%s, count=%d, elapsed=%.3fs",
                     evidence_id,
                     spec,
+                    bool(from_params),
                     count,
                     elapsed,
                 )
@@ -384,19 +412,20 @@ class UrlQueryMixin(BaseDataAccess):
         spec = self._legacy_url_filter_spec(filters, domain_like, url_like, tag_like, discovered_by, match_filter)
         where, params = build_url_filter_predicates(evidence_id, spec)
 
-        # Tags/matches are batch-loaded separately (no GROUP_CONCAT JOIN).
-        # The id tie-breaker makes OFFSET batches deterministic (issue #61).
-        sql = f"""
-            SELECT {_URL_ROW_COLUMNS}
-            FROM urls u
-            WHERE {' AND '.join(where)}
-            ORDER BY {URL_ORDER_BY}
-            LIMIT ? OFFSET ?
-        """
         params.extend([limit, offset])
         with self._use_evidence_conn(evidence_id):
             with self._connect() as conn:
-                cursor = conn.execute(sql, params)
+                from_sql, from_params = build_url_from_clause(conn, spec)
+                # Tags/matches are batch-loaded separately (no GROUP_CONCAT JOIN).
+                # The id tie-breaker makes OFFSET batches deterministic (issue #61).
+                sql = f"""
+                    SELECT {_URL_ROW_COLUMNS}
+                    {from_sql}
+                    WHERE {' AND '.join(where)}
+                    ORDER BY {URL_ORDER_BY}
+                    LIMIT ? OFFSET ?
+                """
+                cursor = conn.execute(sql, from_params + params)
                 results = [dict(row) for row in cursor.fetchall()]
                 elapsed = time.time() - start_time
                 logger.info(
@@ -445,15 +474,16 @@ class UrlQueryMixin(BaseDataAccess):
 
         with self._use_evidence_conn(evidence_id):
             with self._connect() as conn:
+                from_sql, from_params = build_url_from_clause(conn, filters)
                 if after is None or after.first_seen_utc is not None:
                     where = base_where + ["u.first_seen_utc IS NOT NULL"]
-                    params = list(base_params)
+                    params = from_params + base_params
                     if after is not None:
                         where.append("u.first_seen_utc <= ? AND (u.first_seen_utc < ? OR u.id > ?)")
                         params.extend([after.first_seen_utc, after.first_seen_utc, after.id])
                     sql = f"""
                         SELECT {_URL_ROW_COLUMNS}
-                        FROM urls u
+                        {from_sql}
                         WHERE {' AND '.join(where)}
                         ORDER BY {URL_ORDER_BY}
                         LIMIT ?
@@ -464,13 +494,13 @@ class UrlQueryMixin(BaseDataAccess):
                 remaining = limit - len(rows)
                 if remaining > 0:
                     where = base_where + ["u.first_seen_utc IS NULL"]
-                    params = list(base_params)
+                    params = from_params + base_params
                     if after is not None and after.first_seen_utc is None:
                         where.append("u.id > ?")
                         params.append(after.id)
                     sql = f"""
                         SELECT {_URL_ROW_COLUMNS}
-                        FROM urls u
+                        {from_sql}
                         WHERE {' AND '.join(where)}
                         ORDER BY u.id ASC
                         LIMIT ?
@@ -538,6 +568,111 @@ class UrlQueryMixin(BaseDataAccess):
         return UrlPage(
             query=query, rows=rows, has_more=has_more, data_version=data_version, tags=tags, matches=matches
         )
+
+    # -------------------------------------------------------------------------
+    # URL Search Index (issue #62)
+    # -------------------------------------------------------------------------
+
+    def get_url_search_index_status(self, evidence_id: int) -> UrlSearchIndexStatus:
+        """Return the URL search index coverage for an evidence."""
+        if not self._evidence_db_exists(evidence_id):
+            # No database yet (nothing extracted): nothing to index.
+            return UrlSearchIndexStatus(UrlSearchIndexStatus.READY)
+        with self._use_evidence_conn(evidence_id):
+            with self._connect() as conn:
+                return get_url_search_index_status(conn)
+
+    def build_url_search_index(
+        self,
+        evidence_id: int,
+        *,
+        is_cancelled: Callable[[], bool] = lambda: False,
+        progress_callback: Optional[Callable[[UrlSearchIndexStatus], None]] = None,
+        batch_size: int = URL_SEARCH_BUILD_BATCH_SIZE,
+    ) -> UrlSearchIndexStatus:
+        """
+        Index unindexed URLs in batches until the index is ready or cancelled.
+
+        Each batch is its own write transaction, so cancelling (checked between
+        batches) or a crash loses at most one batch; the next call resumes.
+        Search stays complete meanwhile (unindexed URLs are scanned). A build
+        session is recorded in ``process_log`` once its first batch committed
+        (sessions that index nothing leave no entry).
+
+        Args:
+            evidence_id: Evidence ID
+            is_cancelled: Checked before every batch
+            progress_callback: Called with the status after every batch
+            batch_size: URL rows per batch
+
+        Returns:
+            Index status after the last batch
+        """
+        import json
+        from core.database.helpers import create_process_log, finalize_process_log
+
+        logger = logging.getLogger(__name__)
+        status = self.get_url_search_index_status(evidence_id)
+        if status.state != UrlSearchIndexStatus.BUILDING or is_cancelled():
+            return status
+
+        start_watermark = status.indexed_through_id
+        with self._use_evidence_conn(evidence_id):
+            with self._connect() as conn:
+                log_id: Optional[int] = None
+                indexed = 0
+                start_time = time.time()
+                try:
+                    while not is_cancelled():
+                        rows = build_url_search_index_step(conn, batch_size)
+                        if rows and log_id is None:
+                            log_id = create_process_log(
+                                conn,
+                                evidence_id,
+                                task=URL_SEARCH_INDEX_BUILD_TASK,
+                                command=(
+                                    f"Index URLs with id > {start_watermark} for substring search "
+                                    f"(SQLite {sqlite3.sqlite_version} FTS5 trigram)"
+                                ),
+                            )
+                        indexed += rows
+                        status = get_url_search_index_status(conn)
+                        if progress_callback is not None:
+                            progress_callback(status)
+                        if status.state != UrlSearchIndexStatus.BUILDING:
+                            break
+                except Exception as exc:
+                    if log_id is not None:
+                        try:
+                            finalize_process_log(conn, log_id, exit_code=1, stdout=None, stderr=str(exc))
+                        except sqlite3.Error as log_exc:  # e.g. still locked: keep the original error
+                            logger.error("Could not finalize process_log %s: %s", log_id, log_exc)
+                    raise
+                result = "cancelled" if status.state == UrlSearchIndexStatus.BUILDING else status.state
+                if log_id is not None:
+                    finalize_process_log(
+                        conn,
+                        log_id,
+                        exit_code=0,
+                        stdout=json.dumps(
+                            {
+                                "result": result,
+                                "rows_indexed": indexed,
+                                "indexed_through_id": status.indexed_through_id,
+                                "max_url_id": status.max_url_id,
+                            },
+                            sort_keys=True,
+                        ),
+                        stderr=None,
+                    )
+        logger.info(
+            "build_url_search_index: evidence_id=%s, result=%s, rows_indexed=%d, elapsed=%.1fs",
+            evidence_id,
+            result,
+            indexed,
+            time.time() - start_time,
+        )
+        return status
 
     def update_url_tags(self, evidence_id: int, url_id: int, tags_str: str) -> None:
         """
