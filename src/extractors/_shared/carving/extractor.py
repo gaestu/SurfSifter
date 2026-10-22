@@ -244,8 +244,9 @@ class ImageCarvingExtractor(BaseExtractor):
         evidence_id = config.get("evidence_id", 1)
         file_types = config.get("file_types", self.DEFAULT_FILE_TYPES)
 
-        # Discover carving tool
-        tools = discover_tools()
+        # Discover carving tool (fresh probe: the version recorded in the
+        # manifest is the one run)
+        tools = discover_tools(refresh=True)
         carving_tool = None
         tool_info = None
 

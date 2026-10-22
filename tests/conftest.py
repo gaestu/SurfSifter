@@ -5,6 +5,16 @@ import pytest
 pytest_plugins = ["tests.fixtures.db"]
 
 
+@pytest.fixture(autouse=True)
+def _clear_tool_version_cache():
+    """Tool version probes are cached per process; isolate tests (issue #70)."""
+    from core.tool_discovery import clear_tool_version_cache
+
+    clear_tool_version_cache()
+    yield
+    clear_tool_version_cache()
+
+
 def _build_extractor_registry():
     from extractors.extractor_registry import ExtractorRegistry
     return ExtractorRegistry()

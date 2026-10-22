@@ -478,6 +478,26 @@ def test_extraction_tab_status_queries_wait_for_show(qtbot, env, calls, fast_too
     tab.shutdown()
 
 
+def test_extraction_tabs_spawn_no_tool_version_probes(qtbot, env, monkeypatch):
+    """Building extractor cards for several evidences probes no tool (issue #70)."""
+    import core.tool_discovery as tool_discovery
+
+    probes: List[List[str]] = []
+
+    def counting_probe(cmd):
+        probes.append(cmd)
+        return None
+
+    monkeypatch.setattr(tool_discovery, "get_tool_version", counting_probe)
+    tabs = [_make_extraction_tab(qtbot, env) for _ in range(3)]
+    for tab in tabs:
+        tab.show()  # run-status refresh reads metadata again
+        assert tab._extractors
+    assert probes == []
+    for tab in tabs:
+        tab.shutdown()
+
+
 class _FakeSignals(QObject):
     progress = Signal(int, int, str)
     log_message = Signal(str, str)

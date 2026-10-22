@@ -17,6 +17,7 @@ Some features rely on optional external tools that are discovered on your system
 ## Notes
 - These tools are **optional**. The app runs without them.
 - After installation, restart the app so it can detect the tools on `PATH`.
+- Each tool's version is checked once per session and then reused; opening a case or another evidence does not check it again. It is checked again when the tool's path or executable changes, or after **Refresh All**, **Set Custom Path** or **Reset to Auto** in **Preferences → Tools**. Runs of the Foremost and Scalpel image carvers (Media extractors) always check the version again just before they start, so the version recorded in the run manifest is the one that ran.
 - `bulk_extractor` is not available in default Ubuntu 24.04 and Fedora 42 repositories. Install manually from upstream/source if needed.
 - SleuthKit (`fls`, `mmls`, `icat`) is used by file-list and related workflows, but it is resolved via bundled binaries or `PATH` and is not currently listed in the Tools tab.
 
