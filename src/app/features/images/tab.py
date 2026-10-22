@@ -42,6 +42,7 @@ from PySide6.QtWidgets import (
 from PySide6.QtGui import QDesktopServices, QPainter
 
 from app.common.dialogs import TagArtifactsDialog, HashListSelectorDialog, ImagePreviewDialog
+from app.data import STATS_IMAGES, STATS_PROCESS_LOG
 from app.data.case_data import CaseDataAccess
 from app.features.images.models import ImagesListModel, ImageClustersModel, ImagesTableModel
 from core.matching import ReferenceListManager
@@ -1374,6 +1375,23 @@ class ImagesTab(QWidget):
                     self._hash_check_worker.terminate()
                     self._hash_check_worker.wait(500)
             self._hash_check_worker = None
+            # Lists matched before the cancel are committed (issue #63)
+            self._invalidate_hash_check_stats()
+
+    def _invalidate_hash_check_stats(self) -> None:
+        """The hash check wrote hash matches and a process_log entry (issue #63).
+
+        Called in every outcome (finished, error, cancel): matches of lists
+        processed before a failure or cancel stay committed.
+        """
+        case_data = getattr(self, "case_data", None)
+        evidence_id = getattr(self, "evidence_id", None)
+        if case_data is None or evidence_id is None:
+            return
+        try:
+            case_data.invalidate_stats(int(evidence_id), (STATS_IMAGES, STATS_PROCESS_LOG))
+        except Exception:  # pragma: no cover - defensive
+            LOGGER.warning("Failed to invalidate image statistics", exc_info=True)
 
     def _on_hash_check_progress(self, current: int, total: int) -> None:
         """Update hash check progress dialog."""
@@ -1387,6 +1405,7 @@ class ImagesTab(QWidget):
     def _on_hash_check_finished(self, results: dict) -> None:
         """Handle hash check completion."""
         self._hash_check_progress.close()
+        self._invalidate_hash_check_stats()
 
         total_matches = sum(
             v for v in results.values() if isinstance(v, int)
@@ -1413,6 +1432,7 @@ class ImagesTab(QWidget):
     def _on_hash_check_error(self, error_msg: str) -> None:
         """Handle hash check error."""
         self._hash_check_progress.close()
+        self._invalidate_hash_check_stats()
         QMessageBox.critical(
             self,
             "Hash Check Error",

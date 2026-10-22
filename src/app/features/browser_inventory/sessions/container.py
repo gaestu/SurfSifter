@@ -36,7 +36,6 @@ class SessionsContainer(QWidget):
         layout.addWidget(desc_label)
 
         self.nested_tabs = QTabWidget()
-        self.nested_tabs.currentChanged.connect(self._on_nested_tab_changed)
 
         self._open_tabs = OpenTabsSubtab(self.ctx, parent=self)
         self._closed_tabs = ClosedTabsSubtab(self.ctx, parent=self)
@@ -47,6 +46,9 @@ class SessionsContainer(QWidget):
         self.nested_tabs.addTab(self._open_tabs, "Open Tabs")
         self.nested_tabs.addTab(self._closed_tabs, "Closed Tabs")
         self.nested_tabs.addTab(self._form_data, "Form Data")
+        # Connected after the tabs are added: adding the first tab must not
+        # load anything before the container is shown (issue #63)
+        self.nested_tabs.currentChanged.connect(self._on_nested_tab_changed)
 
         layout.addWidget(self.nested_tabs)
 

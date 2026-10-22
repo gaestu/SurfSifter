@@ -38,13 +38,27 @@ class FakeUrlsTab:
             raise RuntimeError("boom")
 
 
+class FakeEvidenceTab:
+    """Evidence QTabWidget stand-in: one sub-tab (the URLs tab), exposed as ``urls_tab`` property."""
+
+    def __init__(self, urls_tab: Any) -> None:
+        self.urls_tab = urls_tab
+
+    def property(self, name: str) -> Any:
+        return self.urls_tab if name == "urls_tab" else None
+
+    def count(self) -> int:
+        return 1
+
+    def widget(self, index: int) -> Any:
+        return self.urls_tab
+
+
 class FakeTabs:
     """QTabWidget stand-in: index 0 is the Case tab, then evidence tabs with a ``urls_tab`` property."""
 
     def __init__(self, urls_tabs: List[Any]) -> None:
-        self.pages = [SimpleNamespace(property=lambda name: None)] + [
-            SimpleNamespace(property=lambda name, tab=tab: tab if name == "urls_tab" else None) for tab in urls_tabs
-        ]
+        self.pages = [SimpleNamespace(property=lambda name: None)] + [FakeEvidenceTab(tab) for tab in urls_tabs]
 
     def count(self) -> int:
         return len(self.pages)
@@ -66,7 +80,8 @@ def _window(urls_tabs: List[Any]) -> SimpleNamespace:
         statusBar=lambda: SimpleNamespace(showMessage=lambda *a, **k: None),
     )
     window._urls_tabs = lambda: MainWindow._urls_tabs(window)
-    window._shutdown_urls_tabs = lambda: MainWindow._shutdown_urls_tabs(window)
+    window._shutdown_evidence_tab = lambda tab: MainWindow._shutdown_evidence_tab(window, tab)
+    window._shutdown_all_evidence_tabs = lambda: MainWindow._shutdown_all_evidence_tabs(window)
     return window
 
 
@@ -118,6 +133,8 @@ def test_export_is_not_started_while_a_build_is_still_finishing(monkeypatch):
 
 @pytest.mark.parametrize("loader", ["_load_existing_evidences", "_load_existing_evidences_lazy"])
 def test_opening_another_case_shuts_down_url_tabs(loader):
+    # Every sub-tab of every evidence tab is shut down (issue #63); here
+    # each evidence tab holds only its URLs tab.
     events: List[str] = []
     window = _window([FakeUrlsTab(events, "broken"), FakeUrlsTab(events, "b")])
     if loader == "_load_existing_evidences":

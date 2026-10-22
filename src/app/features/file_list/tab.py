@@ -38,6 +38,7 @@ from core.database import DatabaseManager
 from core.matching import ReferenceListManager, ReferenceListMatcher
 from app.features.file_list.models import FileListModel
 from app.common.dialogs import ReferenceListSelectorDialog, TagArtifactsDialog
+from app.data import STATS_PROCESS_LOG
 from app.data.case_data import CaseDataAccess
 from app.services.matching_workers import FileListMatchWorker as MatchWorker
 from app.services.evidence_access import evidence_has_source
@@ -461,7 +462,9 @@ class FileListTab(QWidget):
         layout.addLayout(filter_layout)
 
         # Table view
-        self.model = FileListModel(self.case_folder, self.evidence_id, self.case_db_path, self)
+        # Rows load once the filter lists are loaded (_on_filters_loaded), i.e.
+        # when the tab is first shown with defer_load (issue #63)
+        self.model = FileListModel(self.case_folder, self.evidence_id, self.case_db_path, self, load=False)
         self.table_view = QTableView()
         self.table_view.setModel(self.model)
         self.table_view.setSelectionBehavior(QTableView.SelectRows)
@@ -694,6 +697,10 @@ class FileListTab(QWidget):
         """Handle filter loading error."""
         self._filter_worker = None
         logger.error("FileListTab filter load error: %s", error_msg)
+
+        # Show the rows unfiltered anyway (they are no longer loaded at
+        # construction; issue #63)
+        self.model.apply_filters({})
 
         # Re-enable dropdowns with error state
         for combo in [self.extension_combo, self.matches_combo, self.tags_combo]:
@@ -1229,6 +1236,9 @@ class FileListTab(QWidget):
             )
         except Exception:
             logger.warning("Failed to log export action", exc_info=True)
+        # The Overview's last run reads process_log (issue #63)
+        if self._case_data is not None:
+            self._case_data.invalidate_stats(int(self.evidence_id), STATS_PROCESS_LOG)
 
     def _load_tags(self):
         """Load tags into the filter combo box."""

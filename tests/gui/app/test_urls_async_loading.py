@@ -409,7 +409,10 @@ def test_set_case_data_after_evidence_still_loads(qtbot, make_tab, url_case):
     other = CaseDataAccess(case.case_folder, case.case_db_path)
     try:
         tab.set_case_data(other)
-        assert tab.model.evidence_id is None
+        # The model's evidence was reset, but the first page is requested
+        # right away (it no longer waits for the dropdown lists, issue #63),
+        # which restores it.
+        assert tab._data_loading
         qtbot.waitUntil(lambda: _loaded(tab) and tab.model.rowCount() == 100, timeout=10000)
         assert tab.model.evidence_id == case.evidence_ids[0]
     finally:

@@ -354,8 +354,16 @@ class UrlsTableModel(QAbstractTableModel):
         except ValueError:
             return False
 
-    def set_loaded_page(self, page: UrlPage) -> None:
-        """Apply a page prepared off the GUI thread (no database access)."""
+    def set_loaded_page(self, page: UrlPage) -> bool:
+        """Apply a page prepared off the GUI thread (no database access).
+
+        Returns:
+            True if the page applied a write this model was not told about
+            (``PRAGMA data_version`` changed), e.g. a tag merge through
+            another connection. A change that was set aside while the tab's
+            own writes ran is reported when it is applied after them, because
+            it may include writes made elsewhere meanwhile (issue #63).
+        """
         query = page.query
         # Only a page requested at the current data revision may define the total.
         fresh = query.data_revision == self._data_revision
@@ -405,6 +413,7 @@ class UrlsTableModel(QAbstractTableModel):
             and query.filters == self._spec
         ):
             self.store_total_count(self.count_key(), len(page.rows))
+        return changed
 
     def _shows_page_content(self, page: UrlPage) -> bool:
         """True if ``page`` is the current page and has exactly the shown content."""

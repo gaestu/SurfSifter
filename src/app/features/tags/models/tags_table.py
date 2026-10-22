@@ -89,9 +89,10 @@ class TagsTableModel(QAbstractTableModel):
         self._rows = []
         self.layoutChanged.emit()
 
-    def set_evidence(self, evidence_id: Optional[int]) -> None:
+    def set_evidence(self, evidence_id: Optional[int], reload: bool = True) -> None:
         self.evidence_id = evidence_id
-        self.reload()
+        if reload:
+            self.reload()
 
     def set_filter(self, name: Optional[str] = None) -> None:
         self._filter_name = name

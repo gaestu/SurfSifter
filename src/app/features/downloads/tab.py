@@ -73,6 +73,9 @@ class DownloadTab(QWidget):
 
         # Stale data flag for lazy refresh after ingestion
         self._data_stale = False
+        # Tab counts (COUNT(DISTINCT url) over downloadable URLs) wait until
+        # the tab is shown (issue #63).
+        self._counts_pending = True
 
         self._setup_ui()
 
@@ -129,8 +132,7 @@ class DownloadTab(QWidget):
         )
         self.subtabs.addTab(self.files_panel, "Other Files")
 
-        # Update tab labels with counts
-        self._update_tab_counts()
+        # Tab labels get their counts on first show (issue #63)
 
         layout.addWidget(self.subtabs, 1)
 
@@ -207,14 +209,27 @@ class DownloadTab(QWidget):
         self.images_panel.set_case_data(case_data, case_folder)
         self.files_panel.set_case_data(case_data, case_folder)
 
-        self._update_tab_counts()
+        self._request_tab_counts()
 
     def refresh(self):
-        """Refresh all panels."""
+        """Refresh all panels (on next show while the tab is hidden; issue #63)."""
+        if not self.isVisible():
+            self._data_stale = True
+            self._counts_pending = True
+            return
         self.available_panel.refresh()
         self.images_panel.refresh()
         self.files_panel.refresh()
+        self._counts_pending = False
         self._update_tab_counts()
+
+    def _request_tab_counts(self) -> None:
+        """Update the tab counts now if shown, else on next show (issue #63)."""
+        if self.isVisible():
+            self._counts_pending = False
+            self._update_tab_counts()
+        else:
+            self._counts_pending = True
 
     def mark_stale(self) -> None:
         """Mark data as stale - will refresh on next showEvent.
@@ -231,6 +246,10 @@ class DownloadTab(QWidget):
         if self._data_stale:
             self._data_stale = False
             QTimer.singleShot(10, self.refresh)
+        elif self._counts_pending:
+            # First show (or counts requested while hidden)
+            self._counts_pending = False
+            self._update_tab_counts()
 
     def shutdown(self) -> None:
         """Gracefully stop all background workers before widget destruction."""

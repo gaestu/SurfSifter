@@ -40,7 +40,6 @@ class WebStorageContainer(QWidget):
         layout.addWidget(desc_label)
 
         self.nested_tabs = QTabWidget()
-        self.nested_tabs.currentChanged.connect(self._on_nested_tab_changed)
 
         self._stored_sites = StoredSitesSubtab(self.ctx, parent=self)
         self._storage_keys = StorageKeysSubtab(self.ctx, parent=self)
@@ -58,6 +57,9 @@ class WebStorageContainer(QWidget):
         self.nested_tabs.addTab(self._indexeddb, "IndexedDB")
         self.nested_tabs.addTab(self._auth_tokens, "Auth Tokens")
         self.nested_tabs.addTab(self._identifiers, "Identifiers")
+        # Connected after the tabs are added: adding the first tab must not
+        # load anything before the container is shown (issue #63)
+        self.nested_tabs.currentChanged.connect(self._on_nested_tab_changed)
 
         layout.addWidget(self.nested_tabs)
 

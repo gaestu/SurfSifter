@@ -34,7 +34,6 @@ class CacheContainer(QWidget):
         layout.addWidget(desc_label)
 
         self.nested_tabs = QTabWidget()
-        self.nested_tabs.currentChanged.connect(self._on_nested_tab_changed)
 
         self._entries = CacheSubtab(self.ctx, parent=self)
         self._index = CacheIndexSubtab(self.ctx, parent=self)
@@ -42,6 +41,9 @@ class CacheContainer(QWidget):
 
         self.nested_tabs.addTab(self._entries, "Entries")
         self.nested_tabs.addTab(self._index, "Index (Firefox)")
+        # Connected after the tabs are added: adding the first tab must not
+        # load anything before the container is shown (issue #63)
+        self.nested_tabs.currentChanged.connect(self._on_nested_tab_changed)
 
         layout.addWidget(self.nested_tabs)
 

@@ -45,7 +45,6 @@ class AutofillContainer(QWidget):
         layout.addWidget(desc_label)
 
         self.nested_tabs = QTabWidget()
-        self.nested_tabs.currentChanged.connect(self._on_nested_tab_changed)
 
         self._form_data = FormDataSubtab(self.ctx, parent=self)
         self._saved_logins = SavedLoginsSubtab(self.ctx, parent=self)
@@ -70,6 +69,9 @@ class AutofillContainer(QWidget):
         self.nested_tabs.addTab(self._deleted_history, "Deleted History")
         self.nested_tabs.addTab(self._block_list, "Block List")
         self.nested_tabs.addTab(self._ibans, "IBANs")
+        # Connected after the tabs are added: adding the first tab must not
+        # load anything before the container is shown (issue #63)
+        self.nested_tabs.currentChanged.connect(self._on_nested_tab_changed)
 
         layout.addWidget(self.nested_tabs)
 

@@ -71,6 +71,9 @@ class ReportTabWidget(QWidget):
     """
 
     manage_text_blocks_requested = Signal()
+    # Emitted after this widget wrote process_log rows (preview audit, PDF
+    # build), so cached evidence statistics can be invalidated (issue #63).
+    process_log_written = Signal()
 
     def __init__(self, parent: Optional[QWidget] = None):
         super().__init__(parent)
@@ -724,24 +727,27 @@ class ReportTabWidget(QWidget):
         )
 
         try:
-            preview_path = self._generator.preview_in_browser(html_content)
-        except Exception as exc:
+            try:
+                preview_path = self._generator.preview_in_browser(html_content)
+            except Exception as exc:
+                finalize_process_log(
+                    self._db_conn,
+                    log_id,
+                    exit_code=1,
+                    stdout=None,
+                    stderr=str(exc),
+                )
+                raise
+
             finalize_process_log(
                 self._db_conn,
                 log_id,
-                exit_code=1,
-                stdout=None,
-                stderr=str(exc),
+                exit_code=0,
+                stdout=str(preview_path),
+                stderr=None,
             )
-            raise
-
-        finalize_process_log(
-            self._db_conn,
-            log_id,
-            exit_code=0,
-            stdout=str(preview_path),
-            stderr=None,
-        )
+        finally:
+            self.process_log_written.emit()
 
     def _on_preview_appendix(self) -> None:
         """Handle Appendix Preview button click - open appendix in browser."""
@@ -953,6 +959,7 @@ class ReportTabWidget(QWidget):
             self._pdf_progress_dlg = None
         self._active_pdf_task = None
         self._set_pdf_buttons_enabled(True)
+        self.process_log_written.emit()
 
     def _on_create_report_pdf(self) -> None:
         """Generate report-only PDF (no appendix)."""

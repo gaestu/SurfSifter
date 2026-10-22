@@ -29,7 +29,12 @@ from core.database.helpers.url_search_index import (
 )
 
 from ._base import BaseDataAccess
+from ._stats_cache import STATS_URL_MATCHES, STATS_URLS
 
+
+# Shared statistics cache categories of the cached URL filter readers (#63).
+URL_FILTER_LIST_CATEGORIES = frozenset({STATS_URLS})
+URL_MATCH_LIST_CATEGORIES = frozenset({STATS_URL_MATCHES})
 
 # Stable sort contract for flat URL listing (issue #61): newest first, URLs
 # without a timestamp last, ties broken by ascending id. The implicit rowid of
@@ -825,43 +830,41 @@ class UrlQueryMixin(BaseDataAccess):
         Returns:
             List of domain strings, sorted alphabetically
 
-        Added in-memory caching for performance.
+        Served from the shared case statistics cache (issue #63).
         """
-        # Guard: return empty list if evidence DB doesn't exist yet
-        if not self._evidence_db_exists(evidence_id):
-            return []
-        cache_key = f"url_domains_{evidence_id}_{limit or 'all'}"
-        if use_cache:
-            cached = self._get_cached(cache_key)
-            if cached is not None:
-                return cached
+        def compute() -> List[str]:
+            if limit:
+                sql = """
+                    SELECT domain
+                    FROM urls
+                    WHERE evidence_id = ? AND domain IS NOT NULL AND domain != ''
+                    GROUP BY domain
+                    ORDER BY domain
+                    LIMIT ?
+                """
+                params: Tuple[Any, ...] = (evidence_id, limit)
+            else:
+                sql = """
+                    SELECT DISTINCT domain
+                    FROM urls
+                    WHERE evidence_id = ? AND domain IS NOT NULL AND domain != ''
+                    ORDER BY domain
+                """
+                params = (evidence_id,)
+            with self._use_evidence_conn(evidence_id):
+                with self._connect() as conn:
+                    cursor = conn.execute(sql, params)
+                    return [row[0] for row in cursor.fetchall()]
 
-        if limit:
-            sql = """
-                SELECT domain
-                FROM urls
-                WHERE evidence_id = ? AND domain IS NOT NULL AND domain != ''
-                GROUP BY domain
-                ORDER BY domain
-                LIMIT ?
-            """
-            params = (evidence_id, limit)
-        else:
-            sql = """
-                SELECT DISTINCT domain
-                FROM urls
-                WHERE evidence_id = ? AND domain IS NOT NULL AND domain != ''
-                ORDER BY domain
-            """
-            params = (evidence_id,)
-
-        with self._use_evidence_conn(evidence_id):
-            with self._connect() as conn:
-                cursor = conn.execute(sql, params)
-                result = [row[0] for row in cursor.fetchall()]
-
-        self._set_cached(cache_key, result)
-        return result
+        return self._cached_stat(
+            evidence_id,
+            ("url_domains", limit or None),
+            URL_FILTER_LIST_CATEGORIES,
+            compute,
+            use_cache=use_cache,
+            # Guard: empty list (uncached) if the evidence DB doesn't exist yet
+            empty=list,
+        )
 
     def list_url_sources(self, evidence_id: int, use_cache: bool = True) -> List[str]:
         """
@@ -874,27 +877,28 @@ class UrlQueryMixin(BaseDataAccess):
         Returns:
             List of source strings, sorted alphabetically
 
-        Added in-memory caching for performance.
+        Served from the shared case statistics cache (issue #63).
         """
-        cache_key = f"url_sources_{evidence_id}"
-        if use_cache:
-            cached = self._get_cached(cache_key)
-            if cached is not None:
-                return cached
+        def compute() -> List[str]:
+            sql = """
+                SELECT DISTINCT discovered_by
+                FROM urls
+                WHERE evidence_id = ? AND discovered_by IS NOT NULL
+                ORDER BY discovered_by
+            """
+            with self._use_evidence_conn(evidence_id):
+                with self._connect() as conn:
+                    cursor = conn.execute(sql, (evidence_id,))
+                    return [row[0] for row in cursor.fetchall()]
 
-        sql = """
-            SELECT DISTINCT discovered_by
-            FROM urls
-            WHERE evidence_id = ? AND discovered_by IS NOT NULL
-            ORDER BY discovered_by
-        """
-        with self._use_evidence_conn(evidence_id):
-            with self._connect() as conn:
-                cursor = conn.execute(sql, (evidence_id,))
-                result = [row[0] for row in cursor.fetchall()]
-
-        self._set_cached(cache_key, result)
-        return result
+        return self._cached_stat(
+            evidence_id,
+            ("url_sources",),
+            URL_FILTER_LIST_CATEGORIES,
+            compute,
+            use_cache=use_cache,
+            empty=list,
+        )
 
     def list_url_match_lists(self, evidence_id: int, use_cache: bool = True) -> List[str]:
         """
@@ -907,36 +911,36 @@ class UrlQueryMixin(BaseDataAccess):
         Returns:
             List of list names, sorted alphabetically
 
-        Added in-memory caching for performance.
+        Served from the shared case statistics cache (issue #63).
         """
-        # Guard: return empty list if evidence DB doesn't exist yet
-        if not self._evidence_db_exists(evidence_id):
-            return []
-        cache_key = f"url_match_lists_{evidence_id}"
-        if use_cache:
-            cached = self._get_cached(cache_key)
-            if cached is not None:
-                return cached
+        def compute() -> List[str]:
+            sql = """
+                SELECT DISTINCT list_name
+                FROM url_matches
+                WHERE evidence_id = ?
+                ORDER BY list_name
+            """
+            with self._use_evidence_conn(evidence_id):
+                with self._connect() as conn:
+                    try:
+                        cursor = conn.execute(sql, (evidence_id,))
+                        return [row[0] for row in cursor.fetchall()]
+                    except sqlite3.OperationalError as exc:
+                        # Only a missing table (very old DB) means "no lists";
+                        # anything else (e.g. a cancelled read) propagates
+                        # so it is never cached as an empty list.
+                        if "no such table" not in str(exc).lower():
+                            raise
+                        return []
 
-        sql = """
-            SELECT DISTINCT list_name
-            FROM url_matches
-            WHERE evidence_id = ?
-            ORDER BY list_name
-        """
-        with self._use_evidence_conn(evidence_id):
-            with self._connect() as conn:
-                # Check if table exists first (migration might not have run if very old DB)
-                # But we assume schema is up to date.
-                try:
-                    cursor = conn.execute(sql, (evidence_id,))
-                    result = [row[0] for row in cursor.fetchall()]
-                except sqlite3.OperationalError:
-                    # Table might not exist yet
-                    result = []
-
-        self._set_cached(cache_key, result)
-        return result
+        return self._cached_stat(
+            evidence_id,
+            ("url_match_lists",),
+            URL_MATCH_LIST_CATEGORIES,
+            compute,
+            use_cache=use_cache,
+            empty=list,
+        )
 
     # -------------------------------------------------------------------------
     # URL Domain Statistics
@@ -946,6 +950,8 @@ class UrlQueryMixin(BaseDataAccess):
         self,
         evidence_id: int,
         limit: int = 500,
+        *,
+        use_cache: bool = True,
     ) -> Dict[str, Any]:
         """
         Get top domains by URL frequency for filter dropdowns.
@@ -957,55 +963,69 @@ class UrlQueryMixin(BaseDataAccess):
         Ties in count are ordered by that domain, ignoring ASCII case (unique,
         since the groups are case-insensitively distinct).
 
+        Served from the shared case statistics cache (issue #63).
+
         Args:
             evidence_id: Evidence ID
             limit: Maximum number of domains to return (default 500)
+            use_cache: Whether to use cached results (default True)
 
         Returns:
             Dict with 'items' (list of {domain, count}), 'total_count'
             (case-insensitively distinct non-empty domains), 'truncated'
         """
-        with self._use_evidence_conn(evidence_id):
-            with self._connect() as conn:
-                # Both queries are covering scans of
-                # idx_urls_evidence_domain_nocase_first_seen (migration 0004).
-                # GROUP BY in a subquery walks that index in order; COUNT(DISTINCT
-                # domain COLLATE NOCASE) would build a temporary B-tree instead.
-                total_count = conn.execute(
-                    """
-                    SELECT COUNT(*) FROM (
-                        SELECT 1
+        def compute() -> Dict[str, Any]:
+            with self._use_evidence_conn(evidence_id):
+                with self._connect() as conn:
+                    # Both queries are covering scans of
+                    # idx_urls_evidence_domain_nocase_first_seen (migration 0004).
+                    # GROUP BY in a subquery walks that index in order; COUNT(DISTINCT
+                    # domain COLLATE NOCASE) would build a temporary B-tree instead.
+                    total_count = conn.execute(
+                        """
+                        SELECT COUNT(*) FROM (
+                            SELECT 1
+                            FROM urls
+                            WHERE evidence_id = ? AND domain IS NOT NULL AND domain != ''
+                            GROUP BY domain COLLATE NOCASE
+                        )
+                        """,
+                        (evidence_id,)
+                    ).fetchone()[0]
+
+                    # Get top N domains by frequency
+                    cursor = conn.execute(
+                        """
+                        SELECT MIN(domain) AS representative, COUNT(*) AS cnt
                         FROM urls
                         WHERE evidence_id = ? AND domain IS NOT NULL AND domain != ''
                         GROUP BY domain COLLATE NOCASE
+                        ORDER BY cnt DESC, representative COLLATE NOCASE ASC
+                        LIMIT ?
+                        """,
+                        (evidence_id, limit)
                     )
-                    """,
-                    (evidence_id,)
-                ).fetchone()[0]
 
-                # Get top N domains by frequency
-                cursor = conn.execute(
-                    """
-                    SELECT MIN(domain) AS representative, COUNT(*) AS cnt
-                    FROM urls
-                    WHERE evidence_id = ? AND domain IS NOT NULL AND domain != ''
-                    GROUP BY domain COLLATE NOCASE
-                    ORDER BY cnt DESC, representative COLLATE NOCASE ASC
-                    LIMIT ?
-                    """,
-                    (evidence_id, limit)
-                )
+                    domains = [
+                        {"domain": row[0], "count": row[1]}
+                        for row in cursor.fetchall()
+                    ]
 
-                domains = [
-                    {"domain": row[0], "count": row[1]}
-                    for row in cursor.fetchall()
-                ]
+                    return {
+                        "items": domains,
+                        "total_count": total_count,
+                        "truncated": total_count > limit,
+                    }
 
-                return {
-                    "items": domains,
-                    "total_count": total_count,
-                    "truncated": total_count > limit,
-                }
+        return self._cached_stat(
+            evidence_id,
+            ("top_domains", limit),
+            URL_FILTER_LIST_CATEGORIES,
+            compute,
+            use_cache=use_cache,
+            # Guard: same shape as "no domains" if the evidence DB doesn't exist yet
+            empty=lambda: {"items": [], "total_count": 0, "truncated": False},
+        )
 
     # -------------------------------------------------------------------------
     # URL Deduplication
@@ -1082,51 +1102,55 @@ class UrlQueryMixin(BaseDataAccess):
         from core.database.helpers import create_process_log, finalize_process_log
 
         with self._use_evidence_conn(evidence_id):
-            with self._connect() as conn:
-                # Log the operation start
-                constraints = []
-                if unique_by_first_seen:
-                    constraints.append("first_seen")
-                if unique_by_last_seen:
-                    constraints.append("last_seen")
-                if unique_by_source:
-                    constraints.append("source")
+            try:
+                with self._connect() as conn:
+                    # Log the operation start
+                    constraints = []
+                    if unique_by_first_seen:
+                        constraints.append("first_seen")
+                    if unique_by_last_seen:
+                        constraints.append("last_seen")
+                    if unique_by_source:
+                        constraints.append("source")
 
-                log_id = create_process_log(
-                    conn,
-                    evidence_id,
-                    task="url_deduplication",
-                    command=f"Deduplicate URLs from {', '.join(sources)} (constraints: url, {', '.join(constraints)})",
-                )
-
-                try:
-                    result = helper_dedupe(
+                    log_id = create_process_log(
                         conn,
                         evidence_id,
-                        sources,
-                        unique_by_first_seen=unique_by_first_seen,
-                        unique_by_last_seen=unique_by_last_seen,
-                        unique_by_source=unique_by_source,
-                        progress_callback=progress_callback,
+                        task="url_deduplication",
+                        command=f"Deduplicate URLs from {', '.join(sources)} (constraints: url, {', '.join(constraints)})",
                     )
 
-                    # Finalize log with success
-                    stdout = json.dumps({
-                        "sources": sources,
-                        "constraints": ["url"] + constraints,
-                        "total_before": result["total_before"],
-                        "total_after": result["total_after"],
-                        "duplicates_removed": result["duplicates_removed"],
-                    })
-                    finalize_process_log(conn, log_id, exit_code=0, stdout=stdout, stderr=None)
+                    try:
+                        result = helper_dedupe(
+                            conn,
+                            evidence_id,
+                            sources,
+                            unique_by_first_seen=unique_by_first_seen,
+                            unique_by_last_seen=unique_by_last_seen,
+                            unique_by_source=unique_by_source,
+                            progress_callback=progress_callback,
+                        )
 
-                except Exception as e:
-                    # Finalize log with error
-                    finalize_process_log(conn, log_id, exit_code=1, stdout=None, stderr=str(e))
-                    raise
+                        # Finalize log with success
+                        stdout = json.dumps({
+                            "sources": sources,
+                            "constraints": ["url"] + constraints,
+                            "total_before": result["total_before"],
+                            "total_after": result["total_after"],
+                            "duplicates_removed": result["duplicates_removed"],
+                        })
+                        finalize_process_log(conn, log_id, exit_code=0, stdout=stdout, stderr=None)
 
-                # Invalidate URL-related caches for this evidence
-                self.invalidate_filter_cache(evidence_id)
-
+                    except Exception as e:
+                        # Finalize log with error
+                        finalize_process_log(conn, log_id, exit_code=1, stdout=None, stderr=str(e))
+                        raise
                 return result
+            finally:
+                # Invalidate URL-related caches for this evidence only after
+                # the final commit (on leaving the with block), so a reader
+                # cannot cache pre-commit data under the new revision. Also
+                # on failure: the process_log rows (committed by their
+                # helpers) and possibly partial changes are already written.
+                self.invalidate_filter_cache(evidence_id)
 

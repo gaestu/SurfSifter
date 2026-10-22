@@ -14,10 +14,10 @@ Dialogs and workers extracted to separate modules.
 from __future__ import annotations
 
 import shutil
-from typing import Dict, Optional, TYPE_CHECKING
+from typing import Dict, List, Optional, Tuple, TYPE_CHECKING
 from pathlib import Path
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import QObject, QThread, Qt, Signal, SIGNAL
 from PySide6.QtWidgets import (
     QWidget,
     QVBoxLayout,
@@ -37,6 +37,7 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtGui import QFont
 
+from app.data import StatsWriteScope
 from app.data.case_data import CaseDataAccess
 from app.common.widgets import ExtractorRunStatusWidget, CollapsibleSection
 from extractors import ExtractorRegistry
@@ -103,6 +104,16 @@ class ExtractionTab(QWidget):
         # Run status widget tracking (keyed by extractor name)
         self._run_status_widgets: Dict[str, ExtractorRunStatusWidget] = {}
 
+        # Run status queries (one process_log query per extractor) wait until
+        # the tab is shown (issue #63).
+        self._status_stale = False
+
+        # Statistics write scopes of running writers (issue #63):
+        # (worker or None, scope). Only touched on the GUI thread; a scope
+        # closed from a worker thread (thread finished) stays listed until
+        # the next prune here.
+        self._stats_write_scopes: List[Tuple[Optional[QThread], StatsWriteScope]] = []
+
         self._setup_ui()
 
     def cancel_active_extraction(self):
@@ -137,6 +148,9 @@ class ExtractionTab(QWidget):
                     self._run_all_worker.wait(500)
             self._run_all_worker = None
 
+        # Writers that have stopped no longer hold their statistics scope
+        self._close_stopped_stats_write_scopes()
+
         # Close any progress dialogs
         for dialog_attr in ['_batch_progress', '_run_all_progress']:
             if hasattr(self, dialog_attr):
@@ -149,6 +163,83 @@ class ExtractionTab(QWidget):
                     setattr(self, dialog_attr, None)
 
         LOGGER.debug("ExtractionTab shutdown complete")
+
+    # ─── Statistics write scopes (issue #63) ──────────────────────────
+
+    def _open_stats_write_scope(
+        self, worker: Optional[QThread] = None, *, close_on_thread_end: bool = False
+    ) -> Optional[StatsWriteScope]:
+        """Open a statistics write scope for this evidence (GUI thread).
+
+        While it is open no statistics of the evidence are cached (shared case
+        statistics cache); closing bumps all of them. ``data_changed`` is only
+        emitted on success, so the scope also covers failed, cancelled and
+        crashed runs that may have written partially. The scope is tracked
+        with ``worker`` for ``_close_stats_write_scopes`` and ``shutdown``.
+
+        With ``close_on_thread_end`` it also closes when the worker's thread
+        ends, whatever the outcome. ``ExtractionWorker`` / ``IngestionWorker``
+        shadow QThread's ``finished`` with their own result signal, so the
+        native ``finished()`` (emitted when run() returns in any outcome) is
+        connected by signature. ``close()`` is idempotent and thread-safe.
+        """
+        case_data = self.case_data
+        evidence_id = self.evidence_id
+        if case_data is None or evidence_id is None:
+            return None
+        self._prune_stats_write_scopes()
+        scope = case_data.stats_write_scope(int(evidence_id))
+        self._stats_write_scopes.append((worker, scope))
+        if close_on_thread_end and worker is not None:
+            # A lambda keeps the scope alive until the thread ends (PySide does
+            # not keep the instance of a connected bound method alive).
+            QObject.connect(worker, SIGNAL("finished()"), lambda: scope.close())
+        return scope
+
+    def _close_stats_write_scopes(self, worker: Optional[QThread]) -> None:
+        """Close the scopes opened for ``worker`` (no-op if already closed)."""
+        for scope_worker, scope in self._stats_write_scopes:
+            if scope_worker is worker:
+                scope.close()
+        self._prune_stats_write_scopes()
+
+    def _close_stopped_stats_write_scopes(self) -> None:
+        """Close the scopes of writers whose thread is no longer running."""
+        for worker, scope in self._stats_write_scopes:
+            try:
+                running = worker is not None and worker.isRunning()
+            except RuntimeError:  # C++ object already deleted
+                running = False
+            if not running:
+                scope.close()
+        self._prune_stats_write_scopes()
+
+    def _prune_stats_write_scopes(self) -> None:
+        """Forget closed scopes (GUI thread only)."""
+        self._stats_write_scopes = [
+            (worker, scope) for worker, scope in self._stats_write_scopes if not scope.closed
+        ]
+
+    # ─── Run status (issue #63) ───────────────────────────────────────
+
+    def refresh_status(self) -> None:
+        """Refresh the extractors' run status now if shown, else on next show.
+
+        Each refresh queries ``process_log`` once per extractor, so hidden
+        tabs (e.g. of other evidences) defer it.
+        """
+        if self.isVisible():
+            self._status_stale = False
+            self._refresh_ui()
+        else:
+            self._status_stale = True
+
+    def showEvent(self, event):
+        """Run a run-status refresh deferred while the tab was hidden."""
+        super().showEvent(event)
+        if self._status_stale:
+            self._status_stale = False
+            self._refresh_ui()
 
     def _setup_ui(self):
         """Build the UI dynamically from registry."""
@@ -467,8 +558,14 @@ class ExtractionTab(QWidget):
         # Handle cancel button
         self._run_all_progress.canceled.connect(self._run_all_worker.cancel)
 
-        # Start worker
-        self._run_all_worker.start()
+        # Start worker (writes to the evidence DB; issue #63). The scope also
+        # closes when the thread ends without reporting.
+        self._open_stats_write_scope(self._run_all_worker, close_on_thread_end=True)
+        try:
+            self._run_all_worker.start()
+        except Exception:
+            self._close_stats_write_scopes(self._run_all_worker)
+            raise
 
     def _on_run_all_extractor_started(self, index: int, extractor_name: str, phase: str):
         """Handle Run All start signal.
@@ -533,6 +630,7 @@ class ExtractionTab(QWidget):
 
         # Clean up worker
         self._run_all_worker.wait()
+        self._close_stats_write_scopes(self._run_all_worker)
         self._run_all_worker.deleteLater()
         self._run_all_worker = None
 
@@ -543,7 +641,7 @@ class ExtractionTab(QWidget):
         if succeeded:
             self.data_changed.emit()
             # Refresh extractor cards to show updated extraction/ingestion dates
-            self._refresh_ui()
+            self.refresh_status()
 
     def _show_run_all_summary(self, succeeded: list, skipped: list, failed: list, cancelled: bool):
         """Show summary dialog after Run All."""
@@ -616,7 +714,17 @@ class ExtractionTab(QWidget):
             self
         )
 
-        if dialog.exec() == QDialog.Accepted and dialog.confirmed:
+        # The purge runs inside the dialog and deletes evidence data; even a
+        # failed purge may have deleted some (issue #63).
+        stats_scope = self._open_stats_write_scope()
+        try:
+            purged = dialog.exec() == QDialog.Accepted and dialog.confirmed
+        finally:
+            if stats_scope is not None:
+                stats_scope.close()
+            self._prune_stats_write_scopes()
+
+        if purged:
             # Refresh all tabs to reflect purged data
             self.data_changed.emit()
             QMessageBox.information(
@@ -1042,7 +1150,14 @@ class ExtractionTab(QWidget):
         self.extraction_started.emit(extractor.metadata.display_name)
         self.log_message.emit(self.evidence_id, f"Starting extraction: {extractor.metadata.display_name}")
 
-        worker.start()
+        # Extractions may write to the evidence DB (process_log, direct
+        # imports); issue #63.
+        self._open_stats_write_scope(worker, close_on_thread_end=True)
+        try:
+            worker.start()
+        except Exception:
+            self._close_stats_write_scopes(worker)
+            raise
 
     def _run_ingestion(self, extractor: BaseExtractor):
         """Run ingestion in background worker."""
@@ -1199,7 +1314,13 @@ class ExtractionTab(QWidget):
         self.log_message.emit(self.evidence_id, f"Output directory: {output_dir}")
         self.log_message.emit(self.evidence_id, f"Evidence ID: {evidence_id}")
 
-        worker.start()
+        # Ingestion writes to the evidence DB (issue #63)
+        self._open_stats_write_scope(worker, close_on_thread_end=True)
+        try:
+            worker.start()
+        except Exception:
+            self._close_stats_write_scopes(worker)
+            raise
 
     def _on_extraction_log(self, progress: QProgressDialog, extractor, msg: str, level: str):
         """Handle log messages during extraction - show in both dialog and log panel."""
@@ -1286,6 +1407,7 @@ class ExtractionTab(QWidget):
         # Remove worker
         self._active_workers.pop(extractor.metadata.name, None)
         worker.wait()
+        self._close_stats_write_scopes(worker)
 
         if success:
             message = f"{extractor.metadata.display_name} extraction completed successfully."
@@ -1301,7 +1423,7 @@ class ExtractionTab(QWidget):
             )
 
             # Refresh UI to show updated status
-            self._refresh_ui()
+            self.refresh_status()
 
             # If this extractor doesn't have a separate ingestion step, it imported data directly
             # Emit data_changed so other tabs can refresh
@@ -1325,6 +1447,7 @@ class ExtractionTab(QWidget):
         # Remove worker
         self._active_workers.pop(extractor.metadata.name, None)
         worker.wait()
+        self._close_stats_write_scopes(worker)
 
         message = f"{extractor.metadata.display_name} extraction failed: {error}"
         self.extraction_finished.emit(extractor.metadata.display_name, False, error)
@@ -1350,6 +1473,7 @@ class ExtractionTab(QWidget):
         # Remove worker
         self._active_workers.pop(extractor.metadata.name, None)
         worker.wait()
+        self._close_stats_write_scopes(worker)
 
         if success:
             # Format counts (handle both numeric values and lists)
@@ -1373,7 +1497,7 @@ class ExtractionTab(QWidget):
             )
 
             # Refresh UI to show updated status
-            self._refresh_ui()
+            self.refresh_status()
 
             # Emit signal so other tabs can refresh their data
             self.data_changed.emit()
@@ -1394,6 +1518,7 @@ class ExtractionTab(QWidget):
         # Remove worker
         self._active_workers.pop(extractor.metadata.name, None)
         worker.wait()
+        self._close_stats_write_scopes(worker)
 
         message = f"{extractor.metadata.display_name} ingestion failed: {error}"
         self.log_message.emit(self.evidence_id, message)
@@ -1555,7 +1680,7 @@ class ExtractionTab(QWidget):
             )
 
             # Refresh UI to update status widget
-            self._refresh_ui()
+            self.refresh_status()
 
         except Exception as e:
             QMessageBox.critical(
@@ -1636,7 +1761,7 @@ class ExtractionTab(QWidget):
             )
 
             # Refresh UI
-            self._refresh_ui()
+            self.refresh_status()
 
         except Exception as e:
             QMessageBox.critical(
@@ -1763,9 +1888,10 @@ class ExtractionTab(QWidget):
             (evidence_fs is not None or db_manager is not None)
         )
 
-        # Refresh UI with new context
+        # Refresh the run status with the new context; its process_log
+        # queries wait until the tab is shown (issue #63).
         if case and evidence:
-            self._refresh_ui()
+            self.refresh_status()
 
     def mount_evidence_filesystem(self):
         """

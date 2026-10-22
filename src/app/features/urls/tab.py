@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import string
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -29,7 +30,15 @@ from PySide6.QtWidgets import (
     QApplication,
 )
 
-from app.data import UrlFilterSpec, UrlPage, UrlSearchIndexStatus
+from app.data import (
+    STATS_PROCESS_LOG,
+    STATS_TAGS,
+    STATS_URL_MATCHES,
+    STATS_URLS,
+    UrlFilterSpec,
+    UrlPage,
+    UrlSearchIndexStatus,
+)
 from app.data.case_data import CaseDataAccess
 from app.features.urls.models import UrlsTableModel, UrlsGroupedModel
 from app.services.matching_workers import UrlMatchWorker
@@ -43,6 +52,14 @@ from app.services.url_search_index_worker import UrlSearchIndexWorker
 from app.common import add_sandbox_url_actions
 
 logger = logging.getLogger(__name__)
+
+
+_ASCII_FOLD_TABLE = str.maketrans(string.ascii_uppercase, string.ascii_lowercase)
+
+
+def _ascii_fold(value: str) -> str:
+    """Lower-case ASCII letters only, like SQLite's ``COLLATE NOCASE``."""
+    return value.translate(_ASCII_FOLD_TABLE)
 
 
 class FilterLoadWorker(QThread):
@@ -301,6 +318,11 @@ class UrlsTab(QWidget):
 
         layout.addLayout(filter_layout)
 
+        # Tooltips restored after the dropdown lists loaded (issue #63)
+        self._filter_combo_tooltips = {
+            combo: combo.toolTip() for combo in (self.domain_combo, self.source_combo, self.tag_combo)
+        }
+
         self.model = UrlsTableModel(case_data)
         # Queued: reload only after the editor has finished committing.
         self.model.tags_edited.connect(self._on_tags_changed, Qt.QueuedConnection)
@@ -394,8 +416,10 @@ class UrlsTab(QWidget):
             # Loaded now (in the background), so showEvent may refresh/re-check.
             self._data_loaded = self.evidence_id is not None
             self._load_pending = False
-            self._populate_filters()
             self._update_page_label()
+            # First page and dropdown lists load in parallel (issue #63).
+            self._apply_filters()
+            self._populate_filters()
         else:
             self._data_loaded = False
             self._load_pending = True
@@ -420,14 +444,16 @@ class UrlsTab(QWidget):
         self._grouped_stale = True
 
         if not defer_load:
-            # Data is loaded in the background once filters are populated;
-            # loaded state lets showEvent refresh/re-check (issue #67).
+            # Data is loaded in the background; loaded state lets showEvent
+            # refresh/re-check (issue #67).
             self._data_loaded = evidence_id is not None
             self._load_pending = False
             self.model.set_evidence(evidence_id, reload=False)
             self.group_model.set_evidence(evidence_id, reload=False)
-            self._populate_filters()
             self._update_page_label()
+            # The first page does not wait for the dropdown lists (issue #63).
+            self._apply_filters()
+            self._populate_filters()
         else:
             # Deferred loading - just store the ID, load on showEvent
             self._load_pending = True
@@ -455,6 +481,10 @@ class UrlsTab(QWidget):
         """
         self.model.mark_data_changed(keep_position=False)
         self._reload_visible_view(0)
+        if not self._load_pending:
+            # Domains, sources, match lists and tags may have changed too
+            # (served from the shared statistics cache if not; issue #63).
+            self._populate_filters()
         # New URLs (e.g. after ingestion) are indexed in the background.
         self._start_search_index_build()
 
@@ -469,6 +499,9 @@ class UrlsTab(QWidget):
         keep_position = self.views.currentIndex() == 0
         self.model.mark_data_changed(keep_position=keep_position)
         self._reload_visible_view(self.model.current_page())
+        # New tags appear in the Tag dropdown (tag writes invalidated the
+        # cached tag list; issue #63).
+        self._populate_filters()
 
     def _get_evidence_label(self) -> Optional[str]:
         """Get the evidence label for forensic context.
@@ -548,7 +581,6 @@ class UrlsTab(QWidget):
             or self.views.currentIndex() != 0
             or self._flat_stale
             or self._data_loading
-            or self._filters_loading
             or self._load_pending
             or not self.model.has_data_baseline()
             or self.table_view.state() == QAbstractItemView.EditingState
@@ -562,10 +594,9 @@ class UrlsTab(QWidget):
 
         Uses non-blocking pattern:
         1. Set evidence IDs on models WITHOUT triggering reload
-        2. Show loading indicators
-        3. Start background filter loading (_populate_filters)
-        4. When filters load, _on_filters_loaded triggers _apply_filters
-        5. _apply_filters now uses background data loading
+        2. Request the first page in the background with the current filters
+        3. Load the dropdown lists in parallel (_populate_filters); the first
+           page never waits for them (issue #63)
         """
         if self._data_loaded:
             return
@@ -574,14 +605,13 @@ class UrlsTab(QWidget):
         self._load_pending = False
 
         # Set evidence IDs on models WITHOUT triggering immediate reload
-        # The actual data load happens after filters are loaded
         if self.evidence_id is not None:
             self.model.set_evidence(self.evidence_id, reload=False)
             self.group_model.set_evidence(self.evidence_id, reload=False)
 
-        # Start background filter loading - _on_filters_loaded will trigger data load
-        self._populate_filters()
         self._update_page_label()
+        self._apply_filters()
+        self._populate_filters()
 
     # Helpers ------------------------------------------------------------
 
@@ -589,8 +619,9 @@ class UrlsTab(QWidget):
         """
         Populate filter dropdowns (now uses background loading).
 
-        Shows "Loading..." placeholders while expensive DISTINCT queries run
-        in a background thread to prevent UI freezing.
+        While the expensive DISTINCT queries run in a background thread, each
+        dropdown shows only its current selection and is disabled; rows,
+        search and paging do not wait for the lists (issue #63).
         """
         if not self.case_data or self.evidence_id is None:
             self._set_filters_empty()
@@ -641,6 +672,10 @@ class UrlsTab(QWidget):
 
     def _set_filters_empty(self) -> None:
         """Set filters to empty state (no case data)."""
+        self._filters_loading = False
+        for combo, tooltip in self._filter_combo_tooltips.items():
+            combo.setEnabled(True)
+            combo.setToolTip(tooltip)
         self.domain_combo.blockSignals(True)
         self.domain_combo.clear()
         self.domain_combo.addItem("All domains", userData="*")
@@ -668,39 +703,144 @@ class UrlsTab(QWidget):
         self.group_model.set_evidence(None)
 
     def _set_filters_loading(self) -> None:
-        """Set filters to loading state with placeholders."""
+        """Show the loading state: each dropdown keeps only its current selection.
+
+        The Domain, Source and Tag dropdowns are disabled until the lists
+        arrive; reading them still yields the current filter values. The Match
+        dropdown keeps its fixed entries (issue #63).
+        """
         self._filters_loading = True
+        self._fill_filter_combos(None, loading=True)
 
-        # Show loading placeholder in domain combo (most expensive query)
-        self.domain_combo.blockSignals(True)
-        self.domain_combo.clear()
-        self.domain_combo.addItem("Loading domains...", userData="__loading__")
-        self.domain_combo.setEnabled(False)
-        self.domain_combo.blockSignals(False)
+    def _fill_filter_combos(self, data: Optional[Dict[str, Any]], *, loading: bool = False) -> None:
+        """Refill the dropdowns, keeping the current filters selected (issue #63).
 
-        # Source, match, and tag combos keep defaults (fast queries)
-        self.source_combo.blockSignals(True)
-        self.source_combo.clear()
-        self.source_combo.addItem("Loading...", userData="__loading__")
-        self.source_combo.setEnabled(False)
-        self.source_combo.blockSignals(False)
+        Args:
+            data: Loaded lists (domains, sources, match_lists, tags), or None
+                for only the current selections (loading, load error).
+            loading: Disable the Domain, Source and Tag dropdowns meanwhile.
 
-        self.match_combo.blockSignals(True)
-        self.match_combo.clear()
-        self.match_combo.addItem("All", userData="all")
-        self.match_combo.addItem("Matched", userData="matched")
-        self.match_combo.addItem("Not Matched", userData="unmatched")
-        self.match_combo.blockSignals(False)
+        A selected value missing from the new lists (e.g. a domain beyond the
+        top domains, a tag that no longer exists) is inserted, so the user's
+        filter never changes silently. Signals are blocked: nothing reloads.
+        """
+        data = data or {}
+        filters = self.filters
 
-        self.tag_combo.blockSignals(True)
-        self.tag_combo.clear()
-        self.tag_combo.addItem("Loading...", userData="__loading__")
-        self.tag_combo.setEnabled(False)
-        self.tag_combo.blockSignals(False)
+        # Domains (with count info)
+        domains_data = data.get("domains") or {}
+        domain_items = domains_data.get("items", [])
+        total_domains = domains_data.get("total_count", 0)
+        truncated = domains_data.get("truncated", False)
+        combo = self.domain_combo
+        combo.blockSignals(True)
+        combo.clear()
+        if truncated:
+            combo.addItem(f"All domains ({total_domains} total)", userData="*")
+        else:
+            combo.addItem("All domains", userData="*")
+        for item in domain_items:
+            domain = item["domain"]
+            count = item["count"]
+            combo.addItem(f"{domain or '<none>'} ({count:,})", userData=domain)
+        if truncated:
+            # Add note about more domains available
+            remaining = total_domains - len(domain_items)
+            combo.addItem(f"... and {remaining} more (use Domain contains)", userData="__more__")
+        domain = filters.domain if filters.domain not in ("", "*") else "*"
+        # The domain filter ignores ASCII case and the listed spelling
+        # (MIN(domain)) may change after ingestion: select the listed entry.
+        self._select_combo_value(combo, domain, domain, ascii_case_insensitive=True)
+        combo.blockSignals(False)
+
+        # Sources
+        combo = self.source_combo
+        combo.blockSignals(True)
+        combo.clear()
+        combo.addItem("All sources", userData="")
+        for source in data.get("sources", []):
+            combo.addItem(source, userData=source)
+        self._select_combo_value(combo, filters.source or "", filters.source)
+        combo.blockSignals(False)
+
+        # Match: fixed entries plus list names
+        combo = self.match_combo
+        combo.blockSignals(True)
+        combo.clear()
+        combo.addItem("All", userData="all")
+        combo.addItem("Matched", userData="matched")
+        combo.addItem("Not Matched", userData="unmatched")
+        for list_name in data.get("match_lists", []):
+            combo.addItem(list_name, userData=list_name)
+        self._select_combo_value(combo, filters.match or "all", filters.match, insert_at=3)
+        combo.blockSignals(False)
+
+        # Tags
+        combo = self.tag_combo
+        combo.blockSignals(True)
+        combo.clear()
+        combo.addItem("All tags", userData="*")
+        for tag in data.get("tags", []):
+            combo.addItem(tag["name"], userData=tag["name"])
+        self._select_combo_value(combo, filters.tag or "*", filters.tag)
+        combo.blockSignals(False)
+
+        for combo, tooltip in self._filter_combo_tooltips.items():
+            combo.setEnabled(not loading)
+            combo.setToolTip("Loading…" if loading else tooltip)
+
+    @staticmethod
+    def _select_combo_value(
+        combo: QComboBox,
+        value: str,
+        label: str,
+        insert_at: int = 1,
+        *,
+        ascii_case_insensitive: bool = False,
+    ) -> None:
+        """Select the item holding ``value``, inserting it (as ``label``) if missing.
+
+        With ``ascii_case_insensitive`` an item whose value equals ``value``
+        ignoring ASCII case is selected if no exact match exists (the Domain
+        filter matches with ``COLLATE NOCASE``), instead of inserting a
+        differently-cased duplicate.
+        """
+        index = combo.findData(value)
+        if index < 0 and ascii_case_insensitive and isinstance(value, str):
+            folded = _ascii_fold(value)
+            for candidate in range(combo.count()):
+                data = combo.itemData(candidate)
+                if isinstance(data, str) and _ascii_fold(data) == folded:
+                    index = candidate
+                    break
+        if index < 0:
+            index = min(insert_at, combo.count())
+            combo.insertItem(index, label, userData=value)
+        combo.setCurrentIndex(index)
+
+    def _combo_filters_differ(self) -> bool:
+        """True if the dropdown selections differ from the applied filters.
+
+        Domains compare ignoring ASCII case, like the Domain filter itself.
+        """
+        def domain_value(value: Optional[str]) -> str:
+            return "" if value in (None, "", "*") else _ascii_fold(value)
+
+        domain_data = self.domain_combo.currentData()
+        if domain_data != "__more__" and domain_value(domain_data) != domain_value(self.filters.domain):
+            return True
+        return (
+            (self.source_combo.currentData() or "") != (self.filters.source or "")
+            or (self.match_combo.currentData() or "all") != (self.filters.match or "all")
+            or (self.tag_combo.currentData() or "*") != (self.filters.tag or "*")
+        )
 
     def _on_filters_loaded(self, data: Dict[str, Any], generation: int = 0) -> None:
         """
         Handle background filter loading completion.
+
+        Refills the dropdowns and keeps the current selections; rows are not
+        reloaded, since the effective filter is unchanged (issue #63).
 
         Args:
             data: Dictionary with domains, sources, match_lists, tags
@@ -715,81 +855,21 @@ class UrlsTab(QWidget):
 
         self._filters_loading = False
         self._retire_filter_worker()
+        self._fill_filter_combos(data)
 
-        # Populate domains (with count info)
-        domains_data = data.get("domains", {})
-        domain_items = domains_data.get("items", [])
-        total_domains = domains_data.get("total_count", 0)
-        truncated = domains_data.get("truncated", False)
+        if self._combo_filters_differ():  # defensive: selections are restored above
+            self._on_filters_changed()
 
-        current_domain = "*"  # Default to all
-        self.domain_combo.blockSignals(True)
-        self.domain_combo.clear()
-        self.domain_combo.setEnabled(True)
-
-        if truncated:
-            self.domain_combo.addItem(
-                f"All domains ({total_domains} total)",
-                userData="*"
-            )
-        else:
-            self.domain_combo.addItem("All domains", userData="*")
-
-        for item in domain_items:
-            domain = item["domain"]
-            count = item["count"]
-            label = f"{domain or '<none>'} ({count:,})"
-            self.domain_combo.addItem(label, userData=domain)
-
-        if truncated:
-            # Add note about more domains available
-            remaining = total_domains - len(domain_items)
-            self.domain_combo.addItem(
-                f"... and {remaining} more (use Domain contains)",
-                userData="__more__"
-            )
-
-        self.domain_combo.blockSignals(False)
-
-        # Populate sources
-        sources = data.get("sources", [])
-        self.source_combo.blockSignals(True)
-        self.source_combo.clear()
-        self.source_combo.setEnabled(True)
-        self.source_combo.addItem("All sources", userData="")
-        for source in sources:
-            self.source_combo.addItem(source, userData=source)
-        self.source_combo.blockSignals(False)
-
-        # Populate match lists
-        match_lists = data.get("match_lists", [])
-        self.match_combo.blockSignals(True)
-        self.match_combo.clear()
-        self.match_combo.addItem("All", userData="all")
-        self.match_combo.addItem("Matched", userData="matched")
-        self.match_combo.addItem("Not Matched", userData="unmatched")
-        for list_name in match_lists:
-            self.match_combo.addItem(list_name, userData=list_name)
-        self.match_combo.blockSignals(False)
-
-        # Populate tags
-        tags = data.get("tags", [])
-        self.tag_combo.blockSignals(True)
-        self.tag_combo.clear()
-        self.tag_combo.setEnabled(True)
-        self.tag_combo.addItem("All tags", userData="*")
-        for tag in tags:
-            self.tag_combo.addItem(tag["name"], userData=tag["name"])
-        self.tag_combo.blockSignals(False)
-
-        # Trigger filter application
-        self._on_filters_changed()
-
-        logger.debug("Filter loading complete: %d domains, %d sources, %d match_lists, %d tags",
-                     len(domain_items), len(sources), len(match_lists), len(tags))
+        logger.debug(
+            "Filter loading complete: %d domains, %d sources, %d match_lists, %d tags",
+            len((data.get("domains") or {}).get("items", [])),
+            len(data.get("sources", [])),
+            len(data.get("match_lists", [])),
+            len(data.get("tags", [])),
+        )
 
     def _on_filters_load_error(self, error: str, generation: int = 0) -> None:
-        """Handle background filter loading error."""
+        """Handle background filter loading error (current selections are kept)."""
         if generation != self._filter_worker_generation:
             return
 
@@ -798,32 +878,13 @@ class UrlsTab(QWidget):
 
         logger.error("Filter loading failed: %s", error)
 
-        # Reset to basic state
-        self.domain_combo.blockSignals(True)
-        self.domain_combo.clear()
-        self.domain_combo.setEnabled(True)
-        self.domain_combo.addItem("All domains", userData="*")
-        self.domain_combo.blockSignals(False)
-
-        self.source_combo.blockSignals(True)
-        self.source_combo.clear()
-        self.source_combo.setEnabled(True)
-        self.source_combo.addItem("All sources", userData="")
-        self.source_combo.blockSignals(False)
-
-        self.tag_combo.blockSignals(True)
-        self.tag_combo.clear()
-        self.tag_combo.setEnabled(True)
-        self.tag_combo.addItem("All tags", userData="*")
-        self.tag_combo.blockSignals(False)
-
-        self._on_filters_changed()
+        self._fill_filter_combos(None)
+        if self._combo_filters_differ():  # defensive: selections are kept above
+            self._on_filters_changed()
 
     def _on_search_clicked(self) -> None:
         """Handle explicit search button click (performance optimization)."""
-        # Ignore if filters still loading
-        if self._filters_loading:
-            return
+        # Dropdowns still loading hold the current filter values (issue #63)
         domain_data = self.domain_combo.currentData()
         if domain_data not in ("__loading__", "__more__"):
             self.filters.domain = domain_data or ""
@@ -855,10 +916,6 @@ class UrlsTab(QWidget):
         The flat view is loaded in the background (issue #60); filters are
         only stored on the models here.
         """
-        # Skip if filters are loading
-        if self._filters_loading:
-            return
-
         # Skip if no case data or evidence
         if not self.case_data or self.evidence_id is None:
             return
@@ -921,7 +978,7 @@ class UrlsTab(QWidget):
 
     def _reload_grouped(self) -> None:
         """Reload the grouped view (still synchronous; async children are #64)."""
-        if self._filters_loading or self._load_pending:
+        if self._load_pending:
             return
         self._grouped_stale = False
         self.group_model.reload()
@@ -1152,8 +1209,9 @@ class UrlsTab(QWidget):
             quiet: Keep the page label and buttons instead of showing the
                 loading state (re-check of the shown page, issue #67)
         """
-        # Filter population / deferred load will trigger the load when done.
-        if self._filters_loading or self._load_pending:
+        # The deferred load will trigger the load when done. The dropdown lists
+        # loading meanwhile never delay rows (issue #63).
+        if self._load_pending:
             return
         if not self.case_data or self.evidence_id is None:
             return
@@ -1246,7 +1304,8 @@ class UrlsTab(QWidget):
             logger.debug("Discarding outdated URL page %d; reloading current page", page.query.page)
             self._request_page(self.model.current_page())
             return
-        self.model.set_loaded_page(page)
+        if self.model.set_loaded_page(page):
+            self._on_unnotified_data_change()
         if self.model.total_count() is not None and self._count_in_flight_key == self.model.count_key():
             # The page held the complete result; the running count is redundant.
             self._cancel_count()
@@ -1257,6 +1316,22 @@ class UrlsTab(QWidget):
         self._start_deferred_search_index_build()
 
         logger.debug("Data loading complete: %d rows, has_more=%s", len(page.rows), page.has_more)
+
+    def _on_unnotified_data_change(self) -> None:
+        """A loaded page revealed a write nobody announced (e.g. a tag merge).
+
+        Safety net of the shared statistics cache (issue #63): URL, tag and
+        match statistics of this evidence are marked stale and the dropdown
+        lists reload. The tab's own search index writes are set aside by the
+        model and never get here.
+        """
+        if not self.case_data or self.evidence_id is None:
+            return
+        try:
+            self.case_data.invalidate_stats(int(self.evidence_id), (STATS_URLS, STATS_TAGS, STATS_URL_MATCHES))
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.warning("Failed to invalidate URL statistics: %s", exc)
+        self._populate_filters()
 
     def _on_page_load_error(self, generation: int, evidence_id: int, error: str) -> None:
         """Handle background page loading error."""
@@ -1399,9 +1474,8 @@ class UrlsTab(QWidget):
 
     def _on_deduplication_complete(self) -> None:
         """Handle deduplication completion - refresh data."""
-        # Refresh filters to reflect any removed sources
-        self._populate_filters()
-        # Refresh data
+        # Refresh data and the dropdown lists (removed sources; the dialog
+        # invalidated the cached statistics)
         self.refresh()
 
     def _toggle_grouping(self, checked: bool) -> None:
@@ -1544,6 +1618,8 @@ class UrlsTab(QWidget):
         # the edited URL may be on any flat page.
         self.model.mark_data_changed(keep_position=False)
         self._invalidate_flat_load()
+        # A new tag name appears in the Tag dropdown (issue #63)
+        self._populate_filters()
 
     def _match_against_url_lists(self) -> None:
         """Match URLs against selected URL reference lists."""
@@ -1688,6 +1764,8 @@ class UrlsTab(QWidget):
         self._match_worker_generation += 1
         worker = self.match_worker
         self.match_worker = None
+        # Lists matched before the cancel are committed (issue #63)
+        self._invalidate_match_stats()
 
         if worker.isRunning():
             worker.requestInterruption()
@@ -1757,14 +1835,22 @@ class UrlsTab(QWidget):
             message,
         )
 
-        # Refresh filters to reflect new match lists, then refresh data
-        self._populate_filters()
+        # New matches: cached match lists are stale (issue #63). refresh()
+        # reloads the data and the dropdown lists (new match lists).
+        self._invalidate_match_stats()
         self.refresh()
+
+    def _invalidate_match_stats(self) -> None:
+        """URL list matching wrote url_matches (and process_log) (issue #63)."""
+        if self.case_data is not None and self.evidence_id is not None:
+            self.case_data.invalidate_stats(int(self.evidence_id), (STATS_URL_MATCHES, STATS_PROCESS_LOG))
 
     def _match_error(self, error_msg: str, generation: int = 0) -> None:
         """Handle match error."""
         if generation != self._match_worker_generation:
             return
+        # Lists matched before the error are committed (issue #63)
+        self._invalidate_match_stats()
 
         # Grab local ref: close() emits canceled, which nulls self.progress_dialog.
         dlg = self.progress_dialog

@@ -45,7 +45,15 @@ class FileListModel(QAbstractTableModel):
         "Tags"
     ]
 
-    def __init__(self, case_folder: str, evidence_id: int, case_db_path: Path, parent=None):
+    def __init__(
+        self,
+        case_folder: str,
+        evidence_id: int,
+        case_db_path: Path,
+        parent=None,
+        *,
+        load: bool = True,
+    ):
         """
         Initialize file list model.
 
@@ -54,6 +62,7 @@ class FileListModel(QAbstractTableModel):
             evidence_id: Evidence ID
             case_db_path: Path to case database file
             parent: Parent widget
+            load: Load the first page now (False: on the first ``apply_filters``)
         """
         super().__init__(parent)
         self.case_folder = Path(case_folder)
@@ -85,7 +94,8 @@ class FileListModel(QAbstractTableModel):
             "search": "",  # Search in filename/path
         }
 
-        self._load_data()
+        if load:
+            self._load_data()
 
     def _get_evidence_label(self) -> str:
         """

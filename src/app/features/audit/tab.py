@@ -853,9 +853,9 @@ class AuditTab(QWidget):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
 
-        # Tab widget for subtabs
+        # Tab widget for subtabs (currentChanged is connected once the tabs
+        # are added: adding the first tab must not load anything; issue #63)
         self._tab_widget = QTabWidget()
-        self._tab_widget.currentChanged.connect(self._on_subtab_changed)
 
         # Create subtabs
         # 1. Extraction subtab
@@ -903,6 +903,7 @@ class AuditTab(QWidget):
             parent=self,
         )
         self._tab_widget.addTab(self._logs_tab, "📜 Logs")
+        self._tab_widget.currentChanged.connect(self._on_subtab_changed)
 
         layout.addWidget(self._tab_widget)
 

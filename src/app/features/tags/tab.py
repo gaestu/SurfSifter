@@ -106,13 +106,14 @@ class TagsTab(QWidget):
     def set_case_data(self, case_data: Optional[CaseDataAccess]) -> None:
         self.case_data = case_data
         self.model.set_case_data(case_data)
-        self._refresh()
+        self._refresh_if_visible()
 
     def set_evidence(self, evidence_id: Optional[int], evidence_label: Optional[str] = None) -> None:
         self.evidence_id = evidence_id
         self._evidence_label = evidence_label
-        self.model.set_evidence(evidence_id)
-        self._refresh()
+        # Tags are read when the tab is shown (showEvent reloads; issue #63)
+        self.model.set_evidence(evidence_id, reload=False)
+        self._refresh_if_visible()
 
         # Keep summary dialog in sync if it exists
         if self._summary_dialog is not None:
@@ -122,6 +123,13 @@ class TagsTab(QWidget):
     def _refresh(self) -> None:
         self.model.reload()
         self._update_buttons()
+
+    def _refresh_if_visible(self) -> None:
+        """Reload now if shown; a hidden tab reloads on its next show."""
+        if self.isVisible():
+            self._refresh()
+        else:
+            self._update_buttons()
 
     def showEvent(self, event):
         """Override showEvent to refresh tags when tab becomes visible."""

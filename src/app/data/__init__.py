@@ -2,6 +2,8 @@
 
 This package contains:
 - _base.py: BaseDataAccess with connection management and caching infrastructure
+- _stats_cache.py: CaseStatsCache, the revision-checked statistics cache
+  shared by every data access of one case (issue #63)
 - _case.py: CaseMetadataMixin for case metadata operations
 - _evidence.py: EvidenceMetadataMixin for evidence metadata operations
 - _images.py: ImageQueryMixin for image query operations
@@ -20,14 +22,49 @@ Download queries extracted to DownloadQueryMixin (_downloads.py).
 from ._base import BaseDataAccess, QueryCancelledError
 from ._case import CaseMetadataMixin
 from ._downloads import DownloadQueryMixin
-from ._evidence import EvidenceMetadataMixin, EvidenceCounts
+from ._evidence import (
+    EvidenceCounts,
+    EvidenceMetadataMixin,
+    OverviewStats,
+)
+from ._stats_cache import (
+    ALL_STATS_CATEGORIES,
+    EVIDENCE_COUNTS_CATEGORIES,
+    OVERVIEW_STATS_CATEGORIES,
+    TAG_STATISTICS_CATEGORIES,
+    STATS_IMAGES,
+    STATS_OS_INDICATORS,
+    STATS_PROCESS_LOG,
+    STATS_TAGS,
+    STATS_URL_MATCHES,
+    STATS_URLS,
+    CaseStatsCache,
+    StatsWriteScope,
+    case_stats_cache,
+    discard_case_stats_cache,
+)
 from ._images import ImageQueryMixin
 from ._urls import UrlCursor, UrlFilterSpec, UrlPage, UrlPageQuery, UrlQueryMixin, UrlSearchIndexStatus
 from .case_data import CaseDataAccess
 
 __all__ = [
+    "ALL_STATS_CATEGORIES",
     "BaseDataAccess",
     "CaseDataAccess",
+    "CaseStatsCache",
+    "EVIDENCE_COUNTS_CATEGORIES",
+    "OVERVIEW_STATS_CATEGORIES",
+    "OverviewStats",
+    "STATS_IMAGES",
+    "STATS_OS_INDICATORS",
+    "STATS_PROCESS_LOG",
+    "STATS_TAGS",
+    "STATS_URL_MATCHES",
+    "STATS_URLS",
+    "StatsWriteScope",
+    "TAG_STATISTICS_CATEGORIES",
+    "case_stats_cache",
+    "discard_case_stats_cache",
     "CaseMetadataMixin",
     "DownloadQueryMixin",
     "EvidenceMetadataMixin",

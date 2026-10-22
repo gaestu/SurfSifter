@@ -37,16 +37,18 @@ class InventorySubtab(QWidget):
         super().__init__(parent)
         self.ctx = ctx
         self._loaded = False
+        self._filters_populated = False
 
+        # Nothing is read until the subtab is shown (load(); issue #63)
         self.model = BrowserInventoryModel(
             str(ctx.case_folder),
             ctx.evidence_id,
             ctx.case_db_path,
             parent=self,
+            load=False,
         )
 
         self._setup_ui()
-        self._populate_filters()
 
     @property
     def db_manager(self):
@@ -127,6 +129,9 @@ class InventorySubtab(QWidget):
 
     def load(self):
         self.refresh()
+        if not self._filters_populated:
+            self._filters_populated = True
+            self._populate_filters()
         self._loaded = True
 
     def mark_needs_reload(self):
