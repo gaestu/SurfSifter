@@ -352,23 +352,37 @@ def test_tagging_refresh_invalidates_cached_tags(qtbot, make_tab, url_case):
     assert "Fresh" in tab.model.data(tab.model.index(row, 8))
 
 
+def _counting_group_loader(monkeypatch):
+    """Wrap the tab's domain-group handler; returns the list of group queries."""
+    import app.features.urls.tab as tab_module
+
+    original = tab_module._load_url_domain_groups
+    calls = []
+
+    def counting(case_data, request):
+        calls.append(request.payload)
+        return original(case_data, request)
+
+    monkeypatch.setattr(tab_module, "_load_url_domain_groups", counting)
+    return calls
+
+
 def test_refresh_marks_hidden_grouped_view_stale(qtbot, make_tab, url_case, monkeypatch):
     case, data = url_case
+    group_queries = _counting_group_loader(monkeypatch)
     tab = make_tab(case, data, case.evidence_ids[0])
     tab.show()
     qtbot.waitUntil(lambda: _loaded(tab), timeout=10000)
 
-    grouped_reloads = []
-    monkeypatch.setattr(tab.group_model, "reload", lambda: grouped_reloads.append(1))
     tab.refresh()
     qtbot.waitUntil(lambda: _loaded(tab), timeout=10000)
-    assert grouped_reloads == []
+    assert group_queries == []
     assert tab._grouped_stale
 
     tab.group_checkbox.setChecked(True)
-    assert grouped_reloads == [1]
+    qtbot.waitUntil(lambda: len(group_queries) == 1 and tab.group_model.group_count() == 5, timeout=10000)
     tab.refresh()
-    assert grouped_reloads == [1, 1]
+    qtbot.waitUntil(lambda: len(group_queries) == 2 and tab.group_model.group_count() == 5, timeout=10000)
     assert tab._flat_stale
 
 
@@ -754,23 +768,29 @@ def test_grouped_view_shows_and_edits_existing_tags(qtbot, make_tab, url_case):
     tab.group_checkbox.setChecked(True)
 
     model = tab.group_model
-    parents = [model.item(parent, column) for parent in range(model.rowCount()) for column in range(8)]
-    assert parents and not any(item.isEditable() for item in parents)
+    qtbot.waitUntil(lambda: model.group_count() == 5, timeout=10000)
+    for row in range(model.group_count()):
+        tab.tree_view.expand(model.index(row, 0))
+    qtbot.waitUntil(lambda: sum(model.loaded_url_count(r) for r in range(5)) == 250, timeout=10000)
+
+    groups = [model.index(row, column) for row in range(model.group_count()) for column in range(8)]
+    assert groups and not any(model.flags(index) & Qt.ItemIsEditable for index in groups)
     children = [
-        model.item(parent).child(row, 7)
-        for parent in range(model.rowCount())
-        for row in range(model.item(parent).rowCount())
+        model.index(row, 7, model.index(parent, 0))
+        for parent in range(model.group_count())
+        for row in range(model.loaded_url_count(parent))
     ]
     assert len(children) == 250
-    tagged = [item for item in children if item.text()]
-    assert tagged and all(item.isEditable() for item in tagged)
-    item = tagged[0]
-    url_id = item.data(Qt.UserRole)
+    assert all(model.flags(index) & Qt.ItemIsEditable for index in children)
+    tagged = [index for index in children if model.data(index)]
+    assert tagged
+    index = tagged[0]
+    url_id = model.data(index, Qt.UserRole)
     before = _url_tags(data, evidence_id, url_id)
-    assert item.text() == ", ".join(before)
+    assert model.data(index) == ", ".join(before)
 
     revision = tab.model._data_revision
-    item.setText(f"{item.text()}, Grouped")
+    assert model.setData(index, f"{model.data(index)}, Grouped")
     assert _url_tags(data, evidence_id, url_id) == sorted(before + ["Grouped"])
     assert tab.model._data_revision == revision + 1  # flat totals invalidated
 

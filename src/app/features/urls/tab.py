@@ -1,11 +1,11 @@
 from __future__ import annotations
 
 import logging
-import string
 import time
+from collections import deque
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, Iterable, Optional, List
+from typing import Any, Deque, Dict, Iterable, Optional, List, Set
 
 from PySide6.QtCore import Qt, Signal, QThread, QTimer
 from PySide6.QtWidgets import (
@@ -35,12 +35,16 @@ from app.data import (
     STATS_TAGS,
     STATS_URL_MATCHES,
     STATS_URLS,
+    UrlDomainChildPage,
+    UrlDomainGroupPage,
     UrlFilterSpec,
     UrlPage,
     UrlSearchIndexStatus,
+    ascii_fold,
 )
 from app.data.case_data import CaseDataAccess
 from app.features.urls.models import UrlsTableModel, UrlsGroupedModel
+from app.features.urls.models.urls_grouped import FAILED, LOADED, LOADING, NOT_LOADED, group_key
 from app.services.matching_workers import UrlMatchWorker
 from app.services.query_loader import (
     CancellableQueryWorker,
@@ -52,14 +56,6 @@ from app.services.url_search_index_worker import UrlSearchIndexWorker
 from app.common import add_sandbox_url_actions
 
 logger = logging.getLogger(__name__)
-
-
-_ASCII_FOLD_TABLE = str.maketrans(string.ascii_uppercase, string.ascii_lowercase)
-
-
-def _ascii_fold(value: str) -> str:
-    """Lower-case ASCII letters only, like SQLite's ``COLLATE NOCASE``."""
-    return value.translate(_ASCII_FOLD_TABLE)
 
 
 class FilterLoadWorker(QThread):
@@ -143,6 +139,21 @@ def _load_url_page(case_data: CaseDataAccess, request: QueryRequest) -> UrlPage:
     return case_data.load_url_page(request.payload)
 
 
+def _load_url_domain_groups(case_data: CaseDataAccess, request: QueryRequest) -> UrlDomainGroupPage:
+    """Worker-thread handler: load one page of domain groups (issue #64)."""
+    return case_data.load_url_domain_groups(request.payload)
+
+
+def _load_url_domain_children(case_data: CaseDataAccess, request: QueryRequest) -> UrlDomainChildPage:
+    """Worker-thread handler: load one page of a domain group's URLs (issue #64)."""
+    return case_data.load_url_domain_children(request.payload)
+
+
+# First element of the count keys of the grouped tree's total (issue #64);
+# the flat view's keys start with the evidence id.
+_TREE_COUNT = "tree"
+
+
 @dataclass(frozen=True)
 class UrlCountRequest:
     """Exact-total request; ``key`` is the model's count-cache key it fills."""
@@ -217,6 +228,28 @@ class UrlsTab(QWidget):
         # Only the visible view is refreshed; the other one is marked stale.
         self._flat_stale = False
         self._grouped_stale = True
+
+        # Grouped tree (issue #64): group pages and child pages load in the
+        # background; results of an older tree generation are rejected. The
+        # child loader is latest-wins, so child requests run one at a time
+        # from a FIFO queue of group keys (sibling expansions do not cancel
+        # each other).
+        self._group_loader: Optional[CancellableQueryWorker] = None
+        self._child_loader: Optional[CancellableQueryWorker] = None
+        self._tree_generation = 0
+        self._child_queue: Deque[Optional[str]] = deque()
+        self._child_request_active = False
+        self._child_request_domain: Optional[str] = None
+        # Keys of groups expanded before a tree reload, re-expanded when they
+        # appear again.
+        self._restore_expanded: Set[Optional[str]] = set()
+        # The tree's URL total when the flat view's cached total is unknown.
+        # Counted by the count loader but kept apart from the flat view's
+        # count cache: without the flat view's data_version baseline, a
+        # cached total could not be invalidated by an unnotified write.
+        self._tree_count_serial = 0
+        self._tree_count_key: Optional[tuple] = None
+        self._tree_total: Optional[int] = None
 
         # Background URL search index build (issue #62); search never waits
         # for it (URLs not indexed yet are scanned).
@@ -327,7 +360,7 @@ class UrlsTab(QWidget):
         # Queued: reload only after the editor has finished committing.
         self.model.tags_edited.connect(self._on_tags_changed, Qt.QueuedConnection)
         self.group_model = UrlsGroupedModel(case_data)
-        self.group_model.itemChanged.connect(self._on_group_item_changed)
+        self.group_model.tags_edited.connect(self._on_group_tags_edited)
 
         self.table_view = QTableView()
         self.table_view.setSelectionBehavior(QTableView.SelectRows)
@@ -348,6 +381,10 @@ class UrlsTab(QWidget):
         self.tree_view.setModel(self.group_model)
         self.tree_view.setItemsExpandable(True)
         self.tree_view.setRootIsDecorated(True)
+        # Children load on expansion; "load more"/retry rows on activation.
+        self.tree_view.expanded.connect(self._on_tree_expanded)
+        self.tree_view.collapsed.connect(self._on_tree_collapsed)
+        self.tree_view.activated.connect(self._on_tree_activated)
 
         self.views = QStackedWidget()
         self.views.addWidget(self.table_view)
@@ -407,6 +444,8 @@ class UrlsTab(QWidget):
             self._data_worker_generation += 1
             self._stop_url_loader()
             self._stop_count_loader()
+            self._stop_tree_loaders()
+            self._restore_expanded.clear()
             self._stop_search_index_build()
         self.case_data = case_data
         self.model.set_case_data(case_data)
@@ -437,6 +476,8 @@ class UrlsTab(QWidget):
             # Reject in-flight results and stop work for the previous evidence.
             self._cancel_flat_load()
             self._cancel_count()
+            self._cancel_tree_loads()
+            self._restore_expanded.clear()
             self._stop_search_index_build()
         self.evidence_id = evidence_id
         self._evidence_label_cache = evidence_label  #
@@ -807,10 +848,10 @@ class UrlsTab(QWidget):
         """
         index = combo.findData(value)
         if index < 0 and ascii_case_insensitive and isinstance(value, str):
-            folded = _ascii_fold(value)
+            folded = ascii_fold(value)
             for candidate in range(combo.count()):
                 data = combo.itemData(candidate)
-                if isinstance(data, str) and _ascii_fold(data) == folded:
+                if isinstance(data, str) and ascii_fold(data) == folded:
                     index = candidate
                     break
         if index < 0:
@@ -824,7 +865,7 @@ class UrlsTab(QWidget):
         Domains compare ignoring ASCII case, like the Domain filter itself.
         """
         def domain_value(value: Optional[str]) -> str:
-            return "" if value in (None, "", "*") else _ascii_fold(value)
+            return "" if value in (None, "", "*") else ascii_fold(value)
 
         domain_data = self.domain_combo.currentData()
         if domain_data != "__more__" and domain_value(domain_data) != domain_value(self.filters.domain):
@@ -973,44 +1014,234 @@ class UrlsTab(QWidget):
             self._invalidate_flat_load()
             self._reload_grouped()
         else:
-            self._grouped_stale = True
+            self._invalidate_tree()
             self._request_page(page)
 
+    # Grouped tree (issue #64) -------------------------------------------
+
+    def _invalidate_tree(self) -> None:
+        """Mark the grouped tree stale and drop its in-flight loads."""
+        self._grouped_stale = True
+        self._cancel_tree_loads()
+
+    def _cancel_tree_loads(self) -> None:
+        """Reject in-flight tree results and drop queued child requests."""
+        self._tree_generation += 1
+        self._child_queue.clear()
+        self._child_request_active = False
+        self._tree_count_key = None
+        self._tree_total = None
+        for loader in (self._group_loader, self._child_loader):
+            if loader is not None:
+                loader.cancel()
+
+    def _stop_tree_loaders(self, timeout_ms: int = 2000) -> None:
+        self._cancel_tree_loads()
+        group_loader, self._group_loader = self._group_loader, None
+        child_loader, self._child_loader = self._child_loader, None
+        self._stop_loader(group_loader, timeout_ms)
+        self._stop_loader(child_loader, timeout_ms)
+
     def _reload_grouped(self) -> None:
-        """Reload the grouped view (still synchronous; async children are #64)."""
+        """Reload the grouped tree: first group page in the background, no children.
+
+        Groups expanded before are re-expanded (their first child page is
+        reloaded) when they appear again.
+        """
         if self._load_pending:
             return
         self._grouped_stale = False
-        self.group_model.reload()
+        self._cancel_tree_loads()
+        model = self.group_model
+        if model.evidence_id == self.evidence_id:
+            expanded = {
+                group_key(model.group_domain(row))
+                for row in range(model.group_count())
+                if self.tree_view.isExpanded(model.index(row, 0))
+            }
+            # A reload before the first page arrived keeps the pending keys.
+            if expanded or model.group_count():
+                self._restore_expanded = expanded
+        else:
+            self._restore_expanded.clear()
+        model.reset_tree()
+        if not self.case_data or self.evidence_id is None:
+            self._update_page_label()
+            return
+        if model.evidence_id != self.evidence_id:
+            model.set_evidence(self.evidence_id, reload=False)
+        self._request_group_page()
+        self._request_tree_count()
+        self._update_page_label()
 
-    def _ensure_url_loader(self) -> Optional[CancellableQueryWorker]:
-        if self._url_loader is not None:
-            return self._url_loader
+    def _request_tree_count(self) -> None:
+        """Count the tree's URLs unless the flat view's total (same filters) is cached."""
+        self._tree_count_key = None
+        self._tree_total = None
+        if not self.case_data or self.evidence_id is None or self.model.total_count() is not None:
+            return
+        loader = self._ensure_count_loader()
+        if loader is None:
+            return
+        self._tree_count_serial += 1
+        self._tree_count_key = (_TREE_COUNT, self._tree_count_serial)
+        self._submit_count(loader, self._tree_count_key, self.group_model.filter_spec())
+
+    def _ensure_group_loader(self) -> Optional[CancellableQueryWorker]:
+        if self._group_loader is None:
+            self._group_loader = self._create_loader(
+                _load_url_domain_groups, "UrlGroupLoader", self._on_group_page_loaded, self._on_group_page_error
+            )
+        return self._group_loader
+
+    def _ensure_child_loader(self) -> Optional[CancellableQueryWorker]:
+        if self._child_loader is None:
+            self._child_loader = self._create_loader(
+                _load_url_domain_children, "UrlGroupChildLoader", self._on_child_page_loaded, self._on_child_page_error
+            )
+        return self._child_loader
+
+    def _is_current_tree_result(self, generation: int, evidence_id: int) -> bool:
+        return generation == self._tree_generation and evidence_id == self.evidence_id
+
+    def _request_group_page(self) -> None:
+        """Load the next group page (first page, more domains, or retry)."""
+        if not self.case_data or self.evidence_id is None:
+            return
+        query = self.group_model.begin_group_load()
+        if query is None:
+            return
+        loader = self._ensure_group_loader()
+        if loader is None:
+            self.group_model.fail_group_load("Case context unavailable for background URL loading")
+        else:
+            loader.submit(QueryRequest(self._tree_generation, int(self.evidence_id), query))
+        self._update_page_label()
+
+    def _on_group_page_loaded(self, result: QueryResult) -> None:
+        if not self._is_current_tree_result(result.generation, result.evidence_id):
+            return
+        page: UrlDomainGroupPage = result.payload
+        if self.group_model.apply_group_page(page):
+            self._restore_expanded_groups()
+        self._update_page_label()
+
+    def _on_group_page_error(self, generation: int, evidence_id: int, error: str) -> None:
+        if not self._is_current_tree_result(generation, evidence_id):
+            return
+        logger.error("URL domain group loading failed: %s", error)
+        self.group_model.fail_group_load(error)
+        self._update_page_label()
+
+    def _restore_expanded_groups(self) -> None:
+        for key in list(self._restore_expanded):
+            row = self.group_model.group_row(key)
+            if row is not None:
+                self._restore_expanded.discard(key)
+                # Emits expanded: the first child page is requested.
+                self.tree_view.expand(self.group_model.index(row, 0))
+
+    def _on_tree_expanded(self, index) -> None:  # noqa: ANN001
+        model = self.group_model
+        if not model.is_group_index(index):
+            return
+        row = index.row()
+        model.group_expanded(row)
+        if model.group_state(row) in (NOT_LOADED, FAILED):
+            self._queue_child_load(row)
+
+    def _on_tree_collapsed(self, index) -> None:  # noqa: ANN001
+        model = self.group_model
+        if not model.is_group_index(index):
+            return
+        row = index.row()
+        key = group_key(model.group_domain(row))
+        if key in self._child_queue:
+            # Not started yet: drop it (an in-flight page is still applied).
+            self._child_queue.remove(key)
+            model.cancel_child_load(row)
+        model.group_collapsed(row)
+
+    def _on_tree_activated(self, index) -> None:  # noqa: ANN001
+        """Load more domains/URLs, or retry, from an activated status row."""
+        model = self.group_model
+        if not model.is_status_index(index):
+            return
+        parent = index.parent()
+        if not parent.isValid():
+            self._request_group_page()
+        else:
+            self._queue_child_load(parent.row())
+
+    def _queue_child_load(self, row: int) -> None:
+        if not self.group_model.begin_child_load(row):
+            return
+        self._child_queue.append(group_key(self.group_model.group_domain(row)))
+        self._pump_child_queue()
+
+    def _pump_child_queue(self) -> None:
+        """Submit the next queued child request unless one is running."""
+        model = self.group_model
+        while not self._child_request_active and self._child_queue:
+            key = self._child_queue.popleft()
+            row = model.group_row(key)
+            if row is None or model.group_state(row) != LOADING:
+                continue
+            domain = model.group_domain(row)
+            loader = self._ensure_child_loader()
+            if loader is None or self.evidence_id is None:
+                model.fail_child_load(domain, "Case context unavailable for background URL loading")
+                continue
+            self._child_request_active = True
+            self._child_request_domain = domain
+            loader.submit(QueryRequest(self._tree_generation, int(self.evidence_id), model.build_child_query(row)))
+
+    def _on_child_page_loaded(self, result: QueryResult) -> None:
+        if not self._is_current_tree_result(result.generation, result.evidence_id):
+            return
+        self._child_request_active = False
+        page: UrlDomainChildPage = result.payload
+        model = self.group_model
+        if model.apply_child_page(page):
+            row = model.group_row(group_key(page.query.domain))
+            if row is not None and not self.tree_view.isExpanded(model.index(row, 0)):
+                # Collapsed while loading: keep retained rows bounded.
+                model.trim_collapsed()
+        self._pump_child_queue()
+
+    def _on_child_page_error(self, generation: int, evidence_id: int, error: str) -> None:
+        if not self._is_current_tree_result(generation, evidence_id):
+            return
+        self._child_request_active = False
+        logger.error("URL group child loading failed: %s", error)
+        self.group_model.fail_child_load(self._child_request_domain, error)
+        self._pump_child_queue()
+
+    def _create_loader(self, handler, name: str, on_result, on_error, limiter=None) -> Optional[CancellableQueryWorker]:
+        """Background loader for the current case (None without case context)."""
         case_folder = getattr(self.case_data, "case_folder", None)
         case_db_path = getattr(self.case_data, "db_path", None)
         if case_folder is None or case_db_path is None:
             return None
-        self._url_loader = CancellableQueryWorker(
-            Path(case_folder), Path(case_db_path), _load_url_page, name="UrlPageLoader"
-        )
-        self._url_loader.result_ready.connect(self._on_page_loaded)
-        self._url_loader.failed.connect(self._on_page_load_error)
+        loader = CancellableQueryWorker(Path(case_folder), Path(case_db_path), handler, limiter=limiter, name=name)
+        loader.result_ready.connect(on_result)
+        loader.failed.connect(on_error)
+        return loader
+
+    def _ensure_url_loader(self) -> Optional[CancellableQueryWorker]:
+        if self._url_loader is None:
+            self._url_loader = self._create_loader(
+                _load_url_page, "UrlPageLoader", self._on_page_loaded, self._on_page_load_error
+            )
         return self._url_loader
 
     def _ensure_count_loader(self) -> Optional[CancellableQueryWorker]:
-        if self._count_loader is not None:
-            return self._count_loader
-        case_folder = getattr(self.case_data, "case_folder", None)
-        case_db_path = getattr(self.case_data, "db_path", None)
-        if case_folder is None or case_db_path is None:
-            return None
-        # Own limiter: long counts must not hold the interactive read slots.
-        self._count_loader = CancellableQueryWorker(
-            Path(case_folder), Path(case_db_path), _count_urls,
-            limiter=background_read_limiter(), name="UrlCountLoader",
-        )
-        self._count_loader.result_ready.connect(self._on_count_loaded)
-        self._count_loader.failed.connect(self._on_count_error)
+        if self._count_loader is None:
+            # Own limiter: long counts must not hold the interactive read slots.
+            self._count_loader = self._create_loader(
+                _count_urls, "UrlCountLoader", self._on_count_loaded, self._on_count_error,
+                limiter=background_read_limiter(),
+            )
         return self._count_loader
 
     # URL search index (issue #62) ---------------------------------------
@@ -1263,12 +1494,14 @@ class UrlsTab(QWidget):
         loader = self._ensure_count_loader()
         if loader is None:
             return
+        self._submit_count(loader, key, self.model.filter_spec())
+
+    def _submit_count(self, loader: CancellableQueryWorker, key: tuple, filters: UrlFilterSpec) -> None:
+        """Start counting ``filters``; the result is delivered with ``key``."""
         self._count_generation += 1
         self._count_in_flight_key = key
         self._count_failed_key = None
-        loader.submit(
-            QueryRequest(self._count_generation, int(self.evidence_id), UrlCountRequest(key, self.model.filter_spec()))
-        )
+        loader.submit(QueryRequest(self._count_generation, int(self.evidence_id), UrlCountRequest(key, filters)))
 
     def _set_table_loading(self) -> None:
         """Show loading state in table view."""
@@ -1331,6 +1564,9 @@ class UrlsTab(QWidget):
             self.case_data.invalidate_stats(int(self.evidence_id), (STATS_URLS, STATS_TAGS, STATS_URL_MATCHES))
         except Exception as exc:  # pragma: no cover - defensive
             logger.warning("Failed to invalidate URL statistics: %s", exc)
+        # The hidden grouped tree holds counts, tags and matches read before
+        # that write: reload it when it is shown again.
+        self._invalidate_tree()
         self._populate_filters()
 
     def _on_page_load_error(self, generation: int, evidence_id: int, error: str) -> None:
@@ -1361,8 +1597,12 @@ class UrlsTab(QWidget):
         key, count = result.payload
         if key == self._count_in_flight_key:
             self._count_in_flight_key = None
-        # Ignored by the model if filters/data changed meanwhile.
-        self.model.store_total_count(key, count)
+        if key[0] == _TREE_COUNT:
+            if key == self._tree_count_key:
+                self._tree_total = count
+        else:
+            # Ignored by the model if filters/data changed meanwhile.
+            self.model.store_total_count(key, count)
         if not self._data_loading:
             self._update_page_label()
 
@@ -1399,6 +1639,10 @@ class UrlsTab(QWidget):
 
     def _update_page_label(self) -> None:
         """Update pagination label: 'Showing X-Y of Z URLs' (Z pending while counting)."""
+        if self.views.currentIndex() == 1:
+            self._update_grouped_label()
+            return
+        self.page_size_combo.setEnabled(True)
         rows = self.model.rowCount()
         page = self.model.current_page()
         self.prev_button.setEnabled(self.model.has_previous_page())
@@ -1432,6 +1676,46 @@ class UrlsTab(QWidget):
         else:
             # Never show an estimate as exact: the total is pending.
             text = f"Showing {start:,}-{end:,} of … URLs (counting)"
+        self.page_label.setText(text)
+
+    def _update_grouped_label(self) -> None:
+        """Grouped view: loaded domains and the exact URL total (issue #64).
+
+        Flat paging controls do not apply to the tree and are disabled.
+        """
+        self.prev_button.setEnabled(False)
+        self.next_button.setEnabled(False)
+        self.page_size_combo.setEnabled(False)
+        model = self.group_model
+        groups = model.group_count()
+        if groups == 0:
+            state = model.state()
+            if state == LOADING:
+                text = "Loading domains…"
+            elif state == FAILED:
+                text = "Could not load domains"
+            elif self.evidence_id is not None and state != NOT_LOADED:
+                text = "No URLs"
+            else:
+                text = ""
+            self.page_label.setText(text)
+            return
+        text = f"{groups:,} domain{'s' if groups != 1 else ''} shown"
+        if model.has_more_groups():
+            text += ", more available"
+        total = self.model.total_count()
+        if total is None:
+            total = self._tree_total
+        if total is None and not model.has_more_groups() and model.state() == LOADED:
+            # All groups loaded: their exact counts add up to the total.
+            total = sum(model.group_url_count(row) for row in range(groups))
+        key = self._tree_count_key
+        if total is not None:
+            text += f" · {total:,} URLs"
+        elif key is not None and self._count_in_flight_key == key:
+            text += " · … URLs (counting)"
+        elif key is not None and self._count_failed_key == key:
+            text += " · total unavailable"
         self.page_label.setText(text)
 
     def _export_csv(self) -> None:
@@ -1484,12 +1768,14 @@ class UrlsTab(QWidget):
             # A hidden flat load would be applied after later state changes.
             self._invalidate_flat_load()
         self.views.setCurrentIndex(index)
-        # Reload the newly visible view only if it went stale while hidden.
-        if checked:
-            if self._grouped_stale:
-                self._reload_grouped()
-        elif self._flat_stale:
+        # Reload the newly visible view only if it went stale while hidden;
+        # otherwise it is shown as it was (no queries).
+        if checked and self._grouped_stale:
+            self._reload_grouped()
+        elif not checked and self._flat_stale:
             self._request_page(self.model.current_page())
+        else:
+            self._update_page_label()
 
     # _trigger_download method removed - downloads now handled in Download tab
 
@@ -1599,25 +1885,26 @@ class UrlsTab(QWidget):
                 if row:
                     rows.append(row)
         else:
+            # Loaded URL rows only; group and status rows are skipped.
             indexes = self.tree_view.selectionModel().selectedRows()
             for idx in indexes:
-                if not idx.parent().isValid():
-                    continue
-                item = self.group_model.itemFromIndex(idx)
-                data = item.data(Qt.UserRole + 1)
-                if isinstance(data, dict):
-                    rows.append(data)
+                row = self.group_model.url_row(idx)
+                if row:
+                    rows.append(row)
         return rows
 
-    def _on_group_item_changed(self, item):  # noqa: ANN001
-        url_id = item.data(Qt.UserRole)
-        if not url_id or not self.case_data or self.evidence_id is None:
+    def _on_group_tags_edited(self) -> None:
+        """An inline Tags edit in the grouped view was written (by the model)."""
+        if not self.case_data or self.evidence_id is None:
             return
-        self.case_data.update_url_tags(int(self.evidence_id), int(url_id), item.text())
         # Cached flat-view tags (and tag-filtered totals) are now outdated;
         # the edited URL may be on any flat page.
         self.model.mark_data_changed(keep_position=False)
         self._invalidate_flat_load()
+        if self.views.currentIndex() == 1:
+            # Tag-filtered totals may have changed.
+            self._request_tree_count()
+        self._update_page_label()
         # A new tag name appears in the Tag dropdown (issue #63)
         self._populate_filters()
 
@@ -1880,6 +2167,7 @@ class UrlsTab(QWidget):
         self._filter_worker_generation += 1
         self._data_worker_generation += 1
         self._count_generation += 1
+        self._tree_generation += 1
         self._match_worker_generation += 1
 
         def _stop_worker(worker: QThread, worker_name: str, timeout_ms: int = 2000) -> None:
@@ -1913,6 +2201,7 @@ class UrlsTab(QWidget):
             self._filter_worker = None
         self._stop_url_loader()
         self._stop_count_loader()
+        self._stop_tree_loaders()
         self._stop_search_index_build(timeout_ms=2000)
         if self.match_worker is not None:
             _stop_worker(self.match_worker, "UrlMatchWorker")

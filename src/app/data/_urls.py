@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import logging
 import sqlite3
+import string
 import time
 from dataclasses import dataclass, field, replace
 from typing import Any, Callable, Dict, Iterable, Iterator, List, Optional, Tuple
@@ -41,6 +42,18 @@ URL_MATCH_LIST_CATEGORIES = frozenset({STATS_URL_MATCHES})
 # idx_urls_evidence_first_seen (evidence_id, first_seen_utc DESC) is ascending,
 # so this order is served by that index without a sort step.
 URL_ORDER_BY = "u.first_seen_utc DESC, u.id ASC"
+
+_ASCII_FOLD_TABLE = str.maketrans(string.ascii_uppercase, string.ascii_lowercase)
+
+
+def ascii_fold(value: str) -> str:
+    """Lower-case ASCII letters only, like SQLite's ``COLLATE NOCASE``.
+
+    The Python form of the domain comparison used by the exact domain filter
+    and the grouped view's domain groups.
+    """
+    return value.translate(_ASCII_FOLD_TABLE)
+
 
 _URL_ROW_COLUMNS = (
     "u.id, u.url, u.domain, u.scheme, u.discovered_by, u.first_seen_utc, "
@@ -281,6 +294,110 @@ class UrlPage:
         return UrlCursor.from_row(self.rows[-1])
 
 
+# Grouped URL view (issue #64) ----------------------------------------------
+#
+# Groups are domains compared ASCII case-insensitively (``COLLATE NOCASE``),
+# like the exact domain filter, in ascending NOCASE order; URLs without a
+# domain (NULL or '') form one group (``domain is None``) after all others.
+# Children of a group are its URLs in ``URL_ORDER_BY`` order.
+
+
+@dataclass(frozen=True)
+class UrlDomainGroup:
+    """One domain group: its domain and the exact number of matching URLs.
+
+    ``domain`` is the smallest spelling (``MIN``) among the group's matching
+    URLs, or ``None`` for the group of URLs without a domain.
+    """
+
+    domain: Optional[str]
+    count: int
+
+
+@dataclass(frozen=True)
+class UrlDomainGroupQuery:
+    """Filters and keyset position for one page of domain groups.
+
+    ``after`` is the domain of the last group of the previous page (``None``
+    for the first page).
+    """
+
+    evidence_id: int
+    filters: UrlFilterSpec = field(default_factory=UrlFilterSpec)
+    after: Optional[str] = None
+    page_size: int = 500
+
+
+@dataclass
+class UrlDomainGroupPage:
+    """Prepared page of domain groups.
+
+    The group without a domain is appended to the page on which the named
+    groups end, so that page may hold ``page_size + 1`` groups.
+    """
+
+    query: UrlDomainGroupQuery
+    groups: List[UrlDomainGroup] = field(default_factory=list)
+    has_more: bool = False
+
+    @property
+    def next_after(self) -> Optional[str]:
+        """Keyset position of the following page (``None`` if there is none)."""
+        if not self.has_more or not self.groups:
+            return None
+        return self.groups[-1].domain
+
+
+@dataclass(frozen=True)
+class UrlDomainChildQuery:
+    """Filters, group and keyset position for one page of a group's URLs.
+
+    ``domain`` is the group's domain (``None``: URLs without a domain);
+    ``after`` is the cursor of the last URL already loaded.
+    """
+
+    evidence_id: int
+    domain: Optional[str]
+    filters: UrlFilterSpec = field(default_factory=UrlFilterSpec)
+    after: Optional[UrlCursor] = None
+    page_size: int = 500
+
+
+@dataclass
+class UrlDomainChildPage:
+    """Prepared page of a group's URLs with tag/match strings for every row id."""
+
+    query: UrlDomainChildQuery
+    rows: List[Dict[str, Any]] = field(default_factory=list)
+    has_more: bool = False
+    tags: Dict[int, str] = field(default_factory=dict)
+    matches: Dict[int, str] = field(default_factory=dict)
+
+    @property
+    def next_cursor(self) -> Optional[UrlCursor]:
+        """Cursor for the following page (``None`` if there is none)."""
+        if not self.has_more or not self.rows:
+            return None
+        return UrlCursor.from_row(self.rows[-1])
+
+
+# The no-domain group as two predicates: each is an index seek on
+# idx_urls_evidence_domain_nocase_first_seen in URL_ORDER_BY order, while
+# their OR would need a sort step on every page.
+_NO_DOMAIN_PREDICATES = ("u.domain IS NULL", "u.domain = '' COLLATE NOCASE")
+
+
+def _url_sort_key_sorted(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Return ``rows`` in ``URL_ORDER_BY`` order (timestamp DESC, NULLs last, id ASC)."""
+    rows = sorted(rows, key=lambda row: row["id"])
+    # Stable: equal timestamps (and all NULLs) keep ascending id order.
+    rows.sort(
+        key=lambda row: (row["first_seen_utc"] is not None, row["first_seen_utc"] or ""),
+        reverse=True,
+    )
+    return rows
+
+
 class UrlQueryMixin(BaseDataAccess):
     """Mixin providing URL query operations for UI views.
 
@@ -469,12 +586,24 @@ class UrlQueryMixin(BaseDataAccess):
         Returns:
             List of URL dictionaries
         """
+        return self._fetch_url_rows_after(evidence_id, filters, after, limit)
+
+    def _fetch_url_rows_after(
+        self,
+        evidence_id: int,
+        filters: UrlFilterSpec,
+        after: Optional[UrlCursor],
+        limit: int,
+        extra_where: Tuple[str, ...] = (),
+    ) -> List[Dict[str, Any]]:
+        """``fetch_url_rows_after`` with additional parameterless WHERE terms."""
         logger = logging.getLogger(__name__)
         start_time = time.time()
         if limit <= 0:
             return []
 
         base_where, base_params = build_url_filter_predicates(evidence_id, filters)
+        base_where.extend(extra_where)
         rows: List[Dict[str, Any]] = []
 
         with self._use_evidence_conn(evidence_id):
@@ -564,15 +693,122 @@ class UrlQueryMixin(BaseDataAccess):
         )
         has_more = len(rows) > query.page_size
         rows = rows[: query.page_size]
+        tags, matches = self._load_url_row_strings(query.evidence_id, rows)
+        return UrlPage(
+            query=query, rows=rows, has_more=has_more, data_version=data_version, tags=tags, matches=matches
+        )
+
+    def _load_url_row_strings(
+        self, evidence_id: int, rows: List[Dict[str, Any]]
+    ) -> Tuple[Dict[int, str], Dict[int, str]]:
+        """Batch-load tag and match strings with an entry for every row id ("" if none)."""
         url_ids = [row["id"] for row in rows if row.get("id")]
         tags: Dict[int, str] = {url_id: "" for url_id in url_ids}
         matches: Dict[int, str] = {url_id: "" for url_id in url_ids}
         if url_ids:
-            tags.update(self.get_tag_strings_for_artifacts(query.evidence_id, "url", url_ids))
-            matches.update(self.get_url_matches_batch(query.evidence_id, url_ids))
-        return UrlPage(
-            query=query, rows=rows, has_more=has_more, data_version=data_version, tags=tags, matches=matches
+            tags.update(self.get_tag_strings_for_artifacts(evidence_id, "url", url_ids))
+            matches.update(self.get_url_matches_batch(evidence_id, url_ids))
+        return tags, matches
+
+    # -------------------------------------------------------------------------
+    # Grouped URL view (issue #64)
+    # -------------------------------------------------------------------------
+
+    def load_url_domain_groups(self, query: UrlDomainGroupQuery) -> UrlDomainGroupPage:
+        """
+        Load one page of domain groups with exact URL counts.
+
+        Groups cover all URLs matching ``query.filters`` (the flat view's
+        filters). Keyset page over ``GROUP BY domain COLLATE NOCASE`` in that
+        order: served by idx_urls_evidence_domain_nocase_first_seen without a
+        sort step and ended by the LIMIT, so the cost is bounded by the rows of
+        the returned groups (plus non-matching rows skipped on the way). The
+        group of URLs without a domain follows the last named group.
+
+        Args:
+            query: Filters and keyset position
+
+        Returns:
+            UrlDomainGroupPage with up to ``page_size`` named groups
+        """
+        logger = logging.getLogger(__name__)
+        start_time = time.time()
+        page_size = max(1, query.page_size)
+        where, params = build_url_filter_predicates(query.evidence_id, query.filters)
+
+        with self._use_evidence_conn(query.evidence_id):
+            with self._connect() as conn:
+                from_sql, from_params = build_url_from_clause(conn, query.filters)
+                # Every named domain is greater than '' (NULL compares to
+                # nothing): one index range excludes the no-domain group.
+                sql = f"""
+                    SELECT MIN(u.domain) AS domain, COUNT(*) AS cnt
+                    {from_sql}
+                    WHERE {' AND '.join(where)} AND u.domain > ? COLLATE NOCASE
+                    GROUP BY u.domain COLLATE NOCASE
+                    ORDER BY u.domain COLLATE NOCASE
+                    LIMIT ?
+                """
+                rows = conn.execute(
+                    sql, from_params + params + [query.after or "", page_size + 1]
+                ).fetchall()
+                has_more = len(rows) > page_size
+                groups = [UrlDomainGroup(row[0], int(row[1])) for row in rows[:page_size]]
+                if not has_more:
+                    count_sql = f"""
+                        SELECT COUNT(*)
+                        {from_sql}
+                        WHERE {' AND '.join(where)}
+                          AND ({' OR '.join(_NO_DOMAIN_PREDICATES)})
+                    """
+                    missing = conn.execute(count_sql, from_params + params).fetchone()[0]
+                    if missing:
+                        groups.append(UrlDomainGroup(None, int(missing)))
+
+        logger.info(
+            "load_url_domain_groups: evidence_id=%s, after=%r, returned %d groups, has_more=%s, elapsed=%.3fs",
+            query.evidence_id,
+            query.after,
+            len(groups),
+            has_more,
+            time.time() - start_time,
         )
+        return UrlDomainGroupPage(query=query, groups=groups, has_more=has_more)
+
+    def load_url_domain_children(self, query: UrlDomainChildQuery) -> UrlDomainChildPage:
+        """
+        Load one keyset page of a domain group's URLs with batch tag/match maps.
+
+        A named group's URLs are the flat listing with its domain as exact
+        domain filter (same ``COLLATE NOCASE`` comparison as the grouping);
+        the user's own exact domain filter can only select that group anyway.
+        URLs without a domain are read as two index-served streams (NULL,
+        '') merged by the sort key.
+
+        Args:
+            query: Filters, group and keyset position
+
+        Returns:
+            UrlDomainChildPage in ``URL_ORDER_BY`` order
+        """
+        page_size = max(1, query.page_size)
+        limit = page_size + 1
+        if query.domain is not None:
+            spec = replace(query.filters, domain_exact=query.domain)
+            rows = self._fetch_url_rows_after(query.evidence_id, spec, query.after, limit)
+        else:
+            merged: List[Dict[str, Any]] = []
+            for predicate in _NO_DOMAIN_PREDICATES:
+                merged.extend(
+                    self._fetch_url_rows_after(
+                        query.evidence_id, query.filters, query.after, limit, extra_where=(predicate,)
+                    )
+                )
+            rows = _url_sort_key_sorted(merged)[:limit]
+        has_more = len(rows) > page_size
+        rows = rows[:page_size]
+        tags, matches = self._load_url_row_strings(query.evidence_id, rows)
+        return UrlDomainChildPage(query=query, rows=rows, has_more=has_more, tags=tags, matches=matches)
 
     # -------------------------------------------------------------------------
     # URL Search Index (issue #62)

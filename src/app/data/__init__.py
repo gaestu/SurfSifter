@@ -44,7 +44,20 @@ from ._stats_cache import (
     discard_case_stats_cache,
 )
 from ._images import ImageQueryMixin
-from ._urls import UrlCursor, UrlFilterSpec, UrlPage, UrlPageQuery, UrlQueryMixin, UrlSearchIndexStatus
+from ._urls import (
+    UrlCursor,
+    UrlDomainChildPage,
+    UrlDomainChildQuery,
+    UrlDomainGroup,
+    UrlDomainGroupPage,
+    UrlDomainGroupQuery,
+    UrlFilterSpec,
+    UrlPage,
+    UrlPageQuery,
+    UrlQueryMixin,
+    UrlSearchIndexStatus,
+    ascii_fold,
+)
 from .case_data import CaseDataAccess
 
 __all__ = [
@@ -72,9 +85,15 @@ __all__ = [
     "ImageQueryMixin",
     "QueryCancelledError",
     "UrlCursor",
+    "UrlDomainChildPage",
+    "UrlDomainChildQuery",
+    "UrlDomainGroup",
+    "UrlDomainGroupPage",
+    "UrlDomainGroupQuery",
     "UrlFilterSpec",
     "UrlPage",
     "UrlPageQuery",
     "UrlQueryMixin",
     "UrlSearchIndexStatus",
+    "ascii_fold",
 ]
