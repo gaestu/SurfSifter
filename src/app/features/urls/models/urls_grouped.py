@@ -151,9 +151,11 @@ class UrlsGroupedModel(QAbstractItemModel):
         domain: Optional[str] = None,
         domain_contains: Optional[str] = None,
         url: Optional[str] = None,
+        exclude: Optional[str] = None,
         sources: Optional[Iterable[str]] = None,
         match_filter: Optional[str] = None,
         tag: Optional[str] = None,
+        untagged: Optional[bool] = None,
         reload: bool = True,
     ) -> None:
         """Update filters. Loaded nodes stay until the next ``reset_tree``;
@@ -162,9 +164,11 @@ class UrlsGroupedModel(QAbstractItemModel):
             domain=domain,
             domain_contains=domain_contains,
             text=url,
+            exclude_text=exclude,
             sources=sources,
             match_filter=match_filter,
             tag=tag,
+            untagged=untagged,
         )
         if reload:
             self.reload()

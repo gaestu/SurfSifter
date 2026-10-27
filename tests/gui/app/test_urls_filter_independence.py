@@ -3,16 +3,19 @@
 Covers the first page loading in parallel with ``FilterLoadWorker``, the
 dropdowns keeping their selection while the lists (re)load, list reloads after
 data changes, the unannounced ``data_version`` safety net, and the isolation
-of cached lists between evidences and cases.
+of cached lists between evidences and cases. Also covers the Exclude field and
+the Tag dropdown's fixed "Untagged" entry (issue #72).
 """
 from __future__ import annotations
 
+import csv
 import sqlite3
 import threading
 from pathlib import Path
 from typing import Any, Dict, List
 
 import pytest
+from PySide6.QtCore import Qt
 
 import app.features.urls.tab as tab_module
 from app.data import (
@@ -20,8 +23,10 @@ from app.data import (
     STATS_URL_MATCHES,
     STATS_URLS,
     CaseDataAccess,
+    UrlFilterSpec,
     discard_case_stats_cache,
 )
+from app.features.urls.models.urls_grouped import LOADED
 from app.features.urls.tab import FilterLoadWorker, UrlsTab
 from tests.fixtures.url_fixtures import build_url_fixture_case
 
@@ -234,7 +239,7 @@ def test_selections_survive_list_reload(qtbot, make_tab, url_case, filter_gate, 
     assert tab.match_combo.currentData() == "matched"
     assert _combo_values(tab.domain_combo) == ["*", "d1.example.com"]
     assert _combo_values(tab.source_combo) == ["", "firefox_history"]
-    assert _combo_values(tab.tag_combo) == ["*", "Relevant"]
+    assert _combo_values(tab.tag_combo) == ["*", tab_module._UNTAGGED_TAG, "Relevant"]
     assert not any(combo.isEnabled() for combo in _filter_combos(tab))
     qtbot.waitUntil(lambda: _settled(tab) and tab.model.total_count() == total, timeout=TIMEOUT_MS)
     assert tab.model.filter_spec() == spec
@@ -280,6 +285,7 @@ def test_selected_value_missing_from_new_lists_is_inserted(qtbot, make_tab, url_
     assert tab.domain_combo.currentIndex() == 1  # inserted after "All domains"
     assert tab.domain_combo.itemData(tab.domain_combo.count() - 1) == "__more__"
     assert tab.tag_combo.currentData() == "Review"
+    assert tab.tag_combo.currentIndex() == 2  # inserted after "All tags" and "Untagged"
     assert tab.model.filter_spec() == spec
 
 
@@ -609,3 +615,242 @@ def test_cached_lists_are_isolated_between_cases(qtbot, make_tab, tmp_path):
             data.close()
         for case in cases:
             discard_case_stats_cache(case.case_db_path)
+
+
+# ---------------------------------------------------------------------------
+# Exclude field and "Untagged" entry (issue #72)
+# ---------------------------------------------------------------------------
+
+# Fixture: 250 URLs per evidence over d0..d4, every 5th URL tagged (50).
+UNTAGGED_TOTAL = ROWS - ROWS // 5
+
+
+def _all_rows(data: CaseDataAccess, evidence_id: int) -> List[Dict[str, Any]]:
+    return list(data.iter_url_rows(evidence_id, UrlFilterSpec()))
+
+
+def _untagged_ids(data: CaseDataAccess, evidence_id: int) -> set:
+    rows = _all_rows(data, evidence_id)
+    tags = data.get_tag_strings_for_artifacts(evidence_id, "url", [r["id"] for r in rows])
+    return {r["id"] for r in rows if not tags.get(r["id"])}
+
+
+def _shown_ids(tab) -> set:
+    return {tab.model.get_row(r)["id"] for r in range(tab.model.rowCount())}
+
+
+def _select_untagged(tab) -> None:
+    tab.tag_combo.setCurrentIndex(tab.tag_combo.findData(tab_module._UNTAGGED_TAG))
+
+
+def _both_models(tab) -> UrlFilterSpec:
+    spec = tab.model.filter_spec()
+    assert tab.group_model.filter_spec() == spec
+    return spec
+
+
+def test_exclude_applies_on_enter_and_search_only(qtbot, make_tab, url_case, page_requests):
+    case, data = url_case
+    evidence_id = case.evidence_ids[0]
+    tab = make_tab(case, data, evidence_id)
+    tab.show()
+    qtbot.waitUntil(lambda: _ready(tab), timeout=TIMEOUT_MS)
+    assert tab.exclude_edit.isEnabled() and tab.exclude_label.text() == "Exclude"
+
+    # Typing and dropdown changes do not apply the Exclude text.
+    requests_before = list(page_requests)
+    tab.exclude_edit.setText("D1.EXAMPLE")
+    qtbot.wait(100)
+    assert page_requests == requests_before
+    tab.match_combo.setCurrentIndex(tab.match_combo.findData("unmatched"))
+    qtbot.waitUntil(lambda: _settled(tab) and _both_models(tab).match_filter == "unmatched", timeout=TIMEOUT_MS)
+    assert _both_models(tab).url_excludes is None
+    tab.match_combo.setCurrentIndex(tab.match_combo.findData("all"))
+    qtbot.waitUntil(lambda: _settled(tab) and tab.model.total_count() == ROWS, timeout=TIMEOUT_MS)
+
+    # Enter applies it (literal, ASCII case-insensitive).
+    qtbot.keyClick(tab.exclude_edit, Qt.Key_Return)
+    qtbot.waitUntil(lambda: _settled(tab) and tab.model.total_count() == ROWS - ROWS // 5, timeout=TIMEOUT_MS)
+    assert _both_models(tab).url_excludes == "D1.EXAMPLE"
+    assert all("d1.example" not in tab.model.get_row(r)["url"] for r in range(tab.model.rowCount()))
+
+    # Search and Exclude combine: contains A and not B.
+    tab.search_edit.setText("/path/1")
+    tab.exclude_edit.setText("/path/10")
+    tab.search_button.click()
+    expected = {
+        r["id"] for r in _all_rows(data, evidence_id) if "/path/1" in r["url"] and "/path/10" not in r["url"]
+    }
+    qtbot.waitUntil(lambda: _settled(tab) and tab.model.total_count() == len(expected), timeout=TIMEOUT_MS)
+    assert _shown_ids(tab) == expected
+
+    # Clearing the field (applied with Search) restores the results.
+    tab.search_edit.clear()
+    tab.exclude_edit.clear()
+    tab.search_button.click()
+    qtbot.waitUntil(lambda: _settled(tab) and tab.model.total_count() == ROWS, timeout=TIMEOUT_MS)
+    assert _both_models(tab) == UrlFilterSpec()
+
+
+def test_untagged_entry_follows_all_tags_and_filters_both_views(qtbot, make_tab, url_case):
+    case, data = url_case
+    evidence_id = case.evidence_ids[0]
+    tab = make_tab(case, data, evidence_id, page_size=500)
+    tab.show()
+    qtbot.waitUntil(lambda: _ready(tab), timeout=TIMEOUT_MS)
+    assert tab.tag_combo.itemText(1) == "Untagged"
+    assert tab.tag_combo.itemData(1) is tab_module._UNTAGGED_TAG
+    assert tab.tag_combo.itemData(1, Qt.ToolTipRole) == "URLs without any tag"
+
+    _select_untagged(tab)
+    qtbot.waitUntil(lambda: _settled(tab) and tab.model.total_count() == UNTAGGED_TOTAL, timeout=TIMEOUT_MS)
+    spec = _both_models(tab)
+    assert spec.untagged and spec.tag_name is None
+    assert (tab.filters.untagged, tab.filters.tag) == (True, "*")
+    assert _shown_ids(tab) == _untagged_ids(data, evidence_id)
+    assert all(tab.model._tags_cache.get(url_id, "") == "" for url_id in _shown_ids(tab))
+
+    tab.group_checkbox.setChecked(True)
+    model = tab.group_model
+    # Every tagged fixture URL is on d0 (URL i is on d{i % 5}; every 5th is tagged).
+    qtbot.waitUntil(lambda: model.state() == LOADED and model.group_count() == 4, timeout=TIMEOUT_MS)
+    assert [model.group_domain(row) for row in range(4)] == [f"d{n}.example.com" for n in range(1, 5)]
+    assert sum(model.group_url_count(row) for row in range(model.group_count())) == UNTAGGED_TOTAL
+
+    _select_tag(tab, "*")
+    qtbot.waitUntil(lambda: not tab.group_model.filter_spec().untagged, timeout=TIMEOUT_MS)
+    assert tab.filters.untagged is False
+
+
+def _select_tag(tab, value) -> None:
+    tab.tag_combo.setCurrentIndex(tab.tag_combo.findData(value))
+
+
+def test_untagged_survives_list_reload_and_loading(qtbot, make_tab, url_case, filter_gate, page_requests):
+    case, data = url_case
+    tab = make_tab(case, data, case.evidence_ids[0])
+    tab.show()
+    qtbot.waitUntil(lambda: _ready(tab), timeout=TIMEOUT_MS)
+    _select_untagged(tab)
+    qtbot.waitUntil(lambda: _settled(tab) and tab.model.total_count() == UNTAGGED_TOTAL, timeout=TIMEOUT_MS)
+    spec = tab.model.filter_spec()
+
+    filter_gate.block()
+    tab.refresh()
+    qtbot.waitUntil(filter_gate.entered.is_set, timeout=TIMEOUT_MS)
+    assert tab.tag_combo.currentData() is tab_module._UNTAGGED_TAG
+    assert _combo_values(tab.tag_combo) == ["*", tab_module._UNTAGGED_TAG]
+    assert not tab.tag_combo.isEnabled()
+    qtbot.waitUntil(lambda: _settled(tab) and tab.model.total_count() == UNTAGGED_TOTAL, timeout=TIMEOUT_MS)
+    assert tab.model.filter_spec() == spec
+
+    requests_before = list(page_requests)
+    filter_gate.release()
+    qtbot.waitUntil(lambda: _filters_ready(tab), timeout=TIMEOUT_MS)
+    assert tab.tag_combo.currentData() is tab_module._UNTAGGED_TAG
+    assert tab.tag_combo.findData("Relevant") > 1
+    assert not tab._combo_filters_differ()
+    assert tab.model.filter_spec() == spec
+    qtbot.wait(100)
+    assert page_requests == requests_before  # no reload when the lists arrive
+
+    # A list load error keeps the selection too.
+    tab._on_filters_load_error("boom", tab._filter_worker_generation)
+    assert tab.tag_combo.currentData() is tab_module._UNTAGGED_TAG
+    assert tab.model.filter_spec() == spec
+
+
+def test_untagged_survives_evidence_switch_and_resets(qtbot, make_tab, url_case):
+    case, data = url_case
+    ev1, ev2 = case.evidence_ids
+    tab = make_tab(case, data, ev1, page_size=500)
+    tab.show()
+    qtbot.waitUntil(lambda: _ready(tab), timeout=TIMEOUT_MS)
+    tab.exclude_edit.setText("d2.")
+    tab.search_button.click()
+    _select_untagged(tab)
+    qtbot.waitUntil(lambda: _settled(tab) and tab.model.filter_spec().untagged, timeout=TIMEOUT_MS)
+
+    tab.set_evidence(ev2, evidence_label=case.labels[ev2])
+    expected = {r for r in _untagged_ids(data, ev2)}
+    expected -= {r["id"] for r in _all_rows(data, ev2) if "d2." in r["url"]}
+    qtbot.waitUntil(lambda: _ready(tab) and tab.model.total_count() == len(expected), timeout=TIMEOUT_MS)
+    assert _shown_ids(tab) == expected
+    assert tab.tag_combo.currentData() is tab_module._UNTAGGED_TAG
+    assert _both_models(tab) == UrlFilterSpec(url_excludes="d2.", untagged=True)
+
+    # No evidence: the dropdowns reset to their "all" entries.
+    tab.set_evidence(None)
+    assert tab.tag_combo.currentData() == "*"
+    assert _combo_values(tab.tag_combo) == ["*", tab_module._UNTAGGED_TAG]
+    assert (tab.filters.untagged, tab.filters.tag) == (False, "*")
+
+
+def test_tag_named_untagged_is_a_normal_tag(qtbot, make_tab, url_case):
+    case, data = url_case
+    evidence_id = case.evidence_ids[0]
+    tab = make_tab(case, data, evidence_id)
+    tab.show()
+    qtbot.waitUntil(lambda: _ready(tab), timeout=TIMEOUT_MS)
+    untagged_before = _untagged_ids(data, evidence_id)
+    url_id = min(untagged_before)
+    data.tag_artifact(evidence_id, "Untagged", "url", url_id)
+    tab._on_tags_changed()
+    qtbot.waitUntil(lambda: _filters_ready(tab) and tab.tag_combo.findData("Untagged") > 1, timeout=TIMEOUT_MS)
+    real = tab.tag_combo.findData("Untagged")
+    assert tab.tag_combo.itemText(real) == "Untagged" == tab.tag_combo.itemText(1)
+    assert tab.tag_combo.itemData(real) is not tab_module._UNTAGGED_TAG
+
+    tab.tag_combo.setCurrentIndex(real)
+    qtbot.waitUntil(lambda: _settled(tab) and tab.model.filter_spec().tag_name == "Untagged", timeout=TIMEOUT_MS)
+    assert tab.model.total_count() == 1 and _shown_ids(tab) == {url_id}
+    assert not tab.model.filter_spec().untagged
+    tab._populate_filters()  # the real tag stays selected across list reloads
+    qtbot.waitUntil(lambda: _filters_ready(tab), timeout=TIMEOUT_MS)
+    assert tab.tag_combo.currentData() == "Untagged" and tab.tag_combo.currentIndex() == real
+
+    _select_untagged(tab)
+    qtbot.waitUntil(
+        lambda: _settled(tab) and tab.model.filter_spec().untagged and tab.model.total_count() == UNTAGGED_TOTAL - 1,
+        timeout=TIMEOUT_MS,
+    )
+    assert tab.model.filter_spec().tag_name is None
+    assert url_id not in _shown_ids(tab)
+
+
+def test_tagging_with_untagged_active_drops_the_url(qtbot, make_tab, url_case):
+    case, data = url_case
+    evidence_id = case.evidence_ids[0]
+    tab = make_tab(case, data, evidence_id)
+    tab.show()
+    qtbot.waitUntil(lambda: _ready(tab), timeout=TIMEOUT_MS)
+    _select_untagged(tab)
+    qtbot.waitUntil(lambda: _settled(tab) and tab.model.total_count() == UNTAGGED_TOTAL, timeout=TIMEOUT_MS)
+    url_id = tab.model.get_row(0)["id"]
+
+    data.tag_artifact(evidence_id, "Relevant", "url", url_id)
+    tab._on_tags_changed()
+    qtbot.waitUntil(lambda: _settled(tab) and tab.model.total_count() == UNTAGGED_TOTAL - 1, timeout=TIMEOUT_MS)
+    assert url_id not in _shown_ids(tab)
+    assert tab.tag_combo.currentData() is tab_module._UNTAGGED_TAG
+
+
+def test_csv_export_honours_exclude_and_untagged(qtbot, make_tab, url_case, tmp_path):
+    case, data = url_case
+    evidence_id = case.evidence_ids[0]
+    tab = make_tab(case, data, evidence_id)
+    tab.show()
+    qtbot.waitUntil(lambda: _ready(tab), timeout=TIMEOUT_MS)
+    tab.exclude_edit.setText("D3.")
+    tab.search_button.click()
+    _select_untagged(tab)
+    expected = _untagged_ids(data, evidence_id) - {r["id"] for r in _all_rows(data, evidence_id) if "d3." in r["url"]}
+    qtbot.waitUntil(lambda: _settled(tab) and tab.model.total_count() == len(expected), timeout=TIMEOUT_MS)
+
+    output = tmp_path / "urls.csv"
+    tab.model.export_to_csv(output)
+    with output.open(encoding="utf-8", newline="") as handle:
+        exported = list(csv.DictReader(handle))
+    urls = {r["id"]: r["url"] for r in _all_rows(data, evidence_id)}
+    assert sorted(row["URL"] for row in exported) == sorted(urls[url_id] for url_id in expected)
+    assert all(row["Tags"] == "" for row in exported)

@@ -233,9 +233,11 @@ class UrlsTableModel(QAbstractTableModel):
         domain: Optional[str] = None,
         domain_contains: Optional[str] = None,
         text: Optional[str] = None,
+        exclude_text: Optional[str] = None,
         sources: Optional[Iterable[str]] = None,
         match_filter: Optional[str] = None,  #
         tag: Optional[str] = None,  #
+        untagged: Optional[bool] = None,
         reload: bool = True,  # Allow setting filters without immediate reload
     ) -> None:
         """
@@ -246,9 +248,11 @@ class UrlsTableModel(QAbstractTableModel):
             domain_contains: Literal domain substring, ASCII case-insensitive
                 ("" = off; % and _ are not wildcards)
             text: URL text filter (substring)
+            exclude_text: Hide URLs containing this literal substring ("" = off)
             sources: List of source filters
             match_filter: Match filter ("all", "matched", "unmatched", or list name)
             tag: Tag filter pattern
+            untagged: Only URLs without a tag
             reload: If True (default), immediately reload data. Set to False when
                    loading in the background (see ``build_query``).
         """
@@ -256,9 +260,11 @@ class UrlsTableModel(QAbstractTableModel):
             domain=domain,
             domain_contains=domain_contains,
             text=text,
+            exclude_text=exclude_text,
             sources=sources,
             match_filter=match_filter,
             tag=tag,
+            untagged=untagged,
         )
         self._reset_position()
         # Tag/match caches are replaced wholesale when the next page arrives;

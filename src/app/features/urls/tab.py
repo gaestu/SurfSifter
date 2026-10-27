@@ -5,7 +5,7 @@ import time
 from collections import deque
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Deque, Dict, Iterable, Optional, List, Set
+from typing import Any, Deque, Dict, Iterable, Optional, List, Set, Tuple
 
 from PySide6.QtCore import Qt, Signal, QThread, QTimer
 from PySide6.QtWidgets import (
@@ -153,6 +153,10 @@ def _load_url_domain_children(case_data: CaseDataAccess, request: QueryRequest) 
 # the flat view's keys start with the evidence id.
 _TREE_COUNT = "tree"
 
+# Item data of the Tag dropdown's fixed "Untagged" entry (issue #72). Tag
+# entries hold the tag name (a str), so no tag name can equal this object.
+_UNTAGGED_TAG = object()
+
 
 @dataclass(frozen=True)
 class UrlCountRequest:
@@ -173,9 +177,11 @@ class UrlFilters:
     domain: str = ""  # exact domain (dropdown), "" or "*" = all
     domain_contains: str = ""  # literal domain substring
     text: str = ""
+    exclude_text: str = ""  # literal URL substring to hide
     source: str = ""
     match: str = "all"  # "all", "matched", "unmatched", or specific list name
     tag: str = "*"  #
+    untagged: bool = False  # Tag dropdown on "Untagged" (tag is then "*")
 
 
 class UrlsTab(QWidget):
@@ -305,8 +311,21 @@ class UrlsTab(QWidget):
         self.search_edit.returnPressed.connect(self._on_search_clicked)  # Performance: Trigger on Enter
         search_layout.addWidget(self.search_edit)
 
+        # Issue #72: hides URLs containing a literal substring; applied with
+        # Search, like the search text.
+        self.exclude_label = QLabel("Exclude")
+        search_layout.addWidget(self.exclude_label)
+        self.exclude_edit = QLineEdit()
+        self.exclude_edit.setPlaceholderText("Exclude URLs containing...")
+        self.exclude_edit.setToolTip(
+            "Hide URLs containing this text (ASCII case-insensitive; %, _ and \\ match literally). "
+            "Press Enter or Search to apply."
+        )
+        self.exclude_edit.returnPressed.connect(self._on_search_clicked)
+        search_layout.addWidget(self.exclude_edit)
+
         self.search_button = QPushButton("Search")
-        self.search_button.setToolTip("Click to apply search filter")
+        self.search_button.setToolTip("Apply Search, Exclude and Domain contains")
         self.search_button.clicked.connect(self._on_search_clicked)
         search_layout.addWidget(self.search_button)
 
@@ -337,7 +356,7 @@ class UrlsTab(QWidget):
         self.tag_label = QLabel("Tag")
         filter_layout.addWidget(self.tag_label, 2, 0)
         self.tag_combo = QComboBox()
-        self.tag_combo.addItem("All tags", userData="*")
+        self._add_fixed_tag_items(self.tag_combo)
         self.tag_combo.currentIndexChanged.connect(self._on_filters_changed)
         filter_layout.addWidget(self.tag_combo, 2, 1)
 
@@ -736,7 +755,7 @@ class UrlsTab(QWidget):
 
         self.tag_combo.blockSignals(True)
         self.tag_combo.clear()
-        self.tag_combo.addItem("All tags", userData="*")
+        self._add_fixed_tag_items(self.tag_combo)
         self.tag_combo.blockSignals(False)
 
         self._on_filters_changed()
@@ -748,7 +767,8 @@ class UrlsTab(QWidget):
 
         The Domain, Source and Tag dropdowns are disabled until the lists
         arrive; reading them still yields the current filter values. The Match
-        dropdown keeps its fixed entries (issue #63).
+        dropdown keeps its fixed entries (issue #63), and the Tag dropdown keeps
+        All tags and Untagged (issue #72).
         """
         self._filters_loading = True
         self._fill_filter_combos(None, loading=True)
@@ -816,19 +836,30 @@ class UrlsTab(QWidget):
         self._select_combo_value(combo, filters.match or "all", filters.match, insert_at=3)
         combo.blockSignals(False)
 
-        # Tags
+        # Tags: fixed entries plus tag names
         combo = self.tag_combo
         combo.blockSignals(True)
         combo.clear()
-        combo.addItem("All tags", userData="*")
+        self._add_fixed_tag_items(combo)
         for tag in data.get("tags", []):
             combo.addItem(tag["name"], userData=tag["name"])
-        self._select_combo_value(combo, filters.tag or "*", filters.tag)
+        if filters.untagged:
+            combo.setCurrentIndex(combo.findData(_UNTAGGED_TAG))
+        else:
+            self._select_combo_value(combo, filters.tag or "*", filters.tag, insert_at=2)
         combo.blockSignals(False)
 
         for combo, tooltip in self._filter_combo_tooltips.items():
             combo.setEnabled(not loading)
             combo.setToolTip("Loading…" if loading else tooltip)
+
+    @staticmethod
+    def _add_fixed_tag_items(combo: QComboBox) -> None:
+        """Add the Tag dropdown's fixed entries; tag names follow them (issue #72)."""
+        combo.addItem("All tags", userData="*")
+        combo.addItem("Untagged", userData=_UNTAGGED_TAG)
+        # Tells it apart from a tag that is itself named "Untagged".
+        combo.setItemData(1, "URLs without any tag", Qt.ToolTipRole)
 
     @staticmethod
     def _select_combo_value(
@@ -873,8 +904,15 @@ class UrlsTab(QWidget):
         return (
             (self.source_combo.currentData() or "") != (self.filters.source or "")
             or (self.match_combo.currentData() or "all") != (self.filters.match or "all")
-            or (self.tag_combo.currentData() or "*") != (self.filters.tag or "*")
+            or self._tag_combo_selection() != (self.filters.untagged, self.filters.tag or "*")
         )
+
+    def _tag_combo_selection(self) -> Tuple[bool, str]:
+        """The Tag dropdown's selection as ``(untagged, tag)``; tag "*" = all."""
+        data = self.tag_combo.currentData()
+        if data is _UNTAGGED_TAG:
+            return True, "*"
+        return False, data or "*"
 
     def _on_filters_loaded(self, data: Dict[str, Any], generation: int = 0) -> None:
         """
@@ -931,9 +969,10 @@ class UrlsTab(QWidget):
             self.filters.domain = domain_data or ""
         self.filters.domain_contains = self.domain_contains_edit.text().strip()
         self.filters.text = self.search_edit.text().strip()
+        self.filters.exclude_text = self.exclude_edit.text().strip()
         self.filters.source = self.source_combo.currentData() or ""
         self.filters.match = self.match_combo.currentData() or "all"
-        self.filters.tag = self.tag_combo.currentData() or "*"
+        self.filters.untagged, self.filters.tag = self._tag_combo_selection()
         self._apply_filters()
 
     def _on_filters_changed(self) -> None:
@@ -947,7 +986,7 @@ class UrlsTab(QWidget):
         # Don't update search text here - only on button click
         self.filters.source = self.source_combo.currentData() or ""
         self.filters.match = self.match_combo.currentData() or "all"  #
-        self.filters.tag = self.tag_combo.currentData() or "*"
+        self.filters.untagged, self.filters.tag = self._tag_combo_selection()
         self._apply_filters()
 
     def _apply_filters(self) -> None:
@@ -970,9 +1009,11 @@ class UrlsTab(QWidget):
             domain=self.filters.domain if self.filters.domain != "*" else "",
             domain_contains=self.filters.domain_contains,
             text=self.filters.text,
+            exclude_text=self.filters.exclude_text,
             sources=sources,
             match_filter=self.filters.match,  #
             tag=self.filters.tag,  #
+            untagged=self.filters.untagged,
             reload=False,
         )
 
@@ -984,9 +1025,11 @@ class UrlsTab(QWidget):
             domain=self.filters.domain if self.filters.domain != "*" else "",
             domain_contains=self.filters.domain_contains,
             url=self.filters.text,
+            exclude=self.filters.exclude_text,
             sources=sources,
             match_filter=self.filters.match,  #
             tag=self.filters.tag,  #
+            untagged=self.filters.untagged,
             reload=False,
         )
         self._grouped_stale = True

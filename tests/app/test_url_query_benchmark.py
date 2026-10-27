@@ -1,4 +1,4 @@
-"""Opt-in URL query-plan and performance benchmark (issues #61, #62, #67).
+"""Opt-in URL query-plan and performance benchmark (issues #61, #62, #67, #72).
 
 Data layer only (no Qt). Builds a deterministic synthetic case on disk with
 ``tests/fixtures/url_fixtures.py`` (90% NULL ``first_seen_utc`` as in real data,
@@ -23,6 +23,8 @@ on several variants of the evidence database (copies of the base case):
 - ``search_index``   URL search index (issue #62) built; text-search filters only.
   The other variants leave it unbuilt (as for an upgraded case), so their
   text-search numbers are the scan baseline
+- ``mostly_tagged*``  every URL but ~1% tagged (issue #72), without and with
+  planner statistics; untagged filters only
 
 plus index sizes (dbstat), upgrade cost at first open (CREATE INDEX of
 migration 0004, migration 0005 script) on a populated table, ANALYZE /
@@ -113,6 +115,18 @@ FILTERS: Dict[str, UrlFilterSpec] = {
     "text_everywhere": UrlFilterSpec(url_contains="example"),  # 100%
     "text_short": UrlFilterSpec(url_contains="/9"),  # 2 chars: always scans
     "text_rare_source": UrlFilterSpec(url_contains="?q=96", discovered_by=("bulk_extractor",)),
+    # URL exclusion and untagged (issue #72). The search index never narrows
+    # an exclusion; Search + Exclude uses it for the Search term only.
+    "text_q96_exclude": UrlFilterSpec(url_contains="?q=96", url_excludes="/path/1"),  # ~1% minus 1/9
+    "text_common_exclude": UrlFilterSpec(url_contains="q=5", url_excludes="d5"),  # ~10%
+    # Comments: share of rows kept.
+    "exclude_rare": UrlFilterSpec(url_excludes="/PATH/123456?"),  # all but 1 row
+    "exclude_common": UrlFilterSpec(url_excludes="q=5"),  # ~89%: hides q=5, q=5x
+    "exclude_domain_part": UrlFilterSpec(url_excludes="d1"),  # ~89%: hides d1, d1x, d1xx
+    "exclude_everywhere": UrlFilterSpec(url_excludes="example"),  # none: worst case, full scan
+    "untagged": UrlFilterSpec(untagged=True),  # 99% (fixture: 1% tagged)
+    "untagged_matched": UrlFilterSpec(untagged=True, match_filter="matched"),  # 4% (tagged URLs are matched)
+    "untagged_exclude": UrlFilterSpec(untagged=True, url_excludes="q=5"),  # ~88%
 }
 DOMAIN_FILTERS = ("domain_exact", "domain_exact_ts", "domain_contains_rare")
 TEXT_FILTERS = tuple(name for name in FILTERS if name.startswith("text_"))
@@ -124,6 +138,14 @@ SEARCH_INDEX_OBJECTS_SQL = (
     f"DROP TABLE IF EXISTS {SEARCH_INDEX_TABLE}",
 )
 SOURCE_FILTERS = ("default", "source_one", "source_no_ts", "source_two")
+UNTAGGED_FILTERS = tuple(name for name in FILTERS if name.startswith("untagged"))
+# Tags every URL but those with id % 100 == 50 (the fixture tags id % 100 == 1).
+MOSTLY_TAGGED_SQL = (
+    "INSERT OR IGNORE INTO tag_associations(tag_id, evidence_id, artifact_type, artifact_id, tagged_at_utc) "
+    "SELECT (SELECT MIN(id) FROM tags), evidence_id, 'url', id, '2025-01-01T00:00:00Z' FROM urls "
+    "WHERE id % 100 != 50 AND NOT EXISTS (SELECT 1 FROM tag_associations ta "
+    "WHERE ta.artifact_type = 'url' AND ta.artifact_id = urls.id)"
+)
 
 
 # ---------------------------------------------------------------------------
@@ -533,8 +555,31 @@ def test_url_query_benchmark(bench_case, work_dir: Path):
     costs["search_index_write_ab"] = _search_index_write_ab(db, max(1, min(100_000, ROWS // 10)))
     shutil.rmtree(folder)
 
+    # Untagged with most URLs tagged (issue #72): without, then with stats.
+    folder, db = _copy_case(case, work_dir, "mostly_tagged")
+    costs["mostly_tagged_insert_ms"] = _exec_ms(db, MOSTLY_TAGGED_SQL)
+    _drop_stats(db)
+    conn = _raw(db)
+    try:
+        untagged_total = conn.execute(
+            "SELECT COUNT(*) FROM urls u WHERE NOT EXISTS "
+            "(SELECT 1 FROM tag_associations ta WHERE ta.artifact_type = 'url' AND ta.artifact_id = u.id)"
+        ).fetchone()[0]
+    finally:
+        conn.close()
+    variants["mostly_tagged_nostats"] = _run_filters(case, folder, UNTAGGED_FILTERS)
+    _exec_ms(db, "ANALYZE")
+    variants["mostly_tagged"] = _run_filters(case, folder, UNTAGGED_FILTERS)
+    shutil.rmtree(folder)
+    assert variants["mostly_tagged"]["untagged"]["count"] == untagged_total
+    for filter_name in UNTAGGED_FILTERS:
+        for key in ("count", "first_ids", "p5_ids", "p90_ids"):
+            assert variants["mostly_tagged_nostats"][filter_name].get(key) == variants["mostly_tagged"][filter_name].get(key)
+
     # Results must not depend on plans/indexes.
     for name, measured in variants.items():
+        if name.startswith("mostly_tagged"):
+            continue  # other data
         for filter_name, m in measured.items():
             ref = variants["stats"][filter_name]
             for key in ("count", "first_ids", "p5_ids", "p90_ids"):
@@ -542,6 +587,11 @@ def test_url_query_benchmark(bench_case, work_dir: Path):
     assert variants["stats"]["default"]["count"] == ROWS
     assert variants["stats"]["domain_exact"]["count"] == len(range(123, ROWS, FIXTURE["domain_count"]))
     assert variants["stats"]["source_no_ts"]["count"] == len(range(3, ROWS, 4))
+    # Exclude is the complement of Search; untagged that of the fixture's tags.
+    for term_filter, exclude_filter in (("text_rare", "exclude_rare"), ("text_common", "exclude_common")):
+        assert variants["stats"][term_filter]["count"] + variants["stats"][exclude_filter]["count"] == ROWS
+    assert variants["stats"]["exclude_everywhere"]["count"] == 0
+    assert variants["stats"]["untagged"]["count"] == ROWS - len(range(0, ROWS, FIXTURE["tag_every"]))
 
     ingest_rows = int(os.environ.get("URL_QUERY_BENCH_INGEST_ROWS") or ROWS)
     results["ingest"] = {

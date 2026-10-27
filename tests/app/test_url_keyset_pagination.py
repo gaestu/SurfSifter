@@ -162,6 +162,9 @@ FILTERS = {
     "tag_name": UrlFilterSpec(tag_name="relevant"),
     "url_contains": UrlFilterSpec(url_contains="Q=1"),
     "combined": UrlFilterSpec(domain_exact="d2.example.com", match_filter="unmatched", discovered_by=("chromium_cache", "bulk_extractor")),
+    "url_excludes": UrlFilterSpec(url_excludes="Q=1"),
+    "untagged": UrlFilterSpec(untagged=True),
+    "untagged_excludes": UrlFilterSpec(untagged=True, url_excludes="d3.", match_filter="matched"),
 }
 
 
@@ -200,8 +203,24 @@ def test_legacy_like_kwargs_still_supported(fixture_case):
 
 
 def test_filter_spec_normalizes_equivalent_filters():
-    assert UrlFilterSpec(discovered_by=[], match_filter="all", domain_exact="") == UrlFilterSpec()
+    assert UrlFilterSpec(discovered_by=[], match_filter="all", domain_exact="", url_excludes="") == UrlFilterSpec()
     assert hash(UrlFilterSpec(discovered_by=["a"])) == hash(UrlFilterSpec(discovered_by=("a",)))
+
+
+def test_exclusion_and_untagged_are_part_of_the_count_cache_key():
+    """The spec is the count-cache key: each new filter yields a distinct key (issue #72)."""
+    specs = [
+        UrlFilterSpec(),
+        UrlFilterSpec(url_excludes="google"),
+        UrlFilterSpec(url_excludes="Google"),
+        UrlFilterSpec(url_contains="google"),
+        UrlFilterSpec(untagged=True),
+        UrlFilterSpec(untagged=True, url_excludes="google"),
+    ]
+    assert len(set(specs)) == len(specs)
+    assert {UrlFilterSpec(url_excludes="x"): 1}[UrlFilterSpec(url_excludes="x")] == 1
+    assert hash(UrlFilterSpec(untagged=True)) == hash(UrlFilterSpec(untagged=True))
+    assert UrlFilterSpec(untagged=1).untagged is True and UrlFilterSpec(untagged=0) == UrlFilterSpec()
 
 
 # ---------------------------------------------------------------------------
@@ -599,6 +618,57 @@ def test_ui_filters_use_literal_url_search_and_exact_tag():
     assert spec.url_like == "%" and spec.tag_like == "%"
     assert spec.with_ui_filters(text="", tag="*") == UrlFilterSpec()
     assert UrlFilterSpec(url_contains="", tag_name="") == UrlFilterSpec()
+
+
+def test_ui_filters_set_and_clear_exclusion_and_untagged():
+    spec = UrlFilterSpec().with_ui_filters(text="login", exclude_text="google", untagged=True)
+    assert (spec.url_contains, spec.url_excludes, spec.untagged) == ("login", "google", True)
+    # None leaves a filter unchanged.
+    assert spec.with_ui_filters(text="other") == UrlFilterSpec(url_contains="other", url_excludes="google", untagged=True)
+    assert spec.with_ui_filters(exclude_text="", untagged=False) == UrlFilterSpec(url_contains="login")
+
+
+@pytest.fixture
+def exclude_case(empty_case):
+    case, data = empty_case
+    evidence_id = case.evidence_ids[0]
+    urls = [
+        "https://www.google.com/search?q=login",
+        "https://accounts.GOOGLE.com/login",
+        "https://example.com/login",
+        "https://example.com/100%_off\\x",
+        "https://example.com/100x_off",
+        "https://example.com/plain/xyoff",
+    ]
+    ids = []
+    with data._use_evidence_conn(evidence_id):
+        with data._connect() as conn:
+            for url in urls:
+                ids.append(conn.execute(
+                    "INSERT INTO urls(evidence_id, url, domain, discovered_by) VALUES (?, ?, 'd', 'src')",
+                    (evidence_id, url),
+                ).lastrowid)
+    return data, evidence_id, ids
+
+
+@pytest.mark.parametrize(
+    "spec,expected",
+    [
+        (UrlFilterSpec(url_excludes="google"), [2, 3, 4, 5]),
+        (UrlFilterSpec(url_excludes="GOOGLE"), [2, 3, 4, 5]),
+        (UrlFilterSpec(url_contains="login", url_excludes="google"), [2]),
+        # Each would hide more URLs if %, _ or \ were wildcards / escapes.
+        (UrlFilterSpec(url_excludes="100%"), [0, 1, 2, 4, 5]),
+        (UrlFilterSpec(url_excludes="x_off"), [0, 1, 2, 3, 5]),
+        (UrlFilterSpec(url_excludes="\\x"), [0, 1, 2, 4, 5]),
+        (UrlFilterSpec(url_excludes="%"), [0, 1, 2, 4, 5]),
+        (UrlFilterSpec(url_excludes="https"), []),
+    ],
+)
+def test_url_exclusion_is_literal_substring(exclude_case, spec, expected):
+    data, evidence_id, ids = exclude_case
+    assert sorted(_ids(data, evidence_id, spec)) == sorted(ids[i] for i in expected)
+    assert data.count_urls(evidence_id, filters=spec) == len(expected)
 
 
 # ---------------------------------------------------------------------------

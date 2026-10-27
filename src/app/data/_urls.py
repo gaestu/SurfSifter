@@ -74,9 +74,13 @@ class UrlFilterSpec:
         domain_like: Legacy raw SQL LIKE pattern on the domain (``None`` = off).
         url_contains: Literal substring of the URL, ASCII case-insensitive;
             ``%``, ``_`` and ``\\`` are not wildcards (issue #66).
+        url_excludes: Literal substring the URL must not contain, with the
+            same matching as ``url_contains`` (issue #72).
         url_like: Legacy raw SQL LIKE pattern on the URL (``"%"`` = off).
         tag_name: Exact tag name, case-insensitive like tag creation
             (compared with ``tags.name_normalized``; issue #66).
+        untagged: Only URLs without a tag, i.e. whose Tags column is empty
+            (issue #72). Combined with ``tag_name`` nothing matches.
         tag_like: Legacy raw SQL LIKE pattern on tag names (``"%"`` = off).
         discovered_by: Allowed sources (``None`` = all).
         match_filter: ``"matched"``, ``"unmatched"``, a list name, or ``None``.
@@ -86,8 +90,10 @@ class UrlFilterSpec:
     domain_contains: Optional[str] = None
     domain_like: Optional[str] = None
     url_contains: Optional[str] = None
+    url_excludes: Optional[str] = None
     url_like: str = "%"
     tag_name: Optional[str] = None
+    untagged: bool = False
     tag_like: str = "%"
     discovered_by: Optional[Tuple[str, ...]] = None
     match_filter: Optional[str] = None
@@ -96,13 +102,14 @@ class UrlFilterSpec:
         # Normalize so equal filters hash equally (used as count-cache key).
         if self.discovered_by is not None:
             object.__setattr__(self, "discovered_by", tuple(self.discovered_by) or None)
-        for name in ("domain_exact", "domain_contains", "domain_like", "url_contains", "tag_name"):
+        for name in ("domain_exact", "domain_contains", "domain_like", "url_contains", "url_excludes", "tag_name"):
             if getattr(self, name) == "":
                 object.__setattr__(self, name, None)
         if self.domain_like == "%":
             object.__setattr__(self, "domain_like", None)
         if self.match_filter == "all":
             object.__setattr__(self, "match_filter", None)
+        object.__setattr__(self, "untagged", bool(self.untagged))
 
     def with_ui_filters(
         self,
@@ -110,9 +117,11 @@ class UrlFilterSpec:
         domain: Optional[str] = None,
         domain_contains: Optional[str] = None,
         text: Optional[str] = None,
+        exclude_text: Optional[str] = None,
         sources: Optional[Iterable[str]] = None,
         match_filter: Optional[str] = None,
         tag: Optional[str] = None,
+        untagged: Optional[bool] = None,
     ) -> "UrlFilterSpec":
         """Return a copy updated from URLs-tab filter controls.
 
@@ -124,9 +133,11 @@ class UrlFilterSpec:
             domain: Exact domain from the dropdown
             domain_contains: Literal domain substring
             text: Literal URL substring
+            exclude_text: Literal URL substring to exclude
             sources: Allowed sources
             match_filter: "all", "matched", "unmatched", or list name
             tag: Exact tag name
+            untagged: Only URLs without a tag
         """
         changes: Dict[str, Any] = {}
         if domain is not None:
@@ -135,12 +146,16 @@ class UrlFilterSpec:
             changes["domain_contains"] = domain_contains or None
         if text is not None:
             changes["url_contains"] = text or None
+        if exclude_text is not None:
+            changes["url_excludes"] = exclude_text or None
         if sources is not None:
             changes["discovered_by"] = tuple(sources) if sources else None
         if match_filter is not None:
             changes["match_filter"] = match_filter or None
         if tag is not None:
             changes["tag_name"] = tag if tag and tag != "*" else None
+        if untagged is not None:
+            changes["untagged"] = bool(untagged)
         return replace(self, **changes)
 
 
@@ -148,6 +163,8 @@ def build_url_filter_predicates(evidence_id: int, spec: UrlFilterSpec) -> Tuple[
     """Build parameterized WHERE terms (alias ``u``) for ``spec``.
 
     Shared by row and count queries so both always select the same URLs.
+    ``untagged`` combined with ``tag_name`` selects nothing (the URLs tab
+    cannot produce that combination).
     """
     params: List[Any] = [evidence_id]
     where = ["u.evidence_id = ?"]
@@ -167,6 +184,11 @@ def build_url_filter_predicates(evidence_id: int, spec: UrlFilterSpec) -> Tuple[
     if spec.url_contains is not None:
         where.append(f"u.url LIKE ? ESCAPE '{LIKE_ESCAPE_CHAR}'")
         params.append(f"%{escape_like(spec.url_contains)}%")
+    if spec.url_excludes is not None:
+        # The search index cannot narrow an exclusion (issue #72); urls.url
+        # is NOT NULL, so NOT LIKE never drops rows through NULL.
+        where.append(f"u.url NOT LIKE ? ESCAPE '{LIKE_ESCAPE_CHAR}'")
+        params.append(f"%{escape_like(spec.url_excludes)}%")
     if spec.url_like and spec.url_like != "%":
         where.append("u.url LIKE ?")
         params.append(spec.url_like)
@@ -185,6 +207,21 @@ def build_url_filter_predicates(evidence_id: int, spec: UrlFilterSpec) -> Tuple[
             )
         """)
         params.append(spec.tag_name.lower())
+    if spec.untagged:
+        # Issue #72: no association to an existing tag of this evidence (an
+        # empty Tags column). CROSS JOIN keeps the per-URL seek on
+        # idx_tag_assoc_artifact_evidence first; with planner statistics
+        # SQLite would otherwise probe every tag of the evidence per URL.
+        where.append("""
+            NOT EXISTS (
+                SELECT 1 FROM tag_associations ta
+                CROSS JOIN tags t ON ta.tag_id = t.id
+                WHERE ta.artifact_type = 'url'
+                AND ta.artifact_id = u.id
+                AND ta.evidence_id = u.evidence_id
+                AND t.evidence_id = u.evidence_id
+            )
+        """)
     if spec.tag_like and spec.tag_like != "%":
         where.append("""
             EXISTS (
@@ -403,7 +440,8 @@ class UrlQueryMixin(BaseDataAccess):
 
     Features:
     - Keyset-paginated URL listing with shared filter predicates
-      (exact/contains domain, literal URL substring, exact tag)
+      (exact/contains domain, literal URL substring and exclusion, exact
+      tag, untagged)
     - Tag-aware queries via tag_associations
     - Match filtering (matched/unmatched/specific list)
     - In-memory caching for filter dropdowns

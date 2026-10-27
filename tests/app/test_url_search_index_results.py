@@ -5,7 +5,8 @@ when ``ascii_lower(term) in ascii_lower(url)`` (``LIKE`` folds ASCII letters
 only), plus the other filter semantics; order is ``first_seen_utc DESC``
 (NULLs last), ``id ASC``. Every query is checked on the indexed path and on the
 scan fallback, with the index not built, partially built (then changed), and
-fully built.
+fully built. The URL exclusion and the untagged filter (issue #72) are checked
+the same way.
 """
 from __future__ import annotations
 
@@ -102,7 +103,27 @@ COMBOS = {
     "unmatched": dict(match_filter="unmatched"),
     "list": dict(match_filter="list2"),
     "everything": dict(domain_contains="example", discovered_by=SOURCES[:2], tag_name="Relevant", match_filter="unmatched"),
+    "untagged": dict(untagged=True),
+    "untagged_domain_exact": dict(untagged=True, domain_exact="SITE3.Example.COM"),
+    "untagged_matched": dict(untagged=True, match_filter="matched"),
+    "untagged_unmatched": dict(untagged=True, match_filter="unmatched"),
+    "untagged_everything": dict(
+        untagged=True, domain_contains="example", discovered_by=SOURCES[:2], match_filter="list1"
+    ),
+    "untagged_and_tag": dict(untagged=True, tag_name="Relevant"),  # nothing (not offered by the UI)
 }
+
+# Exclusion terms (issue #72): same literal matching as the search terms.
+EXCLUDE_TERMS = [
+    "example", "EXAMPLE", "/path/1", "%", "_", "\\", "%2", "%2F", "a_b", "100%", "%%__\\",
+    "ärger", "ÄRGER", "Ärger", "kelvin", '"', "ab", "x", "/", " ", "zzz-no-hit", "https", "tagless",
+]
+# (search, exclude) pairs.
+SEARCH_EXCLUDE_PAIRS = [
+    ("example", "/path/1"), ("/path/1", "/path/10"), ("EXAMPLE", "Q=1"), ("de.example", "Ä"),
+    ("e.example", "%"), ("e.example", "a_b"), ("ab", "x"), ("example", "EXAMPLE"), ("x", "zzz-no-hit"),
+    ("tagless", "deleted"),
+]
 
 pytestmark = pytest.mark.skipif(
     not url_search_index_supported(), reason="SQLite lacks FTS5 with the trigram tokenizer"
@@ -123,6 +144,7 @@ class Row:
     discovered_by: str
     first_seen_utc: Optional[str]
     db: int  # evidence database the row lives in
+    # Tags shown in the Tags column (existing tags of this evidence).
     tags: Set[str] = field(default_factory=set)
     lists: Set[str] = field(default_factory=set)
 
@@ -137,6 +159,8 @@ def oracle(rows: Sequence[Row], evidence_id: int, spec: UrlFilterSpec) -> List[i
             return False
         if spec.url_contains is not None and ascii_lower(spec.url_contains) not in ascii_lower(row.url):
             return False
+        if spec.url_excludes is not None and ascii_lower(spec.url_excludes) in ascii_lower(row.url):
+            return False
         if spec.domain_exact is not None and (
             row.domain is None or ascii_lower(row.domain) != ascii_lower(spec.domain_exact)
         ):
@@ -146,6 +170,8 @@ def oracle(rows: Sequence[Row], evidence_id: int, spec: UrlFilterSpec) -> List[i
         ):
             return False
         if spec.tag_name is not None and spec.tag_name.lower() not in {t.lower() for t in row.tags}:
+            return False
+        if spec.untagged and row.tags:
             return False
         if spec.discovered_by and row.discovered_by not in spec.discovered_by:
             return False
@@ -252,6 +278,55 @@ def _execute(data: CaseDataAccess, evidence_id: int, sql: str, params=()) -> Non
             conn.execute(sql, params)
 
 
+def _add_tagless_associations(data: CaseDataAccess, evidence_id: int, other_evidence_id: int, rows: List[Row]) -> None:
+    """URLs whose only tag associations do not make them tagged (issue #72).
+
+    One is tagged only for another evidence (its tag and association belong
+    to ``other_evidence_id``); one is associated with a deleted tag (a
+    dangling association, possible in databases written without foreign
+    keys). Their Tags column is empty, so they count as untagged.
+    """
+    foreign, dangling = _insert(
+        data,
+        evidence_id,
+        rows,
+        _row_specs(
+            evidence_id,
+            ["https://tagless.example/other-evidence-tag", "https://tagless.example/deleted-tag"],
+            offset=1,
+        ),
+    )
+    with data._use_evidence_conn(evidence_id):
+        with data._connect() as conn:
+            tag_id = conn.execute(
+                "INSERT INTO tags(evidence_id, name, name_normalized) VALUES (?, 'Relevant', 'relevant')",
+                (other_evidence_id,),
+            ).lastrowid
+            conn.execute(
+                "INSERT INTO tag_associations(tag_id, evidence_id, artifact_type, artifact_id) VALUES (?, ?, 'url', ?)",
+                (tag_id, other_evidence_id, foreign.id),
+            )
+            conn.commit()
+            conn.execute("PRAGMA foreign_keys = OFF")
+            try:
+                tag_id = conn.execute(
+                    "INSERT INTO tags(evidence_id, name, name_normalized) VALUES (?, 'Deleted', 'deleted')",
+                    (evidence_id,),
+                ).lastrowid
+                conn.execute(
+                    "INSERT INTO tag_associations(tag_id, evidence_id, artifact_type, artifact_id) "
+                    "VALUES (?, ?, 'url', ?)",
+                    (tag_id, evidence_id, dangling.id),
+                )
+                conn.execute("DELETE FROM tags WHERE id = ?", (tag_id,))
+                conn.commit()
+            finally:
+                conn.execute("PRAGMA foreign_keys = ON")
+            assert conn.execute(
+                "SELECT COUNT(*) FROM tag_associations WHERE artifact_id IN (?, ?)", (foreign.id, dangling.id)
+            ).fetchone()[0] == 2
+
+
 def _make_case(root: Path, mode: str) -> SearchCase:
     case = build_url_fixture_case(root, rows_per_evidence=0, evidence_count=2)
     data = CaseDataAccess(case.case_folder, case.case_db_path)
@@ -287,6 +362,7 @@ def _make_case(root: Path, mode: str) -> SearchCase:
     tail = _insert(data, ev1, rows, _row_specs(ev1, _generated_urls(25, offset=900) + TRICKY_URLS[::3], offset=7))
     _decorate(data, ev1, tail)
     _insert(data, ev2, rows, _row_specs(ev2, ["https://tail.example/ev2/ärger"]))
+    _add_tagless_associations(data, ev1, ev2, rows)
 
     if mode == "built":
         _build_steps(data, ev1, steps=None, batch_size=64)
@@ -357,7 +433,9 @@ def check(case: SearchCase, evidence_id: int, spec: UrlFilterSpec, path: str, *,
             assert walk(data, evidence_id, spec, page_size) == expected, page_size
         assert [r["id"] for r in data.iter_urls(evidence_id, filters=spec, limit=100_000)] == expected
         assert [r["id"] for r in data.iter_url_rows(evidence_id, spec, batch_size=17)] == expected
-    if path == "index" and spec.url_contains is not None:
+    if spec.url_contains is None:
+        assert not plans, "only url_contains may consult the search index"
+    elif path == "index":
         assert plans, "URL search did not consult the index"
         indexable = len(spec.url_contains) >= 3 and "\x00" not in spec.url_contains
         # Small evidence: the index (with its unindexed tail) always serves 3+ char terms.
@@ -393,6 +471,49 @@ def test_filters_without_text_are_unchanged(search_case, path):
     for combo in sorted(COMBOS):
         check(search_case, search_case.evidence_ids[0], UrlFilterSpec(**COMBOS[combo]), path, deep=False)
     check(search_case, search_case.evidence_ids[0], UrlFilterSpec(), path)
+
+
+@pytest.mark.parametrize("path", ["index", "scan"])
+@pytest.mark.parametrize("term", EXCLUDE_TERMS)
+def test_url_excludes_matches_oracle(search_case, term, path):
+    expected = check(search_case, search_case.evidence_ids[0], UrlFilterSpec(url_excludes=term), path)
+    everything = oracle(search_case.rows, search_case.evidence_ids[0], UrlFilterSpec())
+    included = check(search_case, search_case.evidence_ids[0], UrlFilterSpec(url_contains=term), path, deep=False)
+    # Exclude is the exact complement of Search.
+    assert sorted(expected + included) == sorted(everything)
+
+
+@pytest.mark.parametrize("path", ["index", "scan"])
+@pytest.mark.parametrize("search,exclude", SEARCH_EXCLUDE_PAIRS)
+def test_url_contains_with_excludes_matches_oracle(search_case, search, exclude, path):
+    spec = UrlFilterSpec(url_contains=search, url_excludes=exclude)
+    expected = check(search_case, search_case.evidence_ids[0], spec, path)
+    assert set(expected) <= set(oracle(search_case.rows, search_case.evidence_ids[0], UrlFilterSpec(url_contains=search)))
+
+
+@pytest.mark.parametrize("path", ["index", "scan"])
+@pytest.mark.parametrize("combo", sorted(COMBOS))
+@pytest.mark.parametrize("exclude", ["example", "/path/1", "a_b", "%", "ärger", "zzz-no-hit"])
+def test_url_excludes_with_other_filters_matches_oracle(search_case, exclude, combo, path):
+    ev1 = search_case.evidence_ids[0]
+    check(search_case, ev1, UrlFilterSpec(url_excludes=exclude, **COMBOS[combo]), path, deep=False)
+    check(search_case, ev1, UrlFilterSpec(url_contains="example", url_excludes=exclude, **COMBOS[combo]), path, deep=False)
+
+
+@pytest.mark.parametrize("path", ["index", "scan"])
+def test_untagged_rows_are_those_with_an_empty_tags_column(search_case, path):
+    for evidence_id in search_case.evidence_ids:
+        expected = check(search_case, evidence_id, UrlFilterSpec(untagged=True), path)
+        everything = check(search_case, evidence_id, UrlFilterSpec(), path, deep=False)
+        page = search_case.data.load_url_page(UrlPageQuery(evidence_id, UrlFilterSpec(), page_size=100_000))
+        assert {url_id for url_id, tags in page.tags.items() if not tags} == set(expected)
+        assert set(expected) < set(everything)
+    assert check(search_case, search_case.evidence_ids[0], UrlFilterSpec(**COMBOS["untagged_and_tag"]), path) == []
+    tagless = {
+        r.id for r in search_case.rows if r.url.startswith("https://tagless.example/") and r.db == r.evidence_id
+    }
+    ev1_untagged = oracle(search_case.rows, search_case.evidence_ids[0], UrlFilterSpec(untagged=True))
+    assert len(tagless) == 2 and tagless <= set(ev1_untagged)
 
 
 def test_index_and_scan_return_identical_rows(search_case):

@@ -207,6 +207,15 @@ FILTERS: Dict[str, UrlFilterSpec] = {
     "url_contains": UrlFilterSpec(url_contains="Q=1"),
     "url_contains_short": UrlFilterSpec(url_contains="/9"),
     "combined": UrlFilterSpec(match_filter="unmatched", discovered_by=("chromium_cache",), url_contains="path"),
+    # Issue #72
+    "url_excludes": UrlFilterSpec(url_excludes="Q=1"),
+    "url_excludes_domain": UrlFilterSpec(url_excludes="D1"),
+    "search_exclude": UrlFilterSpec(url_contains="path", url_excludes="q=1"),
+    "untagged": UrlFilterSpec(untagged=True),
+    "untagged_combined": UrlFilterSpec(
+        untagged=True, match_filter="unmatched", domain_contains="EXAMPLE", url_excludes="/9",
+        discovered_by=("chromium_history", "bulk_extractor"),
+    ),
 }
 
 
