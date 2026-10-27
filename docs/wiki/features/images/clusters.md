@@ -10,7 +10,7 @@ Clusters subtab - perceptual hash clusters of similar images.
 - Image records with perceptual hashes from the evidence database.
 
 ## Filters and controls
-- Uses the main Images tab filters (tags, source, extension, size, hash match).
+- Does not apply the main Images tab filters; clusters are built from all images of the evidence.
 - Cluster list with member detail view.
 - Actions: Export Clusters CSV, Tag Selected, Check Known Hashes.
 

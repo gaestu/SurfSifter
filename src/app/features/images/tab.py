@@ -54,6 +54,10 @@ from app.services.matching_workers import HashCheckWorker
 
 LOGGER = get_logger("app.features.images")
 
+# Item data of the Tags dropdown's fixed "Untagged" entry (issue #74). Not a
+# string, so it never equals a tag name: a tag may itself be named "Untagged".
+_UNTAGGED_TAG = object()
+
 
 class ImageThumbnailDelegate(QStyledItemDelegate):
     """
@@ -179,6 +183,9 @@ class ImageFilters:
     hash_match: str = ""  # Filter by hash list matches
     url_text: str = ""  # Case-insensitive URL substring filter
     cache_key_text: str = ""  # Case-insensitive cache key substring filter
+    url_exclude_text: str = ""  # Hide images with a URL containing this
+    cache_key_exclude_text: str = ""  # Hide images with a cache key containing this
+    untagged: bool = False  # Only images without a tag ("Untagged" entry)
     min_size_bytes: Optional[int] = None
     max_size_bytes: Optional[int] = None
 
@@ -235,7 +242,7 @@ class ImagesTab(QWidget):
         self.tags_label = QLabel("Tags")
         filter_layout.addWidget(self.tags_label, 0, 0)
         self.tag_combo = QComboBox()
-        self.tag_combo.addItem("All tags", userData="")
+        self._rebuild_tag_combo([])
         self.tag_combo.currentIndexChanged.connect(self._on_filters_changed)
         filter_layout.addWidget(self.tag_combo, 0, 1)
 
@@ -287,7 +294,23 @@ class ImagesTab(QWidget):
         self._url_filter_timer.setInterval(400)  # Debounce 400ms
         self._url_filter_timer.timeout.connect(self._on_filters_changed)
         self.url_filter_input.textChanged.connect(self._on_url_filter_text_changed)
-        filter_layout.addWidget(self.url_filter_input, 1, 1, 1, 7)
+        filter_layout.addWidget(self.url_filter_input, 1, 1, 1, 3)
+
+        # URL exclude filter, next to its counterpart (issue #74)
+        filter_layout.addWidget(QLabel("URL exclude"), 1, 4)
+        self.url_exclude_input = QLineEdit()
+        self.url_exclude_input.setPlaceholderText("Exclude URLs containing...")
+        self.url_exclude_input.setToolTip(
+            "Hide images with any cache URL containing this text "
+            "(case-insensitive; images without a URL are kept)"
+        )
+        self.url_exclude_input.setClearButtonEnabled(True)
+        self._url_exclude_timer = QTimer(self)
+        self._url_exclude_timer.setSingleShot(True)
+        self._url_exclude_timer.setInterval(400)
+        self._url_exclude_timer.timeout.connect(self._on_filters_changed)
+        self.url_exclude_input.textChanged.connect(self._on_url_exclude_text_changed)
+        filter_layout.addWidget(self.url_exclude_input, 1, 5, 1, 3)
 
         # Cache Key text filter (row 2)
         filter_layout.addWidget(QLabel("Cache Key"), 2, 0)
@@ -300,7 +323,23 @@ class ImagesTab(QWidget):
         self._cache_key_filter_timer.setInterval(400)
         self._cache_key_filter_timer.timeout.connect(self._on_filters_changed)
         self.cache_key_filter_input.textChanged.connect(self._on_cache_key_filter_text_changed)
-        filter_layout.addWidget(self.cache_key_filter_input, 2, 1, 1, 7)
+        filter_layout.addWidget(self.cache_key_filter_input, 2, 1, 1, 3)
+
+        # Cache Key exclude filter, next to its counterpart (issue #74)
+        filter_layout.addWidget(QLabel("Cache Key exclude"), 2, 4)
+        self.cache_key_exclude_input = QLineEdit()
+        self.cache_key_exclude_input.setPlaceholderText("Exclude cache keys containing...")
+        self.cache_key_exclude_input.setToolTip(
+            "Hide images with any cache key containing this text "
+            "(case-insensitive; images without a cache key are kept)"
+        )
+        self.cache_key_exclude_input.setClearButtonEnabled(True)
+        self._cache_key_exclude_timer = QTimer(self)
+        self._cache_key_exclude_timer.setSingleShot(True)
+        self._cache_key_exclude_timer.setInterval(400)
+        self._cache_key_exclude_timer.timeout.connect(self._on_filters_changed)
+        self.cache_key_exclude_input.textChanged.connect(self._on_cache_key_exclude_text_changed)
+        filter_layout.addWidget(self.cache_key_exclude_input, 2, 5, 1, 3)
 
         # Reset filters button
         self.reset_filters_button = QPushButton("↻ Reset")
@@ -572,7 +611,10 @@ class ImagesTab(QWidget):
             self._load_pending = True
 
     def refresh(self) -> None:
+        # Both views, so images tagged while "Untagged" is active drop out of
+        # the Table as well (issue #74).
         self.model.reload()
+        self.table_model.reload()
         self._update_page_label()
 
     def mark_stale(self) -> None:
@@ -777,20 +819,7 @@ class ImagesTab(QWidget):
                 self.hash_match_combo.setCurrentIndex(index)
 
         # Populate tags from worker data
-        tags = data.get("tags", [])
-        current_tag = self.tag_combo.currentData()
-        self.tag_combo.blockSignals(True)
-        self.tag_combo.clear()
-        self.tag_combo.addItem("All tags", userData="")
-        for tag in tags:
-            name = tag["name"]
-            count = tag["usage_count"]
-            self.tag_combo.addItem(f"{name} ({count})", userData=name)
-        self.tag_combo.blockSignals(False)
-        if current_tag:
-            index = self.tag_combo.findData(current_tag)
-            if index != -1:
-                self.tag_combo.setCurrentIndex(index)
+        self._rebuild_tag_combo(data.get("tags", []))
 
         self._on_filters_changed()
         self._update_source_counts_label(sources_with_counts)
@@ -812,16 +841,52 @@ class ImagesTab(QWidget):
         """Debounce cache key filter text changes."""
         self._cache_key_filter_timer.start()
 
+    def _on_url_exclude_text_changed(self, text: str) -> None:
+        """Debounce URL exclude text changes."""
+        self._url_exclude_timer.start()
+
+    def _on_cache_key_exclude_text_changed(self, text: str) -> None:
+        """Debounce cache key exclude text changes."""
+        self._cache_key_exclude_timer.start()
+
+    def _rebuild_tag_combo(self, tags: List[Dict[str, Any]]) -> None:
+        """Fill the Tags dropdown and keep its selection (issue #74).
+
+        Fixed entries "All tags" and "Untagged" come first. The selection (a
+        tag name or the Untagged sentinel) is restored if still present,
+        otherwise "All tags" is selected. Emits no signals.
+        """
+        current_tag = self.tag_combo.currentData()
+        self.tag_combo.blockSignals(True)
+        self.tag_combo.clear()
+        self.tag_combo.addItem("All tags", userData="")
+        self.tag_combo.addItem("Untagged", userData=_UNTAGGED_TAG)
+        # Tells it apart from a tag that is itself named "Untagged".
+        self.tag_combo.setItemData(1, "Images without any tag", Qt.ToolTipRole)
+        for tag in tags:
+            name = tag["name"]
+            count = tag["usage_count"]
+            self.tag_combo.addItem(f"{name} ({count})", userData=name)
+        if current_tag:
+            index = self.tag_combo.findData(current_tag)
+            if index != -1:
+                self.tag_combo.setCurrentIndex(index)
+        self.tag_combo.blockSignals(False)
+
     def _on_filters_changed(self) -> None:
         # Process pending events to prevent UI lockup when changing filters quickly
         QApplication.processEvents()
 
-        self.filters.tags = self.tag_combo.currentData() or ""
+        tag_data = self.tag_combo.currentData()
+        self.filters.untagged = tag_data is _UNTAGGED_TAG
+        self.filters.tags = "" if self.filters.untagged else (tag_data or "")
         self.filters.source = self.source_combo.currentData() or ""
         self.filters.extension = self.extension_combo.currentData() or ""
         self.filters.hash_match = self.hash_match_combo.currentData() or ""
         self.filters.url_text = self.url_filter_input.text().strip()
         self.filters.cache_key_text = self.cache_key_filter_input.text().strip()
+        self.filters.url_exclude_text = self.url_exclude_input.text().strip()
+        self.filters.cache_key_exclude_text = self.cache_key_exclude_input.text().strip()
 
         # Phase 3: Size filter
         size_data = self.size_combo.currentData()
@@ -847,6 +912,9 @@ class ImagesTab(QWidget):
             hash_match=self.filters.hash_match,
             url_text=self.filters.url_text,
             cache_key_text=self.filters.cache_key_text,
+            url_exclude_text=self.filters.url_exclude_text,
+            cache_key_exclude_text=self.filters.cache_key_exclude_text,
+            untagged=self.filters.untagged,
             min_size_bytes=self.filters.min_size_bytes,
             max_size_bytes=self.filters.max_size_bytes,
         )
@@ -878,6 +946,9 @@ class ImagesTab(QWidget):
             self.filters.hash_match = ""
             self.filters.url_text = ""
             self.filters.cache_key_text = ""
+            self.filters.url_exclude_text = ""
+            self.filters.cache_key_exclude_text = ""
+            self.filters.untagged = False
             self.filters.min_size_bytes = None
             self.filters.max_size_bytes = None
 
@@ -886,6 +957,20 @@ class ImagesTab(QWidget):
 
             # Clear cache key filter text
             self.cache_key_filter_input.clear()
+
+            # Clear exclude filter texts
+            self.url_exclude_input.clear()
+            self.cache_key_exclude_input.clear()
+
+            # The reload below applies the cleared texts; drop the debounced
+            # reloads their textChanged signals started.
+            for timer in (
+                self._url_filter_timer,
+                self._cache_key_filter_timer,
+                self._url_exclude_timer,
+                self._cache_key_exclude_timer,
+            ):
+                timer.stop()
 
             # Clear thumbnail cache to force reload
             self.model._thumb_cache.clear()
@@ -899,6 +984,9 @@ class ImagesTab(QWidget):
                 hash_match="",
                 url_text="",
                 cache_key_text="",
+                url_exclude_text="",
+                cache_key_exclude_text="",
+                untagged=False,
                 min_size_bytes=None,
                 max_size_bytes=None,
             )
@@ -1574,23 +1662,7 @@ class ImagesTab(QWidget):
         if not self.case_data or self.evidence_id is None:
             return
 
-        current_tag = self.tag_combo.currentData()
-        self.tag_combo.blockSignals(True)
-        self.tag_combo.clear()
-        self.tag_combo.addItem("All tags", userData="")
-
-        tags = self.case_data.list_tags(self.evidence_id)
-        for tag in tags:
-            name = tag["name"]
-            count = tag["usage_count"]
-            self.tag_combo.addItem(f"{name} ({count})", userData=name)
-
-        # Restore selection if possible
-        index = self.tag_combo.findData(current_tag)
-        if index != -1:
-            self.tag_combo.setCurrentIndex(index)
-
-        self.tag_combo.blockSignals(False)
+        self._rebuild_tag_combo(self.case_data.list_tags(self.evidence_id))
 
     # ---------------------------------------------------------------
     # Phase 1: Image Preview

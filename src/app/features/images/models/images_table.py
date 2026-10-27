@@ -70,6 +70,9 @@ class ImagesTableModel(QAbstractTableModel):
             "hash_match": None,
             "url_text": None,
             "cache_key_text": None,
+            "url_exclude_text": None,
+            "cache_key_exclude_text": None,
+            "untagged": False,
             "min_size_bytes": None,
             "max_size_bytes": None,
         }
@@ -268,6 +271,9 @@ class ImagesTableModel(QAbstractTableModel):
         hash_match: Optional[str] = None,
         url_text: Optional[str] = None,
         cache_key_text: Optional[str] = None,
+        url_exclude_text: Optional[str] = None,
+        cache_key_exclude_text: Optional[str] = None,
+        untagged: Optional[bool] = None,
         min_size_bytes: Optional[int] = None,
         max_size_bytes: Optional[int] = None,
     ) -> None:
@@ -283,9 +289,17 @@ class ImagesTableModel(QAbstractTableModel):
             self._filters["url_text"] = url_text if url_text else None
         if cache_key_text is not None:
             self._filters["cache_key_text"] = cache_key_text if cache_key_text else None
-        if min_size_bytes is not None or max_size_bytes is not None:
-            self._filters["min_size_bytes"] = min_size_bytes
-            self._filters["max_size_bytes"] = max_size_bytes
+        if url_exclude_text is not None:
+            self._filters["url_exclude_text"] = url_exclude_text if url_exclude_text else None
+        if cache_key_exclude_text is not None:
+            self._filters["cache_key_exclude_text"] = cache_key_exclude_text if cache_key_exclude_text else None
+        # Kept apart from tags so it never goes through the %tag% wrapping
+        if untagged is not None:
+            self._filters["untagged"] = bool(untagged)
+        # Always set like the Grid model: (None, None) clears the size filter
+        # ("All sizes", Reset). Both callers pass both values.
+        self._filters["min_size_bytes"] = min_size_bytes
+        self._filters["max_size_bytes"] = max_size_bytes
         self.page = 0
         self._thumb_cache.clear()
         self.reload()
@@ -310,6 +324,9 @@ class ImagesTableModel(QAbstractTableModel):
             hash_match=self._filters.get("hash_match"),
             url_text=self._filters.get("url_text"),
             cache_key_text=self._filters.get("cache_key_text"),
+            url_excludes=self._filters.get("url_exclude_text"),
+            cache_key_excludes=self._filters.get("cache_key_exclude_text"),
+            untagged=self._filters.get("untagged", False),
             min_size_bytes=self._filters.get("min_size_bytes"),
             max_size_bytes=self._filters.get("max_size_bytes"),
             limit=self.page_size,
