@@ -296,11 +296,14 @@ def get_artifact_tags_str(
     Returns:
         Comma-separated list of tag names, or empty string if no tags
     """
+    # Only tags of this evidence count (the definition of the "Untagged"
+    # filters, issues #72 and #73).
     sql = """
         SELECT GROUP_CONCAT(t.name, ', ')
         FROM tag_associations ta
         JOIN tags t ON ta.tag_id = t.id
         WHERE ta.evidence_id = ? AND ta.artifact_type = ? AND ta.artifact_id = ?
+          AND t.evidence_id = ta.evidence_id
     """
     result = conn.execute(sql, (evidence_id, artifact_type, artifact_id)).fetchone()
     return result[0] if result and result[0] else ""
@@ -314,6 +317,8 @@ def get_tag_strings_for_artifacts(
 ) -> Dict[int, str]:
     """
     Get tags for multiple artifacts in a single query.
+
+    Only tags of this evidence count, as in ``get_artifact_tags_str``.
 
     Args:
         conn: Evidence database connection
@@ -335,6 +340,7 @@ def get_tag_strings_for_artifacts(
         WHERE ta.evidence_id = ?
           AND ta.artifact_type = ?
           AND ta.artifact_id IN ({placeholders})
+          AND t.evidence_id = ta.evidence_id
         GROUP BY ta.artifact_id
     """
     params = [evidence_id, artifact_type, *artifact_ids]

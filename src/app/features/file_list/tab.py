@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import csv
 import logging
+from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -38,7 +39,7 @@ from core.database import DatabaseManager
 from core.matching import ReferenceListManager, ReferenceListMatcher
 from app.features.file_list.models import FileListModel
 from app.common.dialogs import ReferenceListSelectorDialog, TagArtifactsDialog
-from app.data import STATS_PROCESS_LOG
+from app.data import FILE_LIST_ANY_MATCH, STATS_PROCESS_LOG, FileListFilterSpec
 from app.data.case_data import CaseDataAccess
 from app.services.matching_workers import FileListMatchWorker as MatchWorker
 from app.services.evidence_access import evidence_has_source
@@ -48,6 +49,25 @@ logger = logging.getLogger(__name__)
 
 
 # MatchWorker imported from app.services.matching_workers
+
+# Item data of the Tags dropdown's fixed "Any Tag" and "Untagged" entries
+# (issue #73). Tag entries hold the tag name (a str), so no tag name can
+# equal these objects.
+_ANY_TAG = object()
+_UNTAGGED_TAG = object()
+
+# Item data of the dropdowns' "Loading..." / "Error loading" placeholders;
+# while shown, the applied filter value is kept (issue #73). Objects, so no
+# real extension, list or tag name can equal them.
+_LOADING_DATA = object()
+_ERROR_DATA = object()
+# Item data of the Extension dropdown's "... (N more)" entry; not a filter.
+_TRUNCATED_DATA = "__truncated__"
+
+
+def _is_placeholder(data: Any) -> bool:
+    """True for item data that keeps the applied filter value."""
+    return data is _LOADING_DATA or data is _ERROR_DATA or data == _TRUNCATED_DATA
 
 
 class ModelRefreshWorker(QThread):
@@ -61,152 +81,44 @@ class ModelRefreshWorker(QThread):
     finished = Signal(list, int)  # (rows, total_count)
     error = Signal(str)
 
-    PAGE_SIZE = 10000  # Match model's page size
-
-    def __init__(self, db_manager, evidence_id: int, case_db_path, filters: dict):
+    def __init__(
+        self,
+        data_access: CaseDataAccess,
+        evidence_id: int,
+        filters: FileListFilterSpec,
+        page_size: int = FileListModel.PAGE_SIZE,
+    ):
         """
         Initialize refresh worker.
 
         Args:
-            db_manager: DatabaseManager instance
+            data_access: Data access (queries run on this worker's thread)
             evidence_id: Evidence ID
-            case_db_path: Path to case database
             filters: Current filter settings
+            page_size: Rows of the first page (the model's page size)
         """
         super().__init__()
-        self.db_manager = db_manager
+        self.data_access = data_access
         self.evidence_id = evidence_id
-        self.case_db_path = case_db_path
-        self.filters = filters.copy()
+        self.filters = filters
+        self.page_size = page_size
 
     def run(self):
         """Load model data in background thread."""
         try:
-            import sqlite3
             import time
             start_time = time.time()
 
-            # Get evidence label
-            with sqlite3.connect(self.case_db_path) as conn:
-                conn.row_factory = sqlite3.Row
-                row = conn.execute(
-                    "SELECT label FROM evidences WHERE id = ?",
-                    (self.evidence_id,),
-                ).fetchone()
-                label = row["label"] if row and row["label"] else f"EV-{self.evidence_id:03d}"
-
-            evidence_conn = self.db_manager.get_evidence_conn(
-                self.evidence_id, label=label
-            )
-
-            # Build filter clauses (same logic as model)
-            filter_clauses = []
-            params = [self.evidence_id]
-
-            if self.filters.get("extension"):
-                filter_clauses.append("fl.extension = ?")
-                params.append(self.filters["extension"])
-
-            if self.filters.get("size_min") is not None:
-                filter_clauses.append("fl.size_bytes >= ?")
-                params.append(self.filters["size_min"])
-
-            if self.filters.get("size_max") is not None:
-                filter_clauses.append("fl.size_bytes <= ?")
-                params.append(self.filters["size_max"])
-
-            deleted = self.filters.get("deleted", "all")
-            if deleted == "show_only":
-                filter_clauses.append("fl.deleted = 1")
-            elif deleted == "hide":
-                filter_clauses.append("fl.deleted = 0")
-
-            matches_filter = self.filters.get("matches", "")
-            if matches_filter:
-                if matches_filter == "any":
-                    filter_clauses.append(
-                        "EXISTS (SELECT 1 FROM file_list_matches WHERE file_list_id = fl.id)"
-                    )
-                else:
-                    filter_clauses.append(
-                        "EXISTS (SELECT 1 FROM file_list_matches WHERE file_list_id = fl.id AND reference_list_name = ?)"
-                    )
-                    params.append(matches_filter)
-
-            tags_filter = self.filters.get("tags", "")
-            if tags_filter:
-                if tags_filter == "any":
-                    filter_clauses.append(
-                        """EXISTS (
-                            SELECT 1 FROM tag_associations ta
-                            WHERE ta.artifact_type = 'file_list'
-                            AND ta.artifact_id = fl.id
-                        )"""
-                    )
-                else:
-                    filter_clauses.append(
-                        """EXISTS (
-                            SELECT 1 FROM tag_associations ta
-                            JOIN tags t ON ta.tag_id = t.id
-                            WHERE ta.artifact_type = 'file_list'
-                            AND ta.artifact_id = fl.id
-                            AND t.name = ?
-                        )"""
-                    )
-                    params.append(tags_filter)
-
-            search = self.filters.get("search", "")
-            if search:
-                filter_clauses.append("(fl.file_name LIKE ? OR fl.file_path LIKE ?)")
-                search_term = f"%{search}%"
-                params.extend([search_term, search_term])
-
-            filter_clause = ""
-            if filter_clauses:
-                filter_clause = "AND " + " AND ".join(filter_clauses)
-
-            # Count total rows
-            count_query = f"""
-                SELECT COUNT(*)
-                FROM file_list fl
-                WHERE fl.evidence_id = ?
-                {filter_clause}
-            """
-            total_rows = evidence_conn.execute(count_query, params).fetchone()[0]
-
-            # Load first page
-            data_query = f"""
-                SELECT
-                    fl.id,
-                    fl.file_path,
-                    fl.file_name,
-                    fl.extension,
-                    fl.size_bytes,
-                    fl.modified_ts,
-                    fl.deleted,
-                    fl.partition_index
-                FROM file_list fl
-                WHERE fl.evidence_id = ?
-                {filter_clause}
-                ORDER BY fl.file_path
-                LIMIT {self.PAGE_SIZE}
-            """
-
-            cursor = evidence_conn.execute(data_query, params)
-            rows = []
-            for row in cursor.fetchall():
-                rows.append({
-                    "id": row[0],
-                    "file_path": row[1] or "",
-                    "file_name": row[2] or "",
-                    "extension": row[3] or "",
-                    "size_bytes": row[4] or 0,
-                    "modified_ts": row[5] or "",
-                    "deleted": bool(row[6]),
-                    "partition_index": row[7],
-                })
-
-            evidence_conn.close()
+            # Same queries as the model (issue #73). This thread's connection
+            # is closed before the signals are emitted.
+            try:
+                total_rows = self.data_access.count_file_list(self.evidence_id, self.filters)
+                rows = self.data_access.list_file_list_rows(
+                    self.evidence_id, self.filters, offset=0, limit=self.page_size
+                )
+            finally:
+                if self.data_access.db_manager is not None:
+                    self.data_access.db_manager.close_thread_connections()
 
             elapsed = time.time() - start_time
             logger.info(
@@ -255,8 +167,13 @@ class FileListFilterLoadWorker(QThread):
             import time
             start_time = time.time()
 
-            # Get filter values from model (uses cache if available)
-            filter_values = self.model.get_filter_values()
+            # Get filter values from model (uses cache if available). Its
+            # connection on this thread is closed here, before the signals:
+            # the tab drops this worker once ``finished`` is handled.
+            try:
+                filter_values = self.model.get_filter_values()
+            finally:
+                self.model.db_manager.close_thread_connections()
 
             # Truncate extensions if too many
             extensions = filter_values.get("extensions", [])
@@ -439,9 +356,9 @@ class FileListTab(QWidget):
         # Tags filter
         filter_layout.addWidget(QLabel("Tags:"), 1, 2)
         self.tags_combo = QComboBox()
-        self.tags_combo.addItem("All", "")
-        self.tags_combo.addItem("Any Tag", "any")
-        self.tags_combo.currentTextChanged.connect(self._on_filters_changed)
+        self._add_fixed_tag_items(self.tags_combo)
+        # By index: a tag named "Untagged" has the fixed entry's text (issue #73)
+        self.tags_combo.currentIndexChanged.connect(self._on_filters_changed)
         filter_layout.addWidget(self.tags_combo, 1, 3)
 
         # Search filter with button
@@ -449,11 +366,28 @@ class FileListTab(QWidget):
         search_layout = QHBoxLayout()
         self.search_edit = QLineEdit()
         self.search_edit.setPlaceholderText("Search filename or path...")
+        self.search_edit.setToolTip(
+            "Show files whose name or path contains this text (ASCII case-insensitive; "
+            "%, _ and \\ match literally). Press Enter or Search to apply."
+        )
         self.search_edit.returnPressed.connect(self._on_search_clicked)
         search_layout.addWidget(self.search_edit)
 
+        # Issue #73: hides files whose name or path contains a literal
+        # substring; applied with Search, like the search text.
+        self.exclude_label = QLabel("Exclude:")
+        search_layout.addWidget(self.exclude_label)
+        self.exclude_edit = QLineEdit()
+        self.exclude_edit.setPlaceholderText("Exclude filename or path...")
+        self.exclude_edit.setToolTip(
+            "Hide files whose name or path contains this text (ASCII case-insensitive; "
+            "%, _ and \\ match literally). Press Enter or Search to apply."
+        )
+        self.exclude_edit.returnPressed.connect(self._on_search_clicked)
+        search_layout.addWidget(self.exclude_edit)
+
         self.search_btn = QPushButton("Search")
-        self.search_btn.setToolTip("Click to apply search filter")
+        self.search_btn.setToolTip("Apply Search and Exclude")
         self.search_btn.clicked.connect(self._on_search_clicked)
         search_layout.addWidget(self.search_btn)
 
@@ -619,7 +553,7 @@ class FileListTab(QWidget):
         for combo in [self.extension_combo, self.matches_combo, self.tags_combo]:
             combo.blockSignals(True)
             combo.clear()
-            combo.addItem("Loading...", "__loading__")
+            combo.addItem("Loading...", _LOADING_DATA)
             combo.setEnabled(False)
             combo.blockSignals(False)
 
@@ -637,6 +571,7 @@ class FileListTab(QWidget):
         self.matches_combo.blockSignals(True)
         self.tags_combo.blockSignals(True)
 
+        filters = self.model.filters
         try:
             # Populate extension combo
             self.extension_combo.clear()
@@ -652,27 +587,30 @@ class FileListTab(QWidget):
                 total = data.get("extension_count", len(extensions))
                 self.extension_combo.addItem(
                     f"... ({total - len(extensions)} more)",
-                    "__truncated__"
+                    _TRUNCATED_DATA
                 )
+            # Keep the applied selections (issue #73)
+            self._select_combo_data(self.extension_combo, filters.extension or "", filters.extension, insert_at=1)
 
             # Populate matches combo
             self.matches_combo.clear()
             self.matches_combo.setEnabled(True)
             self.matches_combo.addItem("All", "")
-            self.matches_combo.addItem("Any Match", "any")
+            self.matches_combo.addItem("Any Match", FILE_LIST_ANY_MATCH)
             for match in data.get("matches", []):
                 self.matches_combo.addItem(match, match)
+            self._select_combo_data(self.matches_combo, filters.match_list or "", filters.match_list, insert_at=2)
 
             # Populate tags combo
             self.tags_combo.clear()
             self.tags_combo.setEnabled(True)
-            self.tags_combo.addItem("All", "")
-            self.tags_combo.addItem("Any Tag", "any")
+            self._add_fixed_tag_items(self.tags_combo)
             for tag in data.get("tags", []):
                 if isinstance(tag, dict):
                     self.tags_combo.addItem(tag.get("name", ""), tag.get("name", ""))
                 else:
                     self.tags_combo.addItem(str(tag), str(tag))
+            self._select_applied_tag()
 
             logger.debug(
                 "FileListTab filters loaded: %d extensions, %d matches, %d tags",
@@ -698,15 +636,16 @@ class FileListTab(QWidget):
         self._filter_worker = None
         logger.error("FileListTab filter load error: %s", error_msg)
 
-        # Show the rows unfiltered anyway (they are no longer loaded at
-        # construction; issue #63)
-        self.model.apply_filters({})
+        # Show the rows anyway (they are no longer loaded at construction;
+        # issue #63), with the applied filters (issue #73)
+        self.model.apply_filters()
+        self._update_summary()
 
         # Re-enable dropdowns with error state
         for combo in [self.extension_combo, self.matches_combo, self.tags_combo]:
             combo.blockSignals(True)
             combo.clear()
-            combo.addItem("Error loading", "__error__")
+            combo.addItem("Error loading", _ERROR_DATA)
             combo.setEnabled(True)
             combo.blockSignals(False)
 
@@ -715,8 +654,65 @@ class FileListTab(QWidget):
         has_selection = len(self.model.selected_rows) > 0
         self.tag_btn.setEnabled(has_selection)
 
+    @staticmethod
+    def _add_fixed_tag_items(combo: QComboBox) -> None:
+        """Add the Tags dropdown's fixed entries; tag names follow them (issue #73)."""
+        combo.addItem("All", "")
+        combo.addItem("Any Tag", _ANY_TAG)
+        combo.addItem("Untagged", _UNTAGGED_TAG)
+        # Tell them apart from tags that are themselves named so.
+        combo.setItemData(1, "Files with at least one tag", Qt.ToolTipRole)
+        combo.setItemData(2, "Files without any tag", Qt.ToolTipRole)
+
+    @staticmethod
+    def _select_combo_data(combo: QComboBox, value: Any, label: Optional[str], insert_at: int) -> None:
+        """Select the item holding ``value``, inserting it (as ``label``) if missing."""
+        index = combo.findData(value)
+        if index < 0:
+            index = min(insert_at, combo.count())
+            combo.insertItem(index, label or str(value), value)
+        combo.setCurrentIndex(index)
+
+    def _select_applied_tag(self) -> None:
+        """Select the applied tag filter in the (rebuilt) Tags dropdown."""
+        filters = self.model.filters
+        if filters.untagged:
+            value: Any = _UNTAGGED_TAG
+        elif filters.any_tag:
+            value = _ANY_TAG
+        else:
+            value = filters.tag_name or ""
+        self._select_combo_data(self.tags_combo, value, filters.tag_name, insert_at=3)
+
+    def _filters_from_controls(self) -> FileListFilterSpec:
+        """Build the filter spec from the controls.
+
+        Dropdowns showing a loading/error placeholder keep the applied value
+        (issue #73).
+        """
+        changes: Dict[str, Any] = {
+            "size_min": int(self.size_combo.currentData()) if self.size_combo.currentData() else None,
+            "deleted": self.deleted_combo.currentData(),
+            "search": self.search_edit.text().strip(),
+            "exclude": self.exclude_edit.text().strip(),
+        }
+        extension = self.extension_combo.currentData()
+        if not _is_placeholder(extension):
+            changes["extension"] = extension or ""
+        match_list = self.matches_combo.currentData()
+        if not _is_placeholder(match_list):
+            changes["match_list"] = match_list or ""
+        tag = self.tags_combo.currentData()
+        if tag is _UNTAGGED_TAG:
+            changes.update(tag_name="", any_tag=False, untagged=True)
+        elif tag is _ANY_TAG:
+            changes.update(tag_name="", any_tag=True, untagged=False)
+        elif not _is_placeholder(tag):
+            changes.update(tag_name=tag or "", any_tag=False, untagged=False)
+        return replace(self.model.filters, **changes)
+
     def _on_search_clicked(self):
-        """Handle search button click - applies all filters including search text."""
+        """Handle search button click - applies all filters including Search and Exclude."""
         self._on_filters_changed()
 
     def _on_filters_changed(self):
@@ -724,16 +720,7 @@ class FileListTab(QWidget):
         # Phase 1: Show cursor feedback for long operations
         QApplication.setOverrideCursor(Qt.WaitCursor)
         try:
-            filters = {
-                "extension": self.extension_combo.currentData() or "",
-                "size_min": int(self.size_combo.currentData()) if self.size_combo.currentData() else None,
-                "deleted": self.deleted_combo.currentData(),
-                "matches": self.matches_combo.currentData() or "",
-                "tags": self.tags_combo.currentData() or "",
-                "search": self.search_edit.text(),
-            }
-
-            self.model.apply_filters(filters)
+            self.model.apply_filters(self._filters_from_controls())
             self._update_summary()
             self._update_pagination_controls()
         finally:
@@ -755,9 +742,9 @@ class FileListTab(QWidget):
             summary += f" | {selected_files:,} selected"
 
         # Show filter status instead of counts (Phase 1 optimization)
-        if self.model._filters.get("tags"):
+        if self.model.filters.tag_filtered:
             summary += " | 🏷️ filtered"
-        if self.model._filters.get("matches"):
+        if self.model.filters.match_list:
             summary += " | 🎯 filtered"
 
         self.summary_label.setText(summary)
@@ -933,10 +920,9 @@ class FileListTab(QWidget):
         """Refresh data and filter dropdowns after matching (deferred, async)."""
         # Start background worker for model data refresh
         self._refresh_worker = ModelRefreshWorker(
-            self.db_manager,
+            self.model.data_access,
             self.evidence_id,
-            self.case_db_path,
-            self.model._filters
+            self.model.filters,
         )
 
         # Show progress dialog
@@ -1107,7 +1093,8 @@ class FileListTab(QWidget):
             dialog.tags_changed.connect(self._load_tags)
             if dialog.exec():
                 # Refresh data
-                self.model.apply_filters(self.model._filters)
+                self.model.apply_filters()
+                self._update_summary()
                 self._load_data()
 
     # ------------------------------------------------------------------
@@ -1242,11 +1229,9 @@ class FileListTab(QWidget):
 
     def _load_tags(self):
         """Load tags into the filter combo box."""
-        current_tag = self.tags_combo.currentData()
         self.tags_combo.blockSignals(True)
         self.tags_combo.clear()
-        self.tags_combo.addItem("All", "")
-        self.tags_combo.addItem("Any Tag", "any")
+        self._add_fixed_tag_items(self.tags_combo)
 
         # Use CaseDataAccess to list tags
         # Use context manager to ensure connections are closed
@@ -1258,10 +1243,8 @@ class FileListTab(QWidget):
             count = tag["usage_count"]
             self.tags_combo.addItem(f"{name} ({count})", userData=name)
 
-        # Restore selection if possible
-        index = self.tags_combo.findData(current_tag)
-        if index != -1:
-            self.tags_combo.setCurrentIndex(index)
+        # Keep the applied selection (issue #73)
+        self._select_applied_tag()
 
         self.tags_combo.blockSignals(False)
 

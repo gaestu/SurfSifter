@@ -11,6 +11,8 @@ from typing import Any, Dict, List, Optional, Set
 from PySide6.QtCore import QAbstractTableModel, QModelIndex, Qt
 from PySide6.QtGui import QIcon
 
+from app.data import FileListFilterSpec
+from app.data.case_data import CaseDataAccess
 from core.database import DatabaseManager
 
 logger = logging.getLogger(__name__)
@@ -69,9 +71,8 @@ class FileListModel(QAbstractTableModel):
         self.evidence_id = evidence_id
         self.case_db_path = case_db_path
         self.db_manager = DatabaseManager(self.case_folder, case_db_path=case_db_path)
-
-        # Cache evidence label to avoid repeated queries
-        self._evidence_label_cache: Optional[str] = None
+        # All queries go through the data layer (issue #73)
+        self.data_access = CaseDataAccess(self.case_folder, db_manager=self.db_manager)
 
         # Data storage (paginated)
         self._rows: List[Dict[str, Any]] = []
@@ -83,53 +84,11 @@ class FileListModel(QAbstractTableModel):
         self._matches_cache: Dict[int, str] = {}  # file_id -> matches string
         self._tags_cache: Dict[int, str] = {}  # file_id -> tags string
 
-        # Filters
-        self._filters = {
-            "extension": "",  # All extensions
-            "size_min": None,
-            "size_max": None,
-            "deleted": "all",  # "all", "show_only", "hide"
-            "matches": "",  # All lists, or specific list name
-            "tags": "",  # All tags, or specific tag name
-            "search": "",  # Search in filename/path
-        }
+        # Applied filters
+        self._filters = FileListFilterSpec()
 
         if load:
             self._load_data()
-
-    def _get_evidence_label(self) -> str:
-        """
-        Retrieve the evidence label from the database.
-
-        Returns:
-            Evidence label from database, or fallback format if not found.
-
-        Note:
-            Uses actual label from evidences table (typically E01 base filename).
-            Falls back to EV-XXX format only if label is not in database.
-        """
-        if self._evidence_label_cache is not None:
-            return self._evidence_label_cache
-
-        import sqlite3
-        with sqlite3.connect(self.case_db_path) as conn:
-            conn.row_factory = sqlite3.Row
-            row = conn.execute(
-                "SELECT label FROM evidences WHERE id = ?",
-                (self.evidence_id,),
-            ).fetchone()
-            if row and row["label"]:
-                self._evidence_label_cache = row["label"]
-            else:
-                # Fallback (should not happen with  auto-derived labels)
-                self._evidence_label_cache = f"EV-{self.evidence_id:03d}"
-                logger.warning(
-                    "Evidence %d has no label in database, using fallback: %s",
-                    self.evidence_id,
-                    self._evidence_label_cache
-                )
-
-        return self._evidence_label_cache
 
     def _load_data(self, append: bool = False) -> None:
         """
@@ -150,125 +109,23 @@ class FileListModel(QAbstractTableModel):
                 self._matches_cache.clear()
                 self._tags_cache.clear()
 
-            evidence_conn = self.db_manager.get_evidence_conn(
-                self.evidence_id, label=self._get_evidence_label()
-            )
-
-            # Build filter clauses
-            filter_clauses = []
-            params = [self.evidence_id]
-
-            if self._filters["extension"]:
-                filter_clauses.append("fl.extension = ?")
-                params.append(self._filters["extension"])
-
-            if self._filters["size_min"] is not None:
-                filter_clauses.append("fl.size_bytes >= ?")
-                params.append(self._filters["size_min"])
-
-            if self._filters["size_max"] is not None:
-                filter_clauses.append("fl.size_bytes <= ?")
-                params.append(self._filters["size_max"])
-
-            if self._filters["deleted"] == "show_only":
-                filter_clauses.append("fl.deleted = 1")
-            elif self._filters["deleted"] == "hide":
-                filter_clauses.append("fl.deleted = 0")
-
-            # For matches/tags filters, we need subqueries since we removed JOINs
-            if self._filters["matches"]:
-                if self._filters["matches"] == "any":
-                    filter_clauses.append(
-                        "EXISTS (SELECT 1 FROM file_list_matches WHERE file_list_id = fl.id)"
-                    )
-                else:
-                    filter_clauses.append(
-                        "EXISTS (SELECT 1 FROM file_list_matches WHERE file_list_id = fl.id AND reference_list_name = ?)"
-                    )
-                    params.append(self._filters["matches"])
-
-            if self._filters["tags"]:
-                if self._filters["tags"] == "any":
-                    filter_clauses.append(
-                        """EXISTS (
-                            SELECT 1 FROM tag_associations ta
-                            WHERE ta.artifact_type = 'file_list'
-                            AND ta.artifact_id = fl.id
-                        )"""
-                    )
-                else:
-                    filter_clauses.append(
-                        """EXISTS (
-                            SELECT 1 FROM tag_associations ta
-                            JOIN tags t ON ta.tag_id = t.id
-                            WHERE ta.artifact_type = 'file_list'
-                            AND ta.artifact_id = fl.id
-                            AND t.name = ?
-                        )"""
-                    )
-                    params.append(self._filters["tags"])
-
-            if self._filters["search"]:
-                filter_clauses.append("(fl.file_name LIKE ? OR fl.file_path LIKE ?)")
-                search_term = f"%{self._filters['search']}%"
-                params.extend([search_term, search_term])
-
-            # Build filter clause
-            filter_clause = ""
-            if filter_clauses:
-                filter_clause = "AND " + " AND ".join(filter_clauses)
-
             # Phase 1: Count total rows first (fast with indexes)
             if not append:
                 count_start = time.time()
-                count_query = f"""
-                    SELECT COUNT(*)
-                    FROM file_list fl
-                    WHERE fl.evidence_id = ?
-                    {filter_clause}
-                """
-                self._total_rows = evidence_conn.execute(count_query, params).fetchone()[0]
+                self._total_rows = self.data_access.count_file_list(self.evidence_id, self._filters)
                 count_time = time.time() - count_start
                 logger.info(f"Total rows matching filters: {self._total_rows} (count took {count_time:.3f}s)")
 
             # Phase 1: Load only one page at a time (no GROUP_CONCAT!)
             offset = self._loaded_rows
             page_start = time.time()
-            data_query = f"""
-                SELECT
-                    fl.id,
-                    fl.file_path,
-                    fl.file_name,
-                    fl.extension,
-                    fl.size_bytes,
-                    fl.modified_ts,
-                    fl.deleted,
-                    fl.partition_index
-                FROM file_list fl
-                WHERE fl.evidence_id = ?
-                {filter_clause}
-                ORDER BY fl.file_path
-                LIMIT {self.PAGE_SIZE} OFFSET {offset}
-            """
-
             logger.debug(f"Loading page at offset {offset}, limit {self.PAGE_SIZE}")
-            cursor = evidence_conn.execute(data_query, params)
-
-            rows_loaded = 0
-            for row in cursor.fetchall():
-                self._rows.append({
-                    "id": row[0],
-                    "file_path": row[1] or "",
-                    "file_name": row[2] or "",
-                    "extension": row[3] or "",
-                    "size_bytes": row[4] or 0,
-                    "modified_ts": row[5] or "",
-                    "deleted": bool(row[6]),
-                    "partition_index": row[7],
-                    # matches and tags loaded on-demand via _get_matches()/_get_tags()
-                })
-                rows_loaded += 1
-
+            # matches and tags loaded on-demand via _get_matches()/_get_tags()
+            rows = self.data_access.list_file_list_rows(
+                self.evidence_id, self._filters, offset=offset, limit=self.PAGE_SIZE
+            )
+            self._rows.extend(rows)
+            rows_loaded = len(rows)
             self._loaded_rows += rows_loaded
 
             page_time = time.time() - page_start
@@ -280,13 +137,9 @@ class FileListModel(QAbstractTableModel):
 
             if self._total_rows == 0:
                 # Debug: Check if table has any data at all
-                count_result = evidence_conn.execute(
-                    "SELECT COUNT(*) FROM file_list WHERE evidence_id = ?",
-                    [self.evidence_id]
-                ).fetchone()
                 logger.warning(
                     f"Total rows in file_list table for evidence_id={self.evidence_id}: "
-                    f"{count_result[0] if count_result else 0}"
+                    f"{self.data_access.count_file_list(self.evidence_id)}"
                 )
 
         except Exception as e:
@@ -307,14 +160,9 @@ class FileListModel(QAbstractTableModel):
         """
         if file_id not in self._matches_cache:
             try:
-                evidence_conn = self.db_manager.get_evidence_conn(
-                    self.evidence_id, label=self._get_evidence_label()
+                self._matches_cache[file_id] = self.data_access.get_file_list_matches_str(
+                    self.evidence_id, file_id
                 )
-                result = evidence_conn.execute(
-                    "SELECT GROUP_CONCAT(reference_list_name) FROM file_list_matches WHERE file_list_id = ?",
-                    (file_id,)
-                ).fetchone()
-                self._matches_cache[file_id] = result[0] if result and result[0] else ""
             except Exception as e:
                 logger.error(f"Failed to load matches for file {file_id}: {e}")
                 self._matches_cache[file_id] = ""
@@ -333,48 +181,45 @@ class FileListModel(QAbstractTableModel):
         """
         if file_id not in self._tags_cache:
             try:
-                evidence_conn = self.db_manager.get_evidence_conn(
-                    self.evidence_id, label=self._get_evidence_label()
+                # Same definition as the Tags filters (issue #73)
+                self._tags_cache[file_id] = self.data_access.get_artifact_tags_str(
+                    self.evidence_id, "file_list", file_id
                 )
-                result = evidence_conn.execute(
-                    """
-                    SELECT GROUP_CONCAT(t.name, ', ')
-                    FROM tag_associations ta
-                    JOIN tags t ON ta.tag_id = t.id
-                    WHERE ta.artifact_type = 'file_list' AND ta.artifact_id = ?
-                    """,
-                    (file_id,)
-                ).fetchone()
-                self._tags_cache[file_id] = result[0] if result and result[0] else ""
             except Exception as e:
                 logger.error(f"Failed to load tags for file {file_id}: {e}")
                 self._tags_cache[file_id] = ""
 
         return self._tags_cache[file_id]
 
-    def apply_filters(self, filters: Dict[str, Any]) -> None:
+    @property
+    def filters(self) -> FileListFilterSpec:
+        """The applied filters."""
+        return self._filters
+
+    def apply_filters(self, filters: Optional[FileListFilterSpec] = None) -> None:
         """
         Apply filters and reload data.
 
         Args:
-            filters: Dictionary of filter values
+            filters: New filters (``None`` keeps the applied ones)
         """
         self.beginResetModel()
-        self._filters.update(filters)
+        if filters is not None:
+            self._filters = filters
         self.selected_rows.clear()  # Clear selection when filtering
         self._load_data()
         self.endResetModel()
 
-    def apply_filters_async(self, filters: Dict[str, Any]) -> None:
+    def apply_filters_async(self, filters: FileListFilterSpec) -> None:
         """
         Apply filters without loading data (for async refresh).
 
         Call set_data() afterwards when data is available from background worker.
 
         Args:
-            filters: Dictionary of filter values
+            filters: New filters
         """
-        self._filters.update(filters)
+        self._filters = filters
         self.selected_rows.clear()
 
     def set_data(self, rows: List[Dict[str, Any]], total_rows: int) -> None:
@@ -632,134 +477,13 @@ class FileListModel(QAbstractTableModel):
 
     def get_filter_values(self) -> Dict[str, List[str]]:
         """
-        Get available values for filter dropdowns (Phase 2: uses cache for 100x speedup).
+        Get available values for filter dropdowns (uses the filter cache if present).
 
         Returns:
             Dictionary with lists of available extensions, matches, tags
         """
         try:
-            evidence_conn = self.db_manager.get_evidence_conn(
-                self.evidence_id, label=self._get_evidence_label()
-            )
-
-            # Phase 2: Check if filter cache exists (from migration 0004)
-            cache_exists = evidence_conn.execute(
-                "SELECT name FROM sqlite_master WHERE type='table' AND name='file_list_filter_cache'"
-            ).fetchone()
-
-            if cache_exists:
-                # Fast path: Use pre-computed cache (100x faster)
-                # But fall back to DISTINCT queries if cache is empty for a specific type
-                cursor = evidence_conn.execute(
-                    """
-                    SELECT filter_value
-                    FROM file_list_filter_cache
-                    WHERE evidence_id = ? AND filter_type = 'extension'
-                    ORDER BY filter_value
-                    """,
-                    (self.evidence_id,),
-                )
-                extensions = [row[0] for row in cursor.fetchall()]
-
-                # If cache is empty for extensions, use fallback query
-                if not extensions:
-                    logger.debug("Extension cache empty, using DISTINCT query")
-                    cursor = evidence_conn.execute(
-                        """
-                        SELECT DISTINCT extension
-                        FROM file_list
-                        WHERE evidence_id = ? AND extension IS NOT NULL AND extension != ''
-                        ORDER BY extension
-                        """,
-                        (self.evidence_id,),
-                    )
-                    extensions = [row[0] for row in cursor.fetchall()]
-
-                cursor = evidence_conn.execute(
-                    """
-                    SELECT filter_value
-                    FROM file_list_filter_cache
-                    WHERE evidence_id = ? AND filter_type = 'match'
-                    ORDER BY filter_value
-                    """,
-                    (self.evidence_id,),
-                )
-                matches = [row[0] for row in cursor.fetchall()]
-
-                cursor = evidence_conn.execute(
-                    """
-                    SELECT filter_value
-                    FROM file_list_filter_cache
-                    WHERE evidence_id = ? AND filter_type = 'tag'
-                    ORDER BY filter_value
-                    """,
-                    (self.evidence_id,),
-                )
-                tags = [row[0] for row in cursor.fetchall()]
-
-                # Debug: If tags cache is empty, use fallback
-                if not tags:
-                    logger.debug("Tag cache empty, using DISTINCT query for tags")
-                    cursor = evidence_conn.execute(
-                        """
-                        SELECT DISTINCT t.name
-                        FROM tags t
-                        JOIN tag_associations ta ON t.id = ta.tag_id
-                        WHERE ta.evidence_id = ? AND ta.artifact_type = 'file_list'
-                        ORDER BY t.name
-                        """,
-                        (self.evidence_id,),
-                    )
-                    tags = [row[0] for row in cursor.fetchall()]
-                    logger.debug(f"Found {len(tags)} tags via DISTINCT query: {tags}")
-
-            else:
-                # Fallback: Use original DISTINCT queries (slower)
-                logger.debug("Filter cache not available, using DISTINCT queries")
-
-                cursor = evidence_conn.execute(
-                    """
-                    SELECT DISTINCT extension
-                    FROM file_list
-                    WHERE evidence_id = ? AND extension IS NOT NULL AND extension != ''
-                    ORDER BY extension
-                """,
-                    (self.evidence_id,),
-                )
-                extensions = [row[0] for row in cursor.fetchall()]
-
-                cursor = evidence_conn.execute(
-                    """
-                    SELECT DISTINCT reference_list_name
-                    FROM file_list_matches flm
-                    JOIN file_list fl ON flm.file_list_id = fl.id
-                    WHERE fl.evidence_id = ?
-                    ORDER BY reference_list_name
-                """,
-                    (self.evidence_id,),
-                )
-                matches = [row[0] for row in cursor.fetchall()]
-
-                # Query tags directly from tags table
-                cursor = evidence_conn.execute(
-                    """
-                    SELECT DISTINCT t.name
-                    FROM tags t
-                    JOIN tag_associations ta ON t.id = ta.tag_id
-                    WHERE ta.evidence_id = ? AND ta.artifact_type = 'file_list'
-                    ORDER BY t.name
-                """,
-                    (self.evidence_id,),
-                )
-                tags = [row[0] for row in cursor.fetchall()]
-                logger.debug(f"Loaded filter values via DISTINCT: {len(extensions)} extensions, {len(matches)} matches, {len(tags)} tags")
-
-            return {
-                "extensions": extensions,
-                "matches": matches,
-                "tags": tags,
-            }
-
+            return self.data_access.list_file_list_filter_values(self.evidence_id)
         except Exception as e:
             logger.error(f"Failed to get filter values: {e}")
             return {"extensions": [], "matches": [], "tags": []}

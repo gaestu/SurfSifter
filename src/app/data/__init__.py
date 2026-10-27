@@ -8,6 +8,7 @@ This package contains:
 - _evidence.py: EvidenceMetadataMixin for evidence metadata operations
 - _images.py: ImageQueryMixin for image query operations
 - _urls.py: UrlQueryMixin for URL query operations
+- _file_list.py: FileListQueryMixin for File List query operations
 - _downloads.py: DownloadQueryMixin for download query operations
 - case_data.py: CaseDataAccess class for domain-specific database queries
 
@@ -42,6 +43,11 @@ from ._stats_cache import (
     StatsWriteScope,
     case_stats_cache,
     discard_case_stats_cache,
+)
+from ._file_list import (
+    FILE_LIST_ANY_MATCH,
+    FileListFilterSpec,
+    FileListQueryMixin,
 )
 from ._images import ImageQueryMixin
 from ._urls import (
@@ -82,6 +88,9 @@ __all__ = [
     "DownloadQueryMixin",
     "EvidenceMetadataMixin",
     "EvidenceCounts",
+    "FILE_LIST_ANY_MATCH",
+    "FileListFilterSpec",
+    "FileListQueryMixin",
     "ImageQueryMixin",
     "QueryCancelledError",
     "UrlCursor",
