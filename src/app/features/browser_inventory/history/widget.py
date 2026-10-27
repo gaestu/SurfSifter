@@ -73,11 +73,21 @@ class HistorySubtab(BaseArtifactSubtab):
         t.setColumnWidth(7, 80)   # Type
         t.setColumnWidth(8, 140)  # Tags
 
+    def _reload_rows(self, first_load):
+        # Every (re)load rebuilds the options from the evidence data and
+        # queries what the filter controls show (issue #69)
+        self._populate_filter_options()
+        self._apply_filters()
+
     def _populate_filter_options(self):
-        for b in self._model.get_browsers():
-            self.browser_filter.addItem(b.capitalize(), b)
-        for profile in self._model.get_profiles():
-            self.profile_filter.addItem(profile, profile)
+        self._set_combo_options(
+            self.browser_filter,
+            [(b.capitalize(), b) for b in self._model.get_browsers()],
+        )
+        self._set_combo_options(
+            self.profile_filter,
+            [(p, p) for p in self._model.get_profiles()],
+        )
 
     def _apply_filters(self):
         if self._model is None:
