@@ -48,11 +48,9 @@ class ScalpelExtractor(BaseExtractor):
 
     @property
     def metadata(self) -> ExtractorMetadata:
-        tools = discover_tools()
-        scalpel = tools.get("scalpel")
+        # Static: no tool discovery here, metadata is read per card and
+        # evidence tab (issue #70). Availability is checked in can_run_extraction.
         requires_tools = ["scalpel"]
-        if scalpel and scalpel.available:
-            requires_tools = ["scalpel"]
 
         return ExtractorMetadata(
             name="scalpel",
@@ -159,7 +157,8 @@ class ScalpelExtractor(BaseExtractor):
                 stats.finish_run(evidence_id, self.metadata.name, "failed")
             return False
 
-        tools = discover_tools()
+        # Fresh probe: the version recorded in the manifest is the one run.
+        tools = discover_tools(refresh=True)
         scalpel = tools.get("scalpel")
         if not scalpel or not scalpel.available or not scalpel.path:
             callbacks.on_error("Scalpel not available")

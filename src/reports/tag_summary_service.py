@@ -13,12 +13,14 @@ so it can be exercised from tests and the architecture boundary
 from __future__ import annotations
 
 import logging
+import json
 import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
 from core.database.helpers.process_log import insert_process_log
+from core.safe_io import ensure_dir_no_follow, unlink_no_follow
 
 from reports.tag_summary_export import write_tag_summary_xlsx
 from reports.tag_summary_presentation import compose_tag_summary
@@ -31,6 +33,21 @@ __all__ = [
 
 
 logger = logging.getLogger(__name__)
+
+
+def _renderer_metadata() -> str:
+    try:
+        from PIL import __version__ as pillow_version
+    except ImportError:
+        pillow_version = None
+    return json.dumps(
+        {
+            "workbook_writer": "reports.tag_summary_export",
+            "thumbnail_renderer": "Pillow" if pillow_version else None,
+            "pillow_version": pillow_version,
+        },
+        sort_keys=True,
+    )
 
 
 class TagSummaryExportError(Exception):
@@ -72,6 +89,7 @@ def export_tag_summary(
     case_folder: Path,
     output_path: Path,
     exported_at_iso: str,
+    finished_at_iso: Optional[str] = None,
     top_n: int = 10,
 ) -> TagSummaryExportResult:
     """
@@ -101,8 +119,19 @@ def export_tag_summary(
             "Refusing to write tag-summary export outside the case workspace.",
             stage="path",
         )
+    if safe_path.exists():
+        raise TagSummaryExportError(
+            "Refusing to overwrite an existing tag-summary export.",
+            stage="path",
+        )
 
-    safe_path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        ensure_dir_no_follow(safe_path.parent, containment_root=case_root)
+    except Exception as exc:
+        raise TagSummaryExportError(
+            "Failed to create the case-workspace export directory.",
+            stage="path",
+        ) from exc
 
     try:
         data = compose_tag_summary(
@@ -111,6 +140,7 @@ def export_tag_summary(
             evidence_label=evidence_label,
             exported_at_iso=exported_at_iso,
             top_n=top_n,
+            case_folder=case_root,
         )
     except Exception as exc:
         logger.exception("Failed to gather tag-summary export data")
@@ -125,7 +155,7 @@ def export_tag_summary(
     )
 
     try:
-        written = write_tag_summary_xlsx(data, safe_path)
+        written = write_tag_summary_xlsx(data, safe_path, containment_root=case_root)
     except Exception as exc:
         logger.exception("Failed to write tag-summary XLSX")
         raise TagSummaryExportError(
@@ -139,11 +169,12 @@ def export_tag_summary(
             evidence_id,
             tool_name="reports.tag_summary_export",
             command_line="export_tag_summary",
-            finished_at=exported_at_iso,
+            finished_at=finished_at_iso or exported_at_iso,
             exit_code=0,
             output_path=str(written),
             extractor_name="reports.tag_summary_export",
             record_count=record_count,
+            metadata=_renderer_metadata(),
         )
     except Exception as exc:
         logger.exception(
@@ -151,7 +182,7 @@ def export_tag_summary(
             "rolling back workbook to preserve provenance integrity"
         )
         try:
-            written.unlink(missing_ok=True)
+            unlink_no_follow(written, containment_root=case_root, missing_ok=True)
         except OSError:
             logger.exception("Failed to remove un-audited workbook %s", written)
         raise TagSummaryExportError(

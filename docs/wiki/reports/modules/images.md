@@ -26,5 +26,7 @@ Displays extracted images with hashes, timestamps, and optional file paths.
 - Optional URL and cache key annotations per image.
 
 ## Notes
-- Thumbnails require Pillow; if not installed, images may show without previews.
+- Thumbnails require Pillow; optional `pillow-heif` support is used when installed.
+- Source files must resolve under the selected evidence workspace. Missing files, files outside that workspace, unreadable files, and images over the thumbnail pixel safety cap are shown without previews.
+- Thumbnail bytes are embedded inline in report output; evidence-derived text fields are HTML-escaped during rendering.
 - Match list options appear only when hash matches are present.

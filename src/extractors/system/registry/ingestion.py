@@ -160,6 +160,16 @@ def run_registry_ingestion(
                 try:
                     findings = process_hive_file(hive_full_path, target)
                     if findings:
+                        source_hive_path = (
+                            hive_info.get("original_path")
+                            or hive_info.get("source_path")
+                            or str(hive_full_path)
+                        )
+                        for finding in findings:
+                            # The parser must open the exported case-workspace
+                            # copy, but persisted provenance must identify the
+                            # hive path inside the source evidence.
+                            finding.hive = source_hive_path
                         all_findings.extend(findings)
                         summary["rules_matched"] += 1
                         hive_summary["matched_rules"].append(target.get("name"))

@@ -3,6 +3,7 @@
 import pytest
 import tempfile
 import sqlite3
+import json
 from pathlib import Path
 from unittest.mock import Mock, patch, MagicMock
 import subprocess
@@ -208,6 +209,7 @@ class TestBulkExtractorExtraction:
                 )
 
                 assert success is True
+                assert config["run_id"]
                 callbacks.on_error.assert_not_called()
         finally:
             evidence_path.unlink()
@@ -378,7 +380,7 @@ class TestBulkExtractorIngestion:
             callbacks.on_progress = Mock()
             callbacks.is_cancelled = Mock(return_value=False)
 
-            config = {"artifact_types": ["url"]}
+            config = {"artifact_types": ["url"], "run_id": "bulk-ingest-run-001"}
 
             results = extractor.run_ingestion(
                 output_dir=output_dir,
@@ -399,7 +401,7 @@ class TestBulkExtractorIngestion:
 
             # Verify URL details
             cursor = conn.execute(
-                "SELECT url, domain, scheme, discovered_by, source_path FROM urls WHERE evidence_id = 1 ORDER BY id"
+                "SELECT url, domain, scheme, discovered_by, source_path, run_id FROM urls WHERE evidence_id = 1 ORDER BY id"
             )
             rows = cursor.fetchall()
 
@@ -408,13 +410,16 @@ class TestBulkExtractorIngestion:
             assert rows[0][2] == "http"
             assert rows[0][3] == "bulk_extractor:url"
             assert "url.txt:17940236" in rows[0][4]
+            assert rows[0][5] == "bulk-ingest-run-001"
 
             assert rows[1][0] == "http://test.com/page2"
             assert rows[1][1] == "test.com"
+            assert rows[1][5] == "bulk-ingest-run-001"
 
             assert rows[2][0] == "https://secure.com/login"
             assert rows[2][1] == "secure.com"
             assert rows[2][2] == "https"
+            assert rows[2][5] == "bulk-ingest-run-001"
 
             conn.close()
 
@@ -585,6 +590,12 @@ class TestBulkExtractorIngestion:
             # Should return count of imported URLs
             assert "url" in results
             assert results["url"] == 2  # 2 URLs imported
+
+            assert config["run_id"]
+            cursor = conn.execute(
+                "SELECT DISTINCT run_id FROM urls WHERE evidence_id = 1"
+            )
+            assert cursor.fetchall() == [(config["run_id"],)]
 
             conn.close()
 
@@ -867,7 +878,7 @@ class TestBulkExtractorUnifiedImageIngestion:
             callbacks.on_progress = Mock()
             callbacks.is_cancelled = Mock(return_value=False)
 
-            config = {"artifact_types": ["url"], "carve_images": True}
+            config = {"artifact_types": ["url"], "carve_images": True, "run_id": "bulk-image-run-001"}
 
             extractor.run_ingestion(
                 output_dir=output_dir,
@@ -876,6 +887,11 @@ class TestBulkExtractorUnifiedImageIngestion:
                 config=config,
                 callbacks=callbacks
             )
+
+            manifest = json.loads(
+                (output_dir / "bulk_extractor_images_manifest.json").read_text(encoding="utf-8")
+            )
+            assert manifest["run_id"] == "bulk-image-run-001"
 
             # Check phase numbering in step calls
             assert any("Phase 1/3" in s for s in step_calls), f"Phase 1/3 not found in {step_calls}"

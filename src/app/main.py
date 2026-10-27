@@ -5,6 +5,7 @@ import html
 import sqlite3
 import sys
 import time
+import weakref
 from pathlib import Path
 from urllib.parse import urlparse
 from typing import Any, Dict, List, Optional, Tuple
@@ -42,8 +43,11 @@ from core.database import DatabaseManager, find_case_database, slugify_label
 from core.evidence_fs import MountedFS, PyEwfTskFS, find_ewf_segments, list_ewf_partitions
 from core.logging import configure_logging, get_logger
 
+from .data import STATS_PROCESS_LOG, OverviewStats, discard_case_stats_cache
 from .data.case_data import CaseDataAccess, EvidenceCounts
 from .features.urls import UrlsTab
+from .services.overview_stats import OverviewStatsLoader
+from .services.url_search_index_worker import wait_for_url_search_index_builds
 from .features.images import ImagesTab
 from .features.os_artifacts import OSArtifactsTab
 from .features.timeline import TimelineTab
@@ -86,6 +90,9 @@ class MainWindow(QMainWindow):
         self.conn: Optional[sqlite3.Connection] = None
         self.case_data: Optional[CaseDataAccess] = None
         self._current_counts: Optional[EvidenceCounts] = None
+        # Loads the evidence Overview statistics off the GUI thread; one per
+        # open case (issue #63).
+        self._overview_loader: Optional[OverviewStatsLoader] = None
 
         self.setWindowTitle("SurfSifter")
         icon_path = base_dir / "config" / "branding" / "surfsifter.png"
@@ -163,17 +170,10 @@ class MainWindow(QMainWindow):
 
         # Shutdown all tab workers in evidence tabs
         if hasattr(self, 'main_tabs'):
-            for i in range(self.main_tabs.count()):
-                evidence_tab_widget = self.main_tabs.widget(i)
-                if evidence_tab_widget and hasattr(evidence_tab_widget, 'count'):
-                    # Iterate subtabs within evidence tab
-                    for j in range(evidence_tab_widget.count()):
-                        tab = evidence_tab_widget.widget(j)
-                        if hasattr(tab, 'shutdown'):
-                            try:
-                                tab.shutdown()
-                            except Exception as e:
-                                LOGGER.warning("Error during tab shutdown: %s", e)
+            self._shutdown_all_evidence_tabs()
+        self._shutdown_overview_loader()
+        if self.case_data is not None:
+            discard_case_stats_cache(self.case_data.db_path)
 
         # Wait for thread pool to finish (with timeout)
         LOGGER.info("Waiting for background tasks to complete...")
@@ -459,7 +459,11 @@ class MainWindow(QMainWindow):
             self.tool_registry,  # Pass tool registry for tool availability checking
         )
         extraction_tab.extraction_started.connect(self._on_extraction_started)
-        extraction_tab.extraction_finished.connect(self._on_extraction_finished)
+        extraction_tab.extraction_finished.connect(
+            lambda name, success, message, tabs=evidence_tabs: self._on_extraction_finished(
+                tabs, name, success, message
+            )
+        )
         extraction_tab.log_message.connect(self._on_extraction_log_message)  # (evidence_id, message)
         extraction_tab.data_changed.connect(lambda: self._on_data_changed(evidence_tabs))
         evidence_tabs.addTab(extraction_tab, "Extractors")
@@ -491,6 +495,8 @@ class MainWindow(QMainWindow):
         # 5. URLs - supports lazy loading
         from app.features.urls import UrlsTab
         urls_tab = UrlsTab()
+        urls_tab.set_page_size(self.settings.general.url_page_size)
+        urls_tab.page_size_changed.connect(self._on_url_page_size_changed)
         # downloadRequested signal removed - downloads now handled in Download tab
         if self.case_data:
             urls_tab.set_case_data(self.case_data, defer_load=defer_load)
@@ -501,7 +507,9 @@ class MainWindow(QMainWindow):
         from app.features.images import ImagesTab
         images_tab = ImagesTab()
         images_tab.set_thumbnail_size(self.settings.general.thumbnail_size)
-        images_tab.hashLookupFinished.connect(self._refresh_counts)
+        images_tab.hashLookupFinished.connect(
+            lambda tabs=evidence_tabs: self._on_hash_lookup_finished(tabs)
+        )
         if self.case_data:
             images_tab.set_case_data(self.case_data, case_folder=self.case_path, defer_load=defer_load)
         images_tab.set_evidence(evidence_id, defer_load=defer_load)
@@ -602,14 +610,13 @@ class MainWindow(QMainWindow):
         evidence_tabs.setProperty("statistics_tab", audit_tab.statistics_tab)
         evidence_tabs.setProperty("overview_widget", overview_widget)
 
-        # Deferred overview refresh after tabs are fully built
-        QTimer.singleShot(100, lambda tabs=evidence_tabs: self._refresh_overview_for_evidence(tabs))
-
-        # Phase 3: Connect tab change for lazy loading trigger
-        if defer_load:
-            evidence_tabs.currentChanged.connect(
-                lambda idx, tabs=evidence_tabs: self._on_evidence_subtab_changed(tabs, idx)
-            )
+        # The Overview statistics load only while this evidence's Overview is
+        # shown (issue #63): on main tab / sub-tab changes and after data
+        # changes, never for hidden evidences. Sub-tab changes also trigger
+        # deferred loads (Phase 3); harmless for tabs loaded immediately.
+        evidence_tabs.currentChanged.connect(
+            lambda idx, tabs=evidence_tabs: self._on_evidence_subtab_changed(tabs, idx)
+        )
 
         return evidence_tabs
 
@@ -1000,9 +1007,22 @@ class MainWindow(QMainWindow):
         # Get case ID from metadata
         self.case_db_id = result.case_metadata.get("id")
 
+        # The previous case's overview loader and cached statistics are
+        # discarded; its evidence tabs are shut down when they are replaced.
+        self._shutdown_overview_loader()
+        if self.case_data is not None:
+            discard_case_stats_cache(self.case_data.db_path)
+
         # Create CaseDataAccess with the loaded manager
         self.case_data = CaseDataAccess(result.case_path, db_manager=result.db_manager)
         self._current_counts = None
+        # A reopened case never serves statistics cached before (issue #63).
+        discard_case_stats_cache(self.case_data.db_path)
+        self._overview_loader = OverviewStatsLoader(
+            result.case_path, self.case_data.db_path, self.case_data, parent=self
+        )
+        self._overview_loader.stats_ready.connect(self._on_overview_stats_ready)
+        self._overview_loader.stats_failed.connect(self._on_overview_stats_failed)
 
         # Load case metadata into Case Info tab
         self.case_info_tab.load_case_data(result.case_metadata)
@@ -1054,7 +1074,9 @@ class MainWindow(QMainWindow):
 
     def _load_existing_evidences(self) -> None:
         """Load evidences with immediate data loading (legacy behavior)."""
-        # Remove all evidence tabs (keep Case tab at index 0)
+        # Remove all evidence tabs (keep Case tab at index 0). Their sub-tabs
+        # may run background work on the previous case's databases.
+        self._shutdown_all_evidence_tabs()
         while self.main_tabs.count() > 1:
             self.main_tabs.removeTab(1)
         self._evidence_tabs.clear()
@@ -1102,6 +1124,9 @@ class MainWindow(QMainWindow):
         # Select first evidence tab if exists
         if self.main_tabs.count() > 1:
             self.main_tabs.setCurrentIndex(1)
+            # The index may not have changed (no currentChanged): load the
+            # shown Overview explicitly; duplicate requests are coalesced.
+            self._refresh_counts()
 
     def _load_existing_evidences_lazy(self, evidences: List[Dict[str, Any]]) -> None:
         """
@@ -1110,7 +1135,9 @@ class MainWindow(QMainWindow):
         Creates evidence tabs immediately but defers heavy data loading
         until each tab becomes visible.
         """
-        # Remove all evidence tabs (keep Case tab at index 0)
+        # Remove all evidence tabs (keep Case tab at index 0). Their sub-tabs
+        # may run background work on the previous case's databases.
+        self._shutdown_all_evidence_tabs()
         while self.main_tabs.count() > 1:
             self.main_tabs.removeTab(1)
         self._evidence_tabs.clear()
@@ -1151,6 +1178,9 @@ class MainWindow(QMainWindow):
         # Select first evidence tab if exists
         if self.main_tabs.count() > 1:
             self.main_tabs.setCurrentIndex(1)
+            # The index may not have changed (no currentChanged): load the
+            # shown Overview explicitly; duplicate requests are coalesced.
+            self._refresh_counts()
 
     def _record_evidence(self, source_path: Path, partition_index: Optional[int] = None,
                         partition_info: Optional[str] = None) -> int:
@@ -1638,6 +1668,8 @@ class MainWindow(QMainWindow):
         # Switch to the newly added evidence tab if one was added
         if len(files) > 0 and self.main_tabs.count() > 1:
             self.main_tabs.setCurrentIndex(self.main_tabs.count() - 1)
+            # Load its Overview even if the index did not change (issue #63).
+            self._refresh_counts()
 
     def _remove_evidence_dialog(self) -> None:
         """
@@ -1739,6 +1771,11 @@ class MainWindow(QMainWindow):
 
         # 1. Cancel any running tasks and close the evidence tab
         self._close_evidence_tab_by_id(evidence_id)
+        # Forget its cached statistics and drop a pending Overview load (#63)
+        if self._overview_loader is not None and self._overview_loader.pending_evidence_id == int(evidence_id):
+            self._overview_loader.cancel()
+        if self.case_data is not None:
+            self.case_data.drop_evidence_stats(int(evidence_id))
 
         # 2. Close any cached database connections for this evidence
         if self.db_manager:
@@ -1811,20 +1848,7 @@ class MainWindow(QMainWindow):
         evidence_tab_widget = self.main_tabs.widget(tab_index)
 
         # Shutdown workers in the closing evidence tab
-        if evidence_tab_widget and hasattr(evidence_tab_widget, 'count'):
-            for j in range(evidence_tab_widget.count()):
-                tab = evidence_tab_widget.widget(j)
-                if hasattr(tab, 'shutdown'):
-                    try:
-                        tab.shutdown()
-                    except Exception as e:
-                        self.logger.warning("Error during tab shutdown on evidence removal: %s", e)
-                # Also try to cancel any active tasks
-                if hasattr(tab, 'cancel_tasks'):
-                    try:
-                        tab.cancel_tasks()
-                    except Exception as e:
-                        self.logger.warning("Error cancelling tasks on evidence removal: %s", e)
+        self._shutdown_evidence_tab(evidence_tab_widget)
 
         # Remove from mapping first
         del self._evidence_tabs[evidence_id]
@@ -1848,9 +1872,24 @@ class MainWindow(QMainWindow):
         if isinstance(evidence_tab_widget, QTabWidget):
             self._refresh_overview_for_evidence(evidence_tab_widget)
 
+    _OVERVIEW_STAT_LABELS = (
+        "urls_count_label",
+        "images_count_label",
+        "indicators_count_label",
+        "last_run_label",
+        "tags_count_label",
+        "tagged_artifacts_label",
+    )
+
     def _refresh_overview_for_evidence(self, evidence_tabs: QTabWidget) -> None:
-        """Refresh the Overview tab's summary labels for the given evidence tabs."""
-        if not self.case_data:
+        """Load the Overview summary labels of an evidence, if they are shown.
+
+        Only the current evidence's Overview sub-tab is loaded (issue #63);
+        hidden evidences are loaded when they are shown. Cached statistics
+        are applied immediately; otherwise they load in the background and
+        the labels show "Loading…" meanwhile.
+        """
+        if not self.case_data or self._overview_loader is None:
             return
         evidence_id = evidence_tabs.property("evidence_id")
         if evidence_id is None:
@@ -1860,28 +1899,126 @@ class MainWindow(QMainWindow):
         if overview_widget is None:
             return
 
-        counts = self.case_data.get_evidence_counts(int(evidence_id))
+        if self.main_tabs.currentWidget() is not evidence_tabs or evidence_tabs.currentIndex() != 0:
+            return
 
-        urls_label = overview_widget.property("urls_count_label")
-        if urls_label:
-            urls_label.setText(f"{counts.urls:,}")
-        images_label = overview_widget.property("images_count_label")
-        if images_label:
-            images_label.setText(f"{counts.images:,}")
-        indicators_label = overview_widget.property("indicators_count_label")
-        if indicators_label:
-            indicators_label.setText(f"{counts.indicators:,}")
-        last_run_label = overview_widget.property("last_run_label")
-        if last_run_label:
-            last_run_label.setText(counts.last_run_utc or "No extraction yet")
+        stats = self._overview_loader.request(int(evidence_id))
+        if stats is not None:
+            self._apply_overview_stats(overview_widget, stats)
+        else:
+            self._set_overview_labels(overview_widget, "Loading…")
 
-        tag_stats = self.case_data.get_tag_statistics(int(evidence_id))
-        tags_label = overview_widget.property("tags_count_label")
-        if tags_label:
-            tags_label.setText(f"{tag_stats['tag_count']:,}")
-        tagged_label = overview_widget.property("tagged_artifacts_label")
-        if tagged_label:
-            tagged_label.setText(f"{tag_stats['tagged_artifact_count']:,}")
+    def _set_overview_labels(self, overview_widget: QWidget, text: str) -> None:
+        """Set every statistics label of an Overview to the same text."""
+        for name in self._OVERVIEW_STAT_LABELS:
+            label = overview_widget.property(name)
+            if label:
+                label.setText(text)
+
+    @staticmethod
+    def _apply_overview_stats(overview_widget: QWidget, stats: OverviewStats) -> None:
+        """Show loaded statistics on an Overview."""
+        counts = stats.counts
+        texts = {
+            "urls_count_label": f"{counts.urls:,}",
+            "images_count_label": f"{counts.images:,}",
+            "indicators_count_label": f"{counts.indicators:,}",
+            "last_run_label": counts.last_run_utc or "No extraction yet",
+            "tags_count_label": f"{stats.tag_count:,}",
+            "tagged_artifacts_label": f"{stats.tagged_artifact_count:,}",
+        }
+        for name, text in texts.items():
+            label = overview_widget.property(name)
+            if label:
+                label.setText(text)
+
+    def _evidence_tab_for(self, evidence_id: int) -> Optional[QTabWidget]:
+        """The open evidence tab of ``evidence_id``, or None."""
+        for index in range(1, self.main_tabs.count()):
+            widget = self.main_tabs.widget(index)
+            if isinstance(widget, QTabWidget) and widget.property("evidence_id") == evidence_id:
+                return widget
+        return None
+
+    def _on_overview_stats_ready(self, evidence_id: int, stats: object) -> None:
+        """Background Overview statistics arrived (issue #63)."""
+        evidence_tabs = self._evidence_tab_for(int(evidence_id))
+        if evidence_tabs is None:
+            return
+        overview_widget = evidence_tabs.property("overview_widget")
+        if overview_widget is not None and isinstance(stats, OverviewStats):
+            self._apply_overview_stats(overview_widget, stats)
+
+    def _on_overview_stats_failed(self, evidence_id: int, message: str) -> None:
+        """Loading the Overview statistics failed: show "—" (issue #63)."""
+        self.logger.warning("Failed to load overview statistics for evidence %s: %s", evidence_id, message)
+        evidence_tabs = self._evidence_tab_for(int(evidence_id))
+        if evidence_tabs is None:
+            return
+        overview_widget = evidence_tabs.property("overview_widget")
+        if overview_widget is not None:
+            self._set_overview_labels(overview_widget, "—")
+
+    def _shutdown_overview_loader(self) -> None:
+        """Stop the Overview statistics loader of the open case."""
+        loader, self._overview_loader = self._overview_loader, None
+        if loader is None:
+            return
+        try:
+            loader.stats_ready.disconnect(self._on_overview_stats_ready)
+            loader.stats_failed.disconnect(self._on_overview_stats_failed)
+        except (RuntimeError, TypeError):
+            pass
+        try:
+            loader.shutdown()
+        except Exception as e:
+            self.logger.warning("Error during overview loader shutdown: %s", e)
+        # The loader is parented to the window: delete it, or one would pile
+        # up per case open. Safe even if its thread is still stopping: the
+        # CancellableQueryWorker is parentless (not a Qt child of the loader)
+        # and wait_or_retire() keeps a running thread referenced until it
+        # finishes, so deleting the loader never destroys a running QThread.
+        loader.deleteLater()
+
+    def _invalidate_evidence_stats(self, evidence_tabs: QWidget, categories: Optional[Any] = None) -> None:
+        """Mark cached statistics of an evidence tab's evidence stale (issue #63)."""
+        if self.case_data is None:
+            return
+        evidence_id = evidence_tabs.property("evidence_id") if evidence_tabs is not None else None
+        if evidence_id is None:
+            return
+        self.case_data.invalidate_stats(int(evidence_id), categories)
+
+    def _refresh_evidence_subtabs(self, evidence_tabs: QTabWidget) -> None:
+        """After a data change of an evidence: refresh what is shown, mark the rest stale.
+
+        Only the visible sub-tab of the current evidence is refreshed now;
+        every other sub-tab (all of them for a hidden evidence) is marked
+        stale and refreshes when shown. Prevents multi-second UI freezes
+        from refreshing every tab synchronously.
+        """
+        is_current_evidence = self.main_tabs.currentWidget() is evidence_tabs
+        current_index = evidence_tabs.currentIndex()
+
+        for tab_index in range(evidence_tabs.count()):
+            tab_widget = evidence_tabs.widget(tab_index)
+            tab_name = evidence_tabs.tabText(tab_index)
+
+            # Only tabs with a mark_stale() method take part
+            if not hasattr(tab_widget, 'mark_stale'):
+                continue
+            if is_current_evidence and tab_index == current_index:
+                # Visible tab: refresh immediately
+                if hasattr(tab_widget, 'refresh'):
+                    tab_widget.refresh()
+                    self.logger.info(f"Refreshed {tab_name} tab (visible)")
+                elif hasattr(tab_widget, 'load_inventory'):
+                    tab_widget.load_inventory()
+                    self.logger.info(f"Refreshed {tab_name} tab (visible)")
+            else:
+                # Other tabs: mark as stale for lazy refresh
+                tab_widget.mark_stale()
+                self.logger.debug(f"Marked {tab_name} tab as stale")
 
     def _clear_counts(self) -> None:
         # Counts are now per-evidence tab
@@ -1984,10 +2121,34 @@ class MainWindow(QMainWindow):
 
         config = ExecutorTaskConfig(**config_kwargs)
         task = ExecutorTask(config)
+        # The run writes to the evidence DB: no statistics are cached until
+        # it ends, in any outcome (issue #63).
+        stats_scope = self.case_data.stats_write_scope(int(evidence_id))
+
+        def on_result(summary: object, tabs: QWidget = evidence_tab_widget) -> None:
+            stats_scope.close()
+            self._on_executor_result(summary, tabs)
+
+        # Weak: the connected closure is kept alive by PySide, so a strong
+        # reference to the task would make an uncollectable cycle.
+        task_ref = weakref.ref(task)
+
+        def on_finished() -> None:
+            stats_scope.close()
+            finished_task = task_ref()
+            if finished_task is not None and finished_task in self._active_tasks:
+                self._active_tasks.remove(finished_task)
+
         task.signals.progress.connect(self._on_task_progress)
-        task.signals.result.connect(self._on_executor_result)
+        task.signals.result.connect(on_result)
         task.signals.error.connect(self._on_task_error)
+        # A closure, not a bound method: PySide does not keep the instance of
+        # a connected bound method of a plain Python object alive.
+        task.signals.finished.connect(on_finished)
         task.signals.finished.connect(self._on_task_finished)
+        # Keep the task (and its signals) referenced until it finishes, or its
+        # result/finished handlers may never run and the scope stays open.
+        self._active_tasks.append(task)
 
         self.progress_dialog = QProgressDialog(
             "Running extractors…",
@@ -2007,19 +2168,31 @@ class MainWindow(QMainWindow):
         if self.progress_dialog:
             self.progress_dialog.setLabelText(message)
 
-    def _on_executor_result(self, summary: object) -> None:  # noqa: ARG002
+    def _on_url_page_size_changed(self, page_size: int) -> None:
+        """Persist the URLs tab rows-per-page choice (issue #61)."""
+        self.settings.general.url_page_size = int(page_size)
+        try:
+            self.settings.save(self.settings_file)
+        except OSError as exc:
+            self.logger.warning("Failed to save URL page size: %s", exc)
+
+    def _on_executor_result(self, summary: object, evidence_tabs: QWidget) -> None:  # noqa: ARG002
         self.logger.info("Extraction completed successfully")
 
-        # Refresh the current evidence tab's views
-        current_index = self.main_tabs.currentIndex()
-        if current_index > 0:  # Not Case tab
-            evidence_tab_widget = self.main_tabs.widget(current_index)
-            if evidence_tab_widget:
-                # Refresh each sub-tab
-                for tab_name in ('urls_tab', 'images_tab', 'os_tab', 'timeline_tab'):
-                    tab = evidence_tab_widget.property(tab_name)
-                    if tab and hasattr(tab, 'refresh'):
-                        tab.refresh()
+        # The evidence the run was started for
+        evidence_tab_widget = evidence_tabs
+        self._invalidate_evidence_stats(evidence_tab_widget)
+        if self.main_tabs.currentWidget() is evidence_tab_widget:
+            # Refresh each sub-tab
+            for tab_name in ('urls_tab', 'images_tab', 'os_tab', 'timeline_tab'):
+                tab = evidence_tab_widget.property(tab_name)
+                if tab and hasattr(tab, 'refresh'):
+                    tab.refresh()
+        elif isinstance(evidence_tab_widget, QTabWidget):
+            # Hidden evidence: refresh its sub-tabs when they are shown
+            self._refresh_evidence_subtabs(evidence_tab_widget)
+        if isinstance(evidence_tab_widget, QTabWidget):
+            self._refresh_overview_for_evidence(evidence_tab_widget)
 
     def _on_task_error(self, message: str, details: str) -> None:
         LOGGER.error("Worker error: %s", message)
@@ -2074,38 +2247,28 @@ class MainWindow(QMainWindow):
         """Handle extraction started signal from ExtractionTab."""
         self.log_widget.append("Extraction started...")
 
-    def _on_extraction_finished(self, summary: dict) -> None:
-        """Handle extraction finished signal from ExtractionTab.
+    def _on_extraction_finished(
+        self,
+        evidence_tabs: QTabWidget,
+        extractor_name: str = "",
+        success: bool = False,
+        message: str = "",
+    ) -> None:
+        """Handle extraction finished signal from an evidence's ExtractionTab.
 
         Changed to lazy refresh pattern - marks non-visible tabs as stale
-        instead of refreshing all tabs synchronously.
+        instead of refreshing all tabs synchronously. Only the sub-tab shown
+        for the current evidence is refreshed; a hidden evidence's sub-tabs
+        are all marked stale (issue #63).
         """
         self.log_widget.append(
-            f"Extraction finished: {summary}"
+            f"Extraction finished: {extractor_name}"
         )
 
-        # Refresh the currently visible evidence subtab and mark others as stale
-        current_index = self.main_tabs.currentIndex()
-        if current_index > 0:  # Not on Case tab
-            evidence_tabs = self.main_tabs.widget(current_index)
-            if isinstance(evidence_tabs, QTabWidget):
-                current_subtab_index = evidence_tabs.currentIndex()
-
-                for tab_index in range(evidence_tabs.count()):
-                    tab_widget = evidence_tabs.widget(tab_index)
-
-                    # Only process tabs with mark_stale method
-                    if hasattr(tab_widget, 'mark_stale'):
-                        if tab_index == current_subtab_index:
-                            # Current tab: refresh immediately
-                            if hasattr(tab_widget, 'refresh'):
-                                tab_widget.refresh()
-                                self.logger.info(f"Refreshed {tab_widget.__class__.__name__} after extraction")
-                        else:
-                            # Other tabs: mark as stale for lazy refresh
-                            tab_widget.mark_stale()
-
-        self._refresh_counts()
+        # The run may have written to this evidence's DB (e.g. process_log)
+        self._invalidate_evidence_stats(evidence_tabs)
+        self._refresh_evidence_subtabs(evidence_tabs)
+        self._refresh_overview_for_evidence(evidence_tabs)
 
     def _on_data_changed(self, evidence_tabs: QTabWidget) -> None:
         """
@@ -2114,37 +2277,26 @@ class MainWindow(QMainWindow):
         Changed to lazy refresh pattern - only refreshes the currently
         visible tab immediately, marks all other tabs as stale for refresh
         when they become visible. This prevents multi-second UI freezes after
-        ingestion when all tabs were being refreshed synchronously.
+        ingestion when all tabs were being refreshed synchronously. For an
+        evidence that is not the current main tab, every sub-tab is marked
+        stale (issue #63).
         """
         self.logger.info("Data changed - marking tabs stale, refreshing current")
 
-        # Get the currently visible tab index
-        current_index = evidence_tabs.currentIndex()
-
-        for tab_index in range(evidence_tabs.count()):
-            tab_widget = evidence_tabs.widget(tab_index)
-            tab_name = evidence_tabs.tabText(tab_index)
-
-            # Mark all tabs with mark_stale() method as stale
-            if hasattr(tab_widget, 'mark_stale'):
-                if tab_index == current_index:
-                    # Current tab: refresh immediately
-                    if hasattr(tab_widget, 'refresh'):
-                        tab_widget.refresh()
-                        self.logger.info(f"Refreshed {tab_name} tab (visible)")
-                    elif hasattr(tab_widget, 'load_inventory'):
-                        tab_widget.load_inventory()
-                        self.logger.info(f"Refreshed {tab_name} tab (visible)")
-                else:
-                    # Other tabs: mark as stale for lazy refresh
-                    tab_widget.mark_stale()
-                    self.logger.debug(f"Marked {tab_name} tab as stale")
-
-        # Refresh counts
-        self._refresh_counts()
+        # Every cached statistic of this evidence may be outdated (issue #63)
+        self._invalidate_evidence_stats(evidence_tabs)
+        self._refresh_evidence_subtabs(evidence_tabs)
         self._refresh_overview_for_evidence(evidence_tabs)
 
         self.log_widget.append("Data updated - current tab refreshed, others will refresh on view")
+
+    def _on_hash_lookup_finished(self, evidence_tabs: QTabWidget) -> None:
+        """Image hash lookup finished: show the Overview's reloaded statistics.
+
+        ``ImagesTab`` invalidates the statistics before it emits the signal
+        (issue #63).
+        """
+        self._refresh_overview_for_evidence(evidence_tabs)
 
     def _on_extraction_log_message(self, evidence_id: int, message: str) -> None:
         """
@@ -2434,6 +2586,10 @@ class MainWindow(QMainWindow):
             self._download_dialog.cancel_button.setText(self._download_dialog.tr("Close"))
         self._download_task = None
 
+        # The download run logged to process_log (Overview's last run; #63)
+        if self.case_data is not None and evidence_id:
+            self.case_data.invalidate_stats(int(evidence_id), STATS_PROCESS_LOG)
+
         # Refresh Download tab to show new downloads
         if isinstance(evidence_tabs, QTabWidget):
             download_tab = evidence_tabs.property("download_tab")
@@ -2519,7 +2675,7 @@ class MainWindow(QMainWindow):
             # Case tab selected
             return
 
-        # Evidence tab selected - refresh counts if needed
+        # Evidence tab selected - load its Overview if shown (cached: instant)
         self._refresh_counts()
 
     def _on_evidence_subtab_changed(self, evidence_tabs: QTabWidget, index: int) -> None:
@@ -2528,7 +2684,7 @@ class MainWindow(QMainWindow):
 
         Triggers deferred data loading when a lazy-loaded tab becomes visible.
         """
-        if index == 0:  # Overview tab
+        if index == 0:  # Overview tab (loads only for the current evidence)
             self._refresh_overview_for_evidence(evidence_tabs)
             return
 
@@ -2560,14 +2716,7 @@ class MainWindow(QMainWindow):
         evidence_tab_widget = self.main_tabs.widget(index)
 
         # Shutdown workers in the closing evidence tab
-        if evidence_tab_widget and hasattr(evidence_tab_widget, 'count'):
-            for j in range(evidence_tab_widget.count()):
-                tab = evidence_tab_widget.widget(j)
-                if hasattr(tab, 'shutdown'):
-                    try:
-                        tab.shutdown()
-                    except Exception as e:
-                        self.logger.warning("Error during tab shutdown on evidence close: %s", e)
+        self._shutdown_evidence_tab(evidence_tab_widget)
 
         # Remove from evidence mapping
         if evidence_tab_widget:
@@ -2741,10 +2890,66 @@ class MainWindow(QMainWindow):
         case_metadata = self.case_data.get_case_metadata()
         case_id = case_metadata.get("case_id", "Unknown")
 
-        # Show export dialog
-        dialog = ExportDialog(self.case_path, case_id, self)
-        if dialog.exec() == QDialog.Accepted:
-            self.statusBar().showMessage("Case exported successfully", 5000)
+        # The URL search index build (#62) writes to evidence databases in the
+        # background; pause it so files are not changed while they are hashed
+        # and archived. Builds of closed tabs may still be finishing too.
+        urls_tabs = self._urls_tabs()
+        for urls_tab in urls_tabs:
+            urls_tab.pause_search_index_build(timeout_ms=0)
+        try:
+            if not wait_for_url_search_index_builds(15000):
+                self.logger.warning("URL search index build still running; export not started")
+                QMessageBox.warning(
+                    self,
+                    "Export Case",
+                    "The URL search index is still finishing a write to an evidence database.\n"
+                    "Please try the export again in a moment.",
+                )
+                return
+            # Show export dialog
+            dialog = ExportDialog(self.case_path, case_id, self)
+            if dialog.exec() == QDialog.Accepted:
+                self.statusBar().showMessage("Case exported successfully", 5000)
+        finally:
+            for urls_tab in urls_tabs:
+                urls_tab.resume_search_index_build()
+
+    def _shutdown_evidence_tab(self, evidence_tab_widget: Optional[QWidget]) -> None:
+        """Stop the background work of every sub-tab of one evidence tab.
+
+        Calls ``shutdown()`` and ``cancel_tasks()`` where available; a failing
+        sub-tab is logged and does not stop the others. Sub-tabs that were
+        never shown shut down too.
+        """
+        if evidence_tab_widget is None or not hasattr(evidence_tab_widget, 'count'):
+            return
+        for j in range(evidence_tab_widget.count()):
+            tab = evidence_tab_widget.widget(j)
+            for method_name in ('shutdown', 'cancel_tasks'):
+                method = getattr(tab, method_name, None)
+                if method is None:
+                    continue
+                try:
+                    method()
+                except Exception as e:
+                    self.logger.warning(
+                        "Error during %s of %s: %s", method_name, type(tab).__name__, e
+                    )
+
+    def _shutdown_all_evidence_tabs(self) -> None:
+        """Stop the background work of all evidence tabs (case switch, window close)."""
+        for index in range(1, self.main_tabs.count()):
+            self._shutdown_evidence_tab(self.main_tabs.widget(index))
+
+    def _urls_tabs(self) -> List[Any]:
+        """URLs tabs of the open evidence tabs."""
+        tabs = []
+        for index in range(1, self.main_tabs.count()):
+            widget = self.main_tabs.widget(index)
+            urls_tab = widget.property("urls_tab") if widget is not None else None
+            if urls_tab is not None:
+                tabs.append(urls_tab)
+        return tabs
 
     def _import_case(self) -> None:
         """Handle Import Case menu action."""
@@ -2885,8 +3090,25 @@ class MainWindow(QMainWindow):
         self._case_wide_worker.log_message.connect(self._on_case_wide_log)
         self._case_wide_worker.batch_finished.connect(self._on_case_wide_finished)
 
+        # The worker writes to every selected evidence DB: no statistics are
+        # cached for them until it ends, whatever the outcome (issue #63).
+        # Closed in _on_case_wide_finished, or when the thread ends without
+        # reporting (e.g. an exception in run()); close() is idempotent.
+        stats_scopes = [self.case_data.stats_write_scope(int(eid)) for eid in evidence_ids]
+        self._case_wide_stats_scopes = stats_scopes
+        self._case_wide_evidence_ids = {int(eid) for eid in evidence_ids}
+        # The lambda keeps the scopes alive until the thread ends (PySide does
+        # not keep the instance of a connected bound method alive).
+        self._case_wide_worker.finished.connect(
+            lambda scopes=tuple(stats_scopes): [scope.close() for scope in scopes]
+        )
+
         # Start
-        self._case_wide_worker.start()
+        try:
+            self._case_wide_worker.start()
+        except Exception:
+            self._close_case_wide_stats_scopes()
+            raise
 
     def _on_case_wide_progress(self, current: int, total: int, message: str) -> None:
         """Handle progress update from case-wide worker."""
@@ -2908,8 +3130,18 @@ class MainWindow(QMainWindow):
         if hasattr(self, '_case_wide_worker') and self._case_wide_worker:
             self._case_wide_worker.cancel()
 
+    def _close_case_wide_stats_scopes(self) -> None:
+        """Close the statistics write scopes of the case-wide run (issue #63)."""
+        scopes = getattr(self, '_case_wide_stats_scopes', None) or []
+        self._case_wide_stats_scopes = []
+        for scope in scopes:
+            scope.close()
+
     def _on_case_wide_finished(self, results: dict) -> None:
         """Handle completion of case-wide operation."""
+        # Writes have ended (also when cancelled): statistics may be cached again
+        self._close_case_wide_stats_scopes()
+
         # Close progress dialog
         if hasattr(self, '_case_wide_progress') and self._case_wide_progress:
             self._case_wide_progress.close()
@@ -2932,14 +3164,21 @@ class MainWindow(QMainWindow):
         else:
             QMessageBox.information(self, "Complete", msg)
 
-        # Refresh all evidence tabs to show new data
+        # Show the new data: the current evidence refreshes what is shown,
+        # the others refresh their sub-tabs when shown (issue #63).
+        processed_ids = getattr(self, '_case_wide_evidence_ids', set())
+        self._case_wide_evidence_ids = set()
         for i in range(1, self.main_tabs.count()):  # Skip Case tab at index 0
             evidence_tab_widget = self.main_tabs.widget(i)
-            if evidence_tab_widget:
-                # Refresh extraction tab status
-                extraction_tab = evidence_tab_widget.property("extraction_tab")
-                if extraction_tab and hasattr(extraction_tab, '_refresh_ui'):
-                    extraction_tab._refresh_ui()
+            if not isinstance(evidence_tab_widget, QTabWidget):
+                continue
+            # Extractor run status: refreshed now if shown, else on next show
+            extraction_tab = evidence_tab_widget.property("extraction_tab")
+            if extraction_tab is not None and hasattr(extraction_tab, 'refresh_status'):
+                extraction_tab.refresh_status()
+            if evidence_tab_widget.property("evidence_id") in processed_ids:
+                self._refresh_evidence_subtabs(evidence_tab_widget)
+        self._refresh_counts()
 
 
 

@@ -15,6 +15,8 @@ Folder Structure:
 - _shared/         Shared utilities (timestamps, sqlite_helpers, path_utils)
 """
 
+from importlib import import_module
+
 from .base import BaseExtractor, ExtractorMetadata
 from .callbacks import ExtractorCallbacks
 from .extractor_registry import ExtractorRegistry
@@ -32,11 +34,19 @@ from .browser_patterns import (
 )
 from .widgets import BrowserSelectionWidget
 
-# New folder structure exports
-from . import system
-from . import media
-from . import carvers
-from . import browser
+_LAZY_SUBMODULES = {"system", "media", "carvers", "browser"}
+
+
+def __getattr__(name: str):
+    if name in _LAZY_SUBMODULES:
+        module = import_module(f"{__name__}.{name}")
+        globals()[name] = module
+        return module
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+
+def __dir__():
+    return sorted(set(globals()) | _LAZY_SUBMODULES)
 
 __all__ = [
     'BaseExtractor',

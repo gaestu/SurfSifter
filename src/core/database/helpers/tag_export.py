@@ -50,6 +50,30 @@ _BROWSER_PROFILE_EXPR = (
 )
 
 
+def _json_value_expr(path: str) -> str:
+    """Safely read a JSON field from os_indicators.extra_json in SQL."""
+    return (
+        "CASE WHEN json_valid(extra_json) "
+        f"THEN json_extract(extra_json, '$.{path}') ELSE NULL END"
+    )
+
+
+_APP_PATH_EXPR = (
+    f"COALESCE({_json_value_expr('decoded_path')}, value, path, name, '')"
+)
+_APP_LAST_RUN_EXPR = (
+    f"COALESCE({_json_value_expr('last_run_utc')}, "
+    f"{_json_value_expr('last_run')}, detected_at_utc)"
+)
+_INSTALL_NAME_EXPR = (
+    f"COALESCE(value, {_json_value_expr('name')}, name, '')"
+)
+_INSTALL_DATE_EXPR = (
+    f"COALESCE({_json_value_expr('install_date_formatted')}, "
+    f"{_json_value_expr('install_date')}, detected_at_utc)"
+)
+
+
 ARTIFACT_EXPORT_SPECS: Dict[str, Dict[str, Any]] = {
     "url": {
         "table": "urls",
@@ -60,6 +84,18 @@ ARTIFACT_EXPORT_SPECS: Dict[str, Dict[str, Any]] = {
             "COALESCE(discovered_by, '')",
         ],
         "ts_expr": "COALESCE(last_seen_utc, first_seen_utc)",
+        "tie_expr": "url",
+    },
+    "browser_history": {
+        "table": "browser_history",
+        "columns": [
+            "COALESCE(title, '')",
+            "url",
+            "COALESCE(ts_utc, last_visit_time_utc, '')",
+            _BROWSER_PROFILE_EXPR,
+            "COALESCE(visit_count, '')",
+        ],
+        "ts_expr": "COALESCE(ts_utc, last_visit_time_utc)",
         "tie_expr": "url",
     },
     "browser_search_term": {
@@ -103,6 +139,18 @@ ARTIFACT_EXPORT_SPECS: Dict[str, Dict[str, Any]] = {
         "ts_expr": "COALESCE(end_time_utc, start_time_utc)",
         "tie_expr": "COALESCE(filename, target_path, url)",
     },
+    "download": {
+        "table": "downloads",
+        "columns": [
+            "COALESCE(filename, '')",
+            "COALESCE(dest_path, '')",
+            "COALESCE(url, '')",
+            "COALESCE(completed_at_utc, started_at_utc, queued_at_utc, '')",
+            "COALESCE(status, '')",
+        ],
+        "ts_expr": "COALESCE(completed_at_utc, started_at_utc, queued_at_utc)",
+        "tie_expr": "COALESCE(filename, dest_path, url)",
+    },
     "bookmark": {
         "table": "bookmarks",
         "columns": [
@@ -139,6 +187,11 @@ ARTIFACT_EXPORT_SPECS: Dict[str, Dict[str, Any]] = {
             "filename",
             "COALESCE(rel_path, '')",
             "COALESCE(ts_utc, '')",
+        ],
+        "metadata_columns": [
+            ("image_id", "a.id"),
+            ("rel_path", "COALESCE(a.rel_path, '')"),
+            ("discovered_by", "COALESCE(a.first_discovered_by, '')"),
         ],
         "ts_expr": "ts_utc",
         "tie_expr": "filename",
@@ -214,6 +267,30 @@ ARTIFACT_EXPORT_SPECS: Dict[str, Dict[str, Any]] = {
         "ts_expr": "COALESCE(lnk_modification_time, lnk_creation_time, lnk_access_time)",
         "tie_expr": "COALESCE(title, target_path, jumplist_path)",
     },
+    "app_execution": {
+        "table": "os_indicators",
+        "where": "a.type IN ('execution:user_assist', 'execution:launch_services')",
+        "columns": [
+            _APP_PATH_EXPR,
+            f"COALESCE({_APP_LAST_RUN_EXPR}, '')",
+            f"COALESCE({_json_value_expr('run_count')}, '')",
+            "COALESCE(provenance, hive, '')",
+        ],
+        "ts_expr": _APP_LAST_RUN_EXPR,
+        "tie_expr": _APP_PATH_EXPR,
+    },
+    "installed_software": {
+        "table": "os_indicators",
+        "where": "a.type IN ('system:installed_software', 'system:installed_app_macos', 'system:install_receipt_macos')",
+        "columns": [
+            _INSTALL_NAME_EXPR,
+            f"COALESCE({_json_value_expr('publisher')}, '')",
+            f"COALESCE({_json_value_expr('version')}, '')",
+            f"COALESCE({_INSTALL_DATE_EXPR}, '')",
+        ],
+        "ts_expr": _INSTALL_DATE_EXPR,
+        "tie_expr": _INSTALL_NAME_EXPR,
+    },
     "timeline": {
         "table": "timeline",
         "columns": [
@@ -229,9 +306,9 @@ ARTIFACT_EXPORT_SPECS: Dict[str, Dict[str, Any]] = {
 
 # Aliases for legacy / pluralised artifact_type values seen in the codebase.
 _ARTIFACT_TYPE_ALIASES: Dict[str, str] = {
-    "download": "browser_download",
-    "downloads": "browser_download",
+    "downloads": "download",
     "browser_downloads": "browser_download",
+    "history": "browser_history",
     "cookies": "cookie",
     "bookmarks": "bookmark",
     "jump_list": "jump_list_entry",
@@ -311,16 +388,20 @@ REFERENCE_LIST_SPECS: List[Dict[str, Any]] = [
             joined AS (
                 SELECT dm.list_name AS list_name,
                        i.id AS pk,
+                      i.id AS artifact_id,
                        i.filename AS col1,
                        COALESCE(i.rel_path, '') AS col2,
                        COALESCE(i.md5, '') AS col3,
+                      COALESCE(i.rel_path, '') AS rel_path,
+                      COALESCE(i.first_discovered_by, '') AS discovered_by,
                        i.ts_utc AS ts,
                        i.filename AS tie
                 FROM distinct_matches dm
                 JOIN images i ON i.id = dm.artifact_id
             ),
             ranked AS (
-                SELECT list_name, col1, col2, col3,
+                  SELECT list_name, artifact_id, rel_path, discovered_by,
+                      col1, col2, col3,
                        ROW_NUMBER() OVER (
                            PARTITION BY list_name
                            -- pk ASC is the deterministic tiebreaker.
@@ -329,7 +410,8 @@ REFERENCE_LIST_SPECS: List[Dict[str, Any]] = [
                        COUNT(*) OVER (PARTITION BY list_name) AS total
                 FROM joined
             )
-            SELECT list_name, col1, col2, col3, rn, total
+            SELECT list_name, artifact_id, rel_path, discovered_by,
+                   col1, col2, col3, rn, total
             FROM ranked
             WHERE rn <= :top_n
             ORDER BY list_name COLLATE NOCASE, rn
@@ -412,9 +494,9 @@ def _fetch_artifact_rows(
     raw_artifact_types: Sequence[str],
     spec: Dict[str, Any],
     limit: int,
-) -> Tuple[List[Sequence[Any]], int]:
+) -> Tuple[List[Sequence[Any]], int, List[Dict[str, Any]]]:
     """
-    Return ``(rows, total_count)`` for one canonical artifact type.
+    Return ``(rows, total_count, row_metadata)`` for one canonical artifact type.
 
     Multiple raw ``artifact_type`` values that resolve to the same canonical
     type (legacy aliases such as "bookmark" / "bookmarks") are merged here
@@ -425,11 +507,21 @@ def _fetch_artifact_rows(
     """
     table = spec["table"]
     if not _table_exists(conn, table):
-        return [], 0
+        return [], 0, []
 
     select_exprs = ", ".join(spec["columns"])
+    metadata_columns = spec.get("metadata_columns", [])
+    metadata_names = [name for name, _expr in metadata_columns]
+    metadata_selects = [
+        f"{expr} AS __meta_{idx}"
+        for idx, (_name, expr) in enumerate(metadata_columns)
+    ]
+    if metadata_selects:
+        select_exprs = ", ".join([select_exprs, *metadata_selects])
     ts_expr = spec["ts_expr"]
     tie_expr = spec["tie_expr"]
+    extra_where = spec.get("where")
+    extra_where_sql = f" AND {extra_where}" if extra_where else ""
 
     type_placeholders = ", ".join("?" for _ in raw_artifact_types)
     type_params = list(raw_artifact_types)
@@ -447,13 +539,14 @@ def _fetch_artifact_rows(
             WHERE ta.tag_id = ?
               AND ta.evidence_id = ?
               AND a.evidence_id = ?
+                            {extra_where_sql}
         )
         """,
         (*type_params, tag_id, evidence_id, evidence_id),
     ).fetchone()
     total = int(total_row["cnt"]) if total_row else 0
     if total == 0:
-        return [], 0
+        return [], 0, []
 
     sql = f"""
         SELECT {select_exprs},
@@ -469,6 +562,7 @@ def _fetch_artifact_rows(
               AND ta.evidence_id = ?
         )
         AND a.evidence_id = ?
+        {extra_where_sql}
         -- Final ASC on a.id is the deterministic tiebreaker so two
         -- runs against identical evidence always pick the same sample
         -- rows when ts/tie collide (e.g. timeline rows).
@@ -481,13 +575,22 @@ def _fetch_artifact_rows(
 
     column_count = len(spec["columns"])
     rows: List[Sequence[Any]] = []
+    row_metadata: List[Dict[str, Any]] = []
     for raw in cursor.fetchall():
         cells: List[Any] = []
         for i in range(column_count):
             value = raw[i]
             cells.append("" if value is None else value)
         rows.append(cells)
-    return rows, total
+        if metadata_names:
+            metadata_offset = column_count
+            row_metadata.append(
+                {
+                    name: raw[metadata_offset + idx]
+                    for idx, name in enumerate(metadata_names)
+                }
+            )
+    return rows, total, row_metadata
 
 
 def get_tagged_artifact_export(
@@ -573,7 +676,7 @@ def get_tagged_artifact_export(
                     }
                 )
                 continue
-            rows, total = _fetch_artifact_rows(
+            rows, total, row_metadata = _fetch_artifact_rows(
                 conn, evidence_id, tag_id, raws, spec, top_n
             )
             if total == 0:
@@ -584,6 +687,7 @@ def get_tagged_artifact_export(
                     "raw_artifact_types": list(raws),
                     "column_count": len(spec["columns"]),
                     "rows": rows,
+                    "row_metadata": row_metadata,
                     "total": total,
                     "supported": True,
                 }
@@ -680,6 +784,7 @@ def get_reference_list_match_export(
                     "kind": kind,
                     "column_count": 3,
                     "rows": [],
+                    "row_metadata": [],
                     "total": int(r["total"]),
                 },
             )
@@ -690,6 +795,14 @@ def get_reference_list_match_export(
                     "" if r["col3"] is None else r["col3"],
                 ]
             )
+            if kind == "image":
+                bucket["row_metadata"].append(
+                    {
+                        "image_id": r["artifact_id"],
+                        "rel_path": r["rel_path"],
+                        "discovered_by": r["discovered_by"],
+                    }
+                )
 
         for key in sorted(buckets.keys(), key=lambda k: k.lower()):
             output.append(buckets[key])

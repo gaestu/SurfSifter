@@ -25,6 +25,7 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QFont
 
+from core.tool_discovery import clear_tool_version_cache
 from core.tool_registry import ToolRegistry, ToolInfo
 
 
@@ -356,6 +357,7 @@ class ToolsTab(QWidget):
         if file_path:
             from pathlib import Path
             self.tool_registry.set_custom_path(self.selected_tool_name, Path(file_path))
+            clear_tool_version_cache()  # extractors re-probe (issue #70)
             self._populate_tables()
 
             # Update details panel
@@ -374,6 +376,7 @@ class ToolsTab(QWidget):
         if self.selected_tool_name in self.tool_registry._custom_paths:
             del self.tool_registry._custom_paths[self.selected_tool_name]
             self.tool_registry._save_custom_paths()
+            clear_tool_version_cache()  # extractors re-probe (issue #70)
 
             # Re-discover tool
             self.tool_registry._tools[self.selected_tool_name] = (
@@ -392,6 +395,7 @@ class ToolsTab(QWidget):
     def _refresh_all_tools(self):
         """Re-discover all tools."""
         self.tool_registry.discover_all_tools()
+        clear_tool_version_cache()  # extractors re-probe (issue #70)
         self._populate_tables()
 
         # Refresh details panel if a tool is selected

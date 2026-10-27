@@ -4,6 +4,7 @@ This module provides the foundation for all data access classes:
 - Database connection management (case DB and evidence DBs)
 - Thread-safe evidence context switching
 - TTL-based filter caching with thread-safe operations
+- Shared, revision-checked statistics cache per case (issue #63)
 - Evidence existence guards
 
 Extracted from case_data.py for modular repository pattern.
@@ -16,9 +17,21 @@ import time
 import threading
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Dict, Iterable, Optional, Tuple
+from typing import Any, Callable, Dict, Hashable, Iterable, Iterator, List, Optional, Tuple, TypeVar
 
 from core.database import DatabaseManager, find_case_database
+
+from ._stats_cache import CaseStatsCache, Categories, StatsWriteScope, _cache_for_key, _registry_key
+
+T = TypeVar("T")
+
+
+class QueryCancelledError(Exception):
+    """Raised when a read inside ``cancellable_reads()`` was interrupted."""
+
+
+# SQLite VM instructions between cancellation checks in cancellable_reads().
+CANCEL_CHECK_INTERVAL_OPS = 1000
 
 
 class BaseDataAccess:
@@ -101,6 +114,9 @@ class BaseDataAccess:
         # Thread lock for cache operations (Bug #4 fix)
         self._filter_cache_lock = threading.Lock()
 
+        # Shared statistics cache of this case (issue #63), see stats_cache.
+        self._stats_cache_key = _registry_key(self.db_path)
+
     # -------------------------------------------------------------------------
     # Lifecycle Management
     # -------------------------------------------------------------------------
@@ -163,6 +179,9 @@ class BaseDataAccess:
                 keys_to_remove = [k for k in self._filter_cache if k.endswith(f"_{evidence_id}")]
                 for k in keys_to_remove:
                     del self._filter_cache[k]
+        # Also bump every category of the shared statistics cache, so callers
+        # of this method keep invalidating everything they used to (issue #63).
+        self.stats_cache.invalidate(evidence_id)
 
     def _get_cached(self, cache_key: str) -> Optional[Any]:
         """Get value from cache if not expired.
@@ -197,6 +216,83 @@ class BaseDataAccess:
             self._filter_cache[cache_key] = (data, time.time() + self.FILTER_CACHE_TTL)
 
     # -------------------------------------------------------------------------
+    # Shared Statistics Cache (issue #63)
+    # -------------------------------------------------------------------------
+
+    @property
+    def stats_cache(self) -> CaseStatsCache:
+        """The statistics cache shared by every data access of this case.
+
+        Looked up in the registry on each access, so after
+        ``discard_case_stats_cache`` every instance (old or new) uses the
+        same fresh cache.
+        """
+        return _cache_for_key(self._stats_cache_key)
+
+    def _cached_stat(
+        self,
+        evidence_id: int,
+        key: Hashable,
+        categories: Categories,
+        compute: Callable[[], T],
+        *,
+        use_cache: bool = True,
+        empty: Optional[Callable[[], T]] = None,
+    ) -> T:
+        """Return a cached aggregate, computing and storing it on a miss.
+
+        Args:
+            evidence_id: Evidence the value belongs to.
+            key: Hashable cache key, unique per reader and arguments.
+            categories: Data categories the value depends on.
+            compute: Reads the value from the database.
+            use_cache: False skips the lookup (the fresh value is still stored).
+            empty: If given, the evidence DB must exist; otherwise ``empty()``
+                is returned without caching (a DB created later is picked up).
+
+        The token is taken before ``compute`` so a result read while the data
+        changed is never stored. Exceptions (including ``QueryCancelledError``)
+        propagate and store nothing. Hits are deep copies.
+        """
+        cache = self.stats_cache
+        if use_cache:
+            hit, value = cache.get(evidence_id, key)
+            if hit:
+                return value
+        if empty is not None and not self._evidence_db_exists(evidence_id):
+            return empty()
+        token = cache.token(evidence_id, categories)
+        value = compute()
+        cache.put(evidence_id, key, categories, token, value)
+        return value
+
+    def _peek_stat(self, evidence_id: int, key: Hashable) -> Tuple[bool, Any]:
+        """Cache-only lookup: ``(hit, copy)``; never touches the database."""
+        return self.stats_cache.get(evidence_id, key)
+
+    def invalidate_stats(
+        self,
+        evidence_id: Optional[int] = None,
+        categories: Optional[Categories] = None,
+    ) -> None:
+        """Mark cached statistics stale (None: all evidences / all categories)."""
+        self.stats_cache.invalidate(evidence_id, categories)
+
+    def stats_write_scope(self, evidence_id: int) -> StatsWriteScope:
+        """Announce a long write (extraction/ingestion) to an evidence.
+
+        Returns the open scope's handle: nothing is cached for the evidence
+        until ``close()`` is called, which bumps all its categories. ``close()``
+        is idempotent and thread-safe, and always ends the scope on the cache
+        it began on (harmless if that cache was discarded meanwhile).
+        """
+        return self.stats_cache.write_scope(int(evidence_id))
+
+    def drop_evidence_stats(self, evidence_id: int) -> None:
+        """Forget all statistics of an evidence (e.g. after its removal)."""
+        self.stats_cache.drop_evidence(evidence_id)
+
+    # -------------------------------------------------------------------------
     # Database Manager Access
     # -------------------------------------------------------------------------
 
@@ -224,6 +320,7 @@ class BaseDataAccess:
         else:
             conn = sqlite3.connect(self.db_path)
         conn.row_factory = sqlite3.Row
+        self._apply_cancellation(conn)
         return conn
 
     def _connect_case(self) -> sqlite3.Connection:
@@ -237,7 +334,56 @@ class BaseDataAccess:
         """
         conn = sqlite3.connect(self.db_path)
         conn.row_factory = sqlite3.Row
+        self._apply_cancellation(conn)
         return conn
+
+    # -------------------------------------------------------------------------
+    # Cancellation
+    # -------------------------------------------------------------------------
+
+    @contextmanager
+    def cancellable_reads(self, is_cancelled: Callable[[], bool]) -> Iterator[None]:
+        """Make reads on this thread interruptible while the scope is active.
+
+        Connections handed out by ``_connect()`` / ``_connect_case()`` inside the
+        scope get an SQLite progress handler that aborts the running statement
+        once ``is_cancelled()`` returns True. Handlers are removed on exit so a
+        reused (cached) connection behaves normally afterwards.
+
+        Raises:
+            QueryCancelledError: If a statement was interrupted by cancellation.
+        """
+        state = self._thread_local
+        previous_check = getattr(state, "cancel_check", None)
+        previous_conns = getattr(state, "cancel_conns", None)
+        installed: List[sqlite3.Connection] = []
+        state.cancel_check = is_cancelled
+        state.cancel_conns = installed
+        try:
+            yield
+        except sqlite3.OperationalError as exc:
+            if is_cancelled() and "interrupted" in str(exc).lower():
+                raise QueryCancelledError(str(exc)) from exc
+            raise
+        finally:
+            for conn in installed:
+                try:
+                    conn.set_progress_handler(None, 0)
+                except sqlite3.Error:
+                    pass
+            state.cancel_check = previous_check
+            state.cancel_conns = previous_conns
+
+    def _apply_cancellation(self, conn: sqlite3.Connection) -> None:
+        """Install the active cancellation check (if any) on ``conn``."""
+        check = getattr(self._thread_local, "cancel_check", None)
+        if check is None:
+            return
+        installed = self._thread_local.cancel_conns
+        if any(existing is conn for existing in installed):
+            return
+        conn.set_progress_handler(lambda: 1 if check() else 0, CANCEL_CHECK_INTERVAL_OPS)
+        installed.append(conn)
 
     # -------------------------------------------------------------------------
     # Evidence Label Resolution

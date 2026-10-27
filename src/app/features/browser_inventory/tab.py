@@ -26,6 +26,7 @@ from app.features.browser_inventory.permissions import PermissionsSubtab
 from app.features.browser_inventory.media import MediaSubtab
 from app.features.browser_inventory.site_engagement import SiteEngagementSubtab
 from app.features.browser_inventory.extensions import ExtensionsSubtab
+from app.features.browser_inventory.browser_config import BrowserConfigSubtab
 
 # Container subtabs (with nested tabs inside)
 from app.features.browser_inventory.autofill import AutofillContainer
@@ -59,6 +60,7 @@ class BrowserInventoryTab(QWidget):
     - Media: Media playback history
     - Site Engagement: Chromium site engagement scores
     - Extensions: Browser extensions with risk analysis
+    - Browser Config: Parsed browser configuration key/value records
     - Web Storage: LocalStorage, SessionStorage, IndexedDB, auth tokens
     - Cache: Browser cache entries with pagination
     """
@@ -91,9 +93,9 @@ class BrowserInventoryTab(QWidget):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
 
-        # Create tab widget for subtabs
+        # Create tab widget for subtabs (currentChanged is connected once the
+        # tabs are added: adding the first tab must not load anything; issue #63)
         self.subtabs = QTabWidget()
-        self.subtabs.currentChanged.connect(self._on_subtab_changed)
 
         # Create the shared context (inventory subtab creates db_manager)
         self._inventory = InventorySubtab(
@@ -124,6 +126,7 @@ class BrowserInventoryTab(QWidget):
         self._media = MediaSubtab(self._ctx, parent=self)
         self._site_engagement = SiteEngagementSubtab(self._ctx, parent=self)
         self._extensions = ExtensionsSubtab(self._ctx, parent=self)
+        self._browser_config = BrowserConfigSubtab(self._ctx, parent=self)
         self._web_storage = WebStorageContainer(self._ctx, parent=self)
         self._cache = CacheContainer(self._ctx, parent=self)
 
@@ -141,8 +144,9 @@ class BrowserInventoryTab(QWidget):
             self._media,           # 9
             self._site_engagement, # 10
             self._extensions,      # 11
-            self._web_storage,     # 12
-            self._cache,           # 13
+            self._browser_config,  # 12
+            self._web_storage,     # 13
+            self._cache,           # 14
         ]
 
         # Add tabs
@@ -158,8 +162,10 @@ class BrowserInventoryTab(QWidget):
         self.subtabs.addTab(self._media, "Media")
         self.subtabs.addTab(self._site_engagement, "Site Engagement")
         self.subtabs.addTab(self._extensions, "Extensions")
+        self.subtabs.addTab(self._browser_config, "Browser Config")
         self.subtabs.addTab(self._web_storage, "Web Storage")
         self.subtabs.addTab(self._cache, "Cache")
+        self.subtabs.currentChanged.connect(self._on_subtab_changed)
 
         layout.addWidget(self.subtabs)
 
@@ -172,7 +178,9 @@ class BrowserInventoryTab(QWidget):
     # ─── Lazy Loading ─────────────────────────────────────────────────
 
     def _on_subtab_changed(self, index: int) -> None:
-        """Load subtab data on first visit."""
+        """Load subtab data on first visit (once the tab itself was loaded)."""
+        if not self._data_loaded:
+            return  # the first show loads the current subtab
         if 0 <= index < len(self._all_subtabs):
             subtab = self._all_subtabs[index]
             if not subtab.is_loaded:
@@ -186,7 +194,9 @@ class BrowserInventoryTab(QWidget):
         storage_keys.set_origin_filter(origin)
 
         # Switch to Web Storage tab
-        self.subtabs.setCurrentIndex(12)
+        web_storage_index = self.subtabs.indexOf(self._web_storage)
+        if web_storage_index >= 0:
+            self.subtabs.setCurrentIndex(web_storage_index)
 
         # Switch to Storage Keys nested tab
         self._web_storage.nested_tabs.setCurrentIndex(1)
@@ -215,14 +225,19 @@ class BrowserInventoryTab(QWidget):
         self.load_inventory()
 
     def _perform_deferred_load(self) -> None:
-        """Execute deferred first load when tab becomes visible."""
+        """Execute the first load when the tab becomes visible."""
         if self._data_loaded:
             return
         self._data_loaded = True
         self._load_pending = False
-        # Load the default (first) subtab
-        if self._all_subtabs and not self._all_subtabs[0].is_loaded:
-            self._all_subtabs[0].load()
+        # Loaded fresh: an earlier mark_stale() is satisfied
+        self._data_stale = False
+        # Load the current (by default the first) subtab
+        current_index = self.subtabs.currentIndex()
+        if 0 <= current_index < len(self._all_subtabs):
+            subtab = self._all_subtabs[current_index]
+            if not subtab.is_loaded:
+                subtab.load()
 
     def mark_stale(self) -> None:
         """Mark data as stale — will refresh on next showEvent."""
@@ -231,8 +246,9 @@ class BrowserInventoryTab(QWidget):
     def showEvent(self, event):
         """Override showEvent to refresh data when tab becomes visible."""
         super().showEvent(event)
-        if self._load_pending and not self._data_loaded:
+        if not self._data_loaded:
+            # First show, deferred or not: nothing is read before (issue #63)
             QTimer.singleShot(10, self._perform_deferred_load)
-        elif self._data_stale and self._data_loaded:
+        elif self._data_stale:
             self._data_stale = False
             QTimer.singleShot(10, self.refresh)

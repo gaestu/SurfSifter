@@ -21,5 +21,7 @@ Grid view of downloaded images with thumbnails, URLs, and hashes.
 - Grid of downloaded image thumbnails (200x200px) with URL and hash metadata.
 
 ## Notes
-- Thumbnails are generated and cached under the case folder (report_thumbs/downloads/).
+- Thumbnails require Pillow; optional `pillow-heif` support is used when installed.
+- Source files must resolve under the selected evidence workspace. Missing files, files outside that workspace, unreadable files, and images over the thumbnail pixel safety cap are shown without previews.
+- Thumbnail bytes are embedded inline in the appendix output. Cache files under `report_thumbs/downloads/` are only a case-local write-through optimization and are not trusted as report-visible evidence.
 - Only downloads classified as images are included.

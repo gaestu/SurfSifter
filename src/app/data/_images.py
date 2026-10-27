@@ -16,10 +16,37 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
-from core.database import slugify_label
+from core.database.helpers.sql_utils import LIKE_ESCAPE_CHAR, escape_like
+from core.image_paths import resolve_case_image_path, safe_relative_artifact_path
 from core.phash import hamming_distance
 
 from ._base import BaseDataAccess
+
+# Issue #74: an image is tagged if it has an association to an existing tag
+# of its evidence (the definition of get_artifact_tags_str). CROSS JOIN keeps
+# the per-image association seek first, as in the URLs tab (issue #72).
+_IMAGE_HAS_TAG_SUBQUERY = """
+    SELECT 1 FROM tag_associations ta
+    CROSS JOIN tags t ON ta.tag_id = t.id
+    WHERE ta.artifact_type = 'image'
+    AND ta.artifact_id = i.id
+    AND ta.evidence_id = i.evidence_id
+    AND t.evidence_id = i.evidence_id
+"""
+
+
+def _discovery_like_subquery(column: str) -> str:
+    """Subquery: some discovery of image ``i`` has ``column`` matching a literal LIKE.
+
+    A NULL ``column`` never matches, so EXISTS / NOT EXISTS of it are exact
+    complements (issue #74).
+    """
+    return f"""
+        SELECT 1 FROM image_discoveries d
+        WHERE d.evidence_id = i.evidence_id
+        AND d.image_id = i.id
+        AND d.{column} LIKE ? ESCAPE '{LIKE_ESCAPE_CHAR}'
+    """
 
 
 class ImageQueryMixin(BaseDataAccess):
@@ -136,6 +163,9 @@ class ImageQueryMixin(BaseDataAccess):
         hash_match: Optional[str] = None,
         url_text: Optional[str] = None,
         cache_key_text: Optional[str] = None,
+        url_excludes: Optional[str] = None,
+        cache_key_excludes: Optional[str] = None,
+        untagged: bool = False,
         min_size_bytes: Optional[int] = None,
         max_size_bytes: Optional[int] = None,
         limit: int = 100,
@@ -154,8 +184,21 @@ class ImageQueryMixin(BaseDataAccess):
             discovered_by: List of source filters
             extension: File extension filter (e.g., 'jpg', 'gif', 'bmp')
             hash_match: Hash list name filter (only show images matching this list)
-            url_text: Case-insensitive URL substring filter (matches cache_url)
-            cache_key_text: Case-insensitive cache key substring filter (matches cache_key)
+            url_text: Literal substring some discovery's cache_url must contain
+                (ASCII case-insensitive; ``%``, ``_`` and ``\\`` are literal)
+            cache_key_text: Literal substring some discovery's cache_key must
+                contain, matched like ``url_text``
+            url_excludes: Literal substring no discovery's cache_url may contain,
+                matched like ``url_text``. Images without a URL are kept, so
+                ``url_text=X`` and ``url_excludes=X`` are exact complements.
+            cache_key_excludes: Literal substring no discovery's cache_key may
+                contain, matched like ``url_text``; images without a cache key
+                are kept.
+            untagged: Only images without a tag, i.e. without an association to
+                an existing tag of this evidence (as ``get_artifact_tags_str``).
+                The tab never combines it with ``tag_like``; together they
+                only match images whose matching tag or association belongs
+                to another evidence (``tag_like`` has no evidence check).
             min_size_bytes: Minimum file size filter (Phase 3)
             max_size_bytes: Maximum file size filter (Phase 3)
             limit: Page size
@@ -180,6 +223,8 @@ class ImageQueryMixin(BaseDataAccess):
                 )
             """)
             params.append(tag_like)
+        if untagged:
+            where.append(f"NOT EXISTS ({_IMAGE_HAS_TAG_SUBQUERY})")
 
         # Filter by discovered_by via image_discoveries table
         if discovered_by:
@@ -229,29 +274,19 @@ class ImageQueryMixin(BaseDataAccess):
             where.append("(i.size_bytes IS NULL OR i.size_bytes <= ?)")
             params.append(max_size_bytes)
 
-        # URL text filter — case-insensitive LIKE on image_discoveries.cache_url
-        if url_text:
-            where.append("""
-                EXISTS (
-                    SELECT 1 FROM image_discoveries d
-                    WHERE d.evidence_id = i.evidence_id
-                    AND d.image_id = i.id
-                    AND d.cache_url LIKE ?
-                )
-            """)
-            params.append(f"%{url_text}%")
-
-        # Cache key text filter — case-insensitive LIKE on image_discoveries.cache_key
-        if cache_key_text:
-            where.append("""
-                EXISTS (
-                    SELECT 1 FROM image_discoveries d
-                    WHERE d.evidence_id = i.evidence_id
-                    AND d.image_id = i.id
-                    AND d.cache_key LIKE ?
-                )
-            """)
-            params.append(f"%{cache_key_text}%")
+        # URL / Cache Key text filters on image_discoveries: literal substrings,
+        # ASCII case-insensitive (issue #74). Include: some discovery matches;
+        # exclude: none does.
+        for column, text, negate in (
+            ("cache_url", url_text, False),
+            ("cache_key", cache_key_text, False),
+            ("cache_url", url_excludes, True),
+            ("cache_key", cache_key_excludes, True),
+        ):
+            if text:
+                exists = f"EXISTS ({_discovery_like_subquery(column)})"
+                where.append(f"NOT {exists}" if negate else exists)
+                params.append(f"%{escape_like(text)}%")
 
         # Removed GROUP_CONCAT - tags loaded on-demand via get_artifact_tags_str()
         # Alias first_discovered_by AS discovered_by, join v_image_sources for browser badge
@@ -487,7 +522,7 @@ class ImageQueryMixin(BaseDataAccess):
         rel_path: str,
         evidence_id: Optional[int] = None,
         discovered_by: Optional[str] = None,
-    ) -> Path:
+    ) -> Optional[Path]:
         """
         Resolve an image's relative path to its full filesystem path.
 
@@ -497,55 +532,41 @@ class ImageQueryMixin(BaseDataAccess):
             discovered_by: Source extractor (optional, determines base directory)
 
         Returns:
-            Full path to the image file
+            Full path to the image file, or None if the path is not resolvable.
         """
-        # If no evidence context, fall back to simple resolution (legacy behavior)
-        if evidence_id is None or discovered_by is None:
-            return (self.case_folder / rel_path).resolve()
+        # If no evidence context, fall back to simple resolution (legacy behavior).
+        if evidence_id is None:
+            return self._contained_case_image_fallback(rel_path)
 
-        # Get evidence label and convert to folder slug
+        safe_rel = safe_relative_artifact_path(rel_path)
+        if safe_rel is None or safe_rel.parts[:1] == ("evidences",):
+            return None
+
         label = self._get_evidence_label(evidence_id)
-        if not label:
-            return (self.case_folder / rel_path).resolve()
+        resolved = resolve_case_image_path(
+            rel_path=rel_path,
+            discovered_by=discovered_by,
+            case_folder=self.case_folder,
+            evidence_id=evidence_id,
+            evidence_label=label,
+            require_exists=False,
+            allow_case_root_fallback=False,
+        )
+        if resolved is not None:
+            return resolved
+        return None
 
-        # Convert label to filesystem-safe slug (matching folder name)
-        evidence_slug = slugify_label(label, evidence_id)
-        evidence_dir = self.case_folder / "evidences" / evidence_slug
-
-        # Map discovered_by to the extractor's output subdirectory
-        # Note: rel_path already includes 'carved/' prefix from ingestion
-        # (e.g., 'carved/gif/00001234.gif'), so base_subdir should point
-        # to the extractor directory, not including 'carved/'
-        # Added cache extractors (cache_simple, cache_firefox, browser_storage, safari)
-        source_map = {
-            # Carving extractors
-            "bulk_extractor": "bulk_extractor",
-            "bulk_extractor:images": "bulk_extractor",
-            "bulk_extractor_images": "bulk_extractor",
-            "foremost_carver": "foremost_carver",
-            "scalpel": "scalpel",
-            "swiftbeaver": "swiftbeaver",
-            "image_carving": "",  # Legacy: rel_path is full path
-            # Filesystem extractor
-            "filesystem_images": "filesystem_images/extracted",
-            # Cache/browser extractors
-            # rel_path format: <run_id>/carved_images/<filename> or similar
-            "cache_simple": "cache_simple",
-            "cache_blockfile": "cache_simple",  # Blockfile uses same output dir
-            "cache_firefox": "cache_firefox",
-            "browser_storage_indexeddb": "browser_storage",
-            "safari": "safari",
-            # Favicon extractors
-            "firefox_favicons": "firefox_favicons",
-            "chromium_favicons": "chromium_favicons",
-        }
-
-        base_subdir = source_map.get(discovered_by, "")
-        if base_subdir:
-            return (evidence_dir / base_subdir / rel_path).resolve()
-
-        # Fallback: try direct path under evidence directory
-        return (evidence_dir / rel_path).resolve()
+    def _contained_case_image_fallback(self, rel_path: str) -> Optional[Path]:
+        safe_rel = safe_relative_artifact_path(rel_path)
+        if safe_rel is None:
+            return None
+        try:
+            case_root = self.case_folder.resolve()
+            candidate = (case_root / safe_rel).resolve()
+            candidate.relative_to(case_root)
+        except (OSError, ValueError):
+            return None
+        return candidate
 
     # -------------------------------------------------------------------------
     # Image Similarity & Hash Matching
@@ -575,11 +596,13 @@ class ImageQueryMixin(BaseDataAccess):
         # Guard: return empty list if evidence DB doesn't exist yet
         if not self._evidence_db_exists(evidence_id):
             return []
+        if target_phash is None:
+            return []
 
         # Compute target prefix for SQL filtering
         try:
             target_prefix = int(target_phash[:4], 16)
-        except ValueError:
+        except (TypeError, ValueError):
             # Invalid phash format, fall back to full scan
             target_prefix = None
 

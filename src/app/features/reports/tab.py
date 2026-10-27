@@ -19,6 +19,7 @@ from PySide6.QtWidgets import (
 )
 
 from app.common.dialogs.tag_match_summary import TagMatchSummaryDialog
+from app.data import STATS_PROCESS_LOG
 from reports.tag_summary_service import (
     TagSummaryExportError,
     export_tag_summary,
@@ -50,6 +51,12 @@ class ReportsTab(QWidget):
         self._db_manager = None
 
         self._summary_dialog: Optional[TagMatchSummaryDialog] = None
+
+        # Case metadata and the evidence's report sections/settings are read
+        # on first show (or first use), not at construction (issue #63).
+        self._loaded = False
+        self._case_data_pending = False
+        self._evidence_pending = False
 
         self._setup_ui()
 
@@ -84,7 +91,19 @@ class ReportsTab(QWidget):
         self._report_widget.manage_text_blocks_requested.connect(
             self.manage_text_blocks_requested.emit
         )
+        self._report_widget.process_log_written.connect(self._on_process_log_written)
         layout.addWidget(self._report_widget)
+
+    def _on_process_log_written(self) -> None:
+        """Invalidate cached statistics that read process_log (issue #63).
+
+        Report previews, PDF builds and tag-summary exports append
+        process_log rows, which the Overview's "Last Extraction" reads.
+        """
+        case_data = self._case_data
+        if self._evidence_id is None or not hasattr(case_data, "invalidate_stats"):
+            return
+        case_data.invalidate_stats(self._evidence_id, STATS_PROCESS_LOG)
 
     # --- Compatibility methods called from main.py ---
 
@@ -119,12 +138,21 @@ class ReportsTab(QWidget):
             self._report_widget.set_workspace_path(None)
 
     def set_case_data(self, case_data: Optional[Union[CaseDataAccess, dict]]) -> None:
-        """Set case metadata.
+        """Set case metadata (read when the tab is first shown or used).
 
         Args:
             case_data: CaseDataAccess instance or dictionary with case metadata
         """
         self._case_data = case_data
+        if not self._loaded:
+            self._case_data_pending = True
+            return
+        self._apply_case_data()
+
+    def _apply_case_data(self) -> None:
+        """Pass the case metadata to the report widget (reads the case DB)."""
+        self._case_data_pending = False
+        case_data = self._case_data
         self._report_widget.set_case_data(case_data)
 
         # Extract investigator from case data if available
@@ -146,6 +174,20 @@ class ReportsTab(QWidget):
         """
         self._evidence_id = evidence_id
         self._evidence_label = evidence_label
+        # Toggle export button to match selection state.
+        self._export_btn.setEnabled(
+            self._db_manager is not None and evidence_id is not None
+        )
+        if not self._loaded:
+            self._evidence_pending = True
+            return
+        self._apply_evidence()
+
+    def _apply_evidence(self) -> None:
+        """Load the evidence's report sections and settings (reads the evidence DB)."""
+        self._evidence_pending = False
+        evidence_id = self._evidence_id
+        evidence_label = self._evidence_label
 
         # Pass the evidence database connection to the report widget
         if self._db_manager is not None and evidence_id is not None:
@@ -156,18 +198,34 @@ class ReportsTab(QWidget):
             self._report_widget.set_db_connection(None)
 
         self._report_widget.set_evidence(evidence_id, evidence_label)
-        # Toggle export button to match selection state.
-        self._export_btn.setEnabled(
-            self._db_manager is not None and evidence_id is not None
-        )
         # Keep summary dialog in sync if it exists
         if self._summary_dialog is not None:
             self._summary_dialog.set_db_connection(conn, evidence_id)
+
+    def _ensure_loaded(self) -> None:
+        """Apply the deferred case metadata and evidence (first show or use).
+
+        Applied in the order main.py sets them: case metadata (case number,
+        investigator) first, then the evidence's saved report settings.
+        """
+        if self._loaded:
+            return
+        self._loaded = True
+        if self._case_data_pending:
+            self._apply_case_data()
+        if self._evidence_pending:
+            self._apply_evidence()
+
+    def showEvent(self, event) -> None:
+        """Load the deferred report state when the tab is first shown."""
+        super().showEvent(event)
+        self._ensure_loaded()
 
     # --- Summary dialog ---
 
     def _open_summary(self) -> None:
         """Open (or raise) the floating Tag & Match Summary panel."""
+        self._ensure_loaded()
         if self._summary_dialog is None:
             self._summary_dialog = TagMatchSummaryDialog(parent=self.window())
 
@@ -201,8 +259,7 @@ class ReportsTab(QWidget):
         if case_folder is None:
             return None
         slug = self._slugify(self._evidence_label)
-        timestamp = datetime.now(tz=timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-        filename = f"tag_summary_{slug}_{timestamp}.xlsx"
+        filename = f"tag_summary_{slug}.xlsx"
         return case_folder / "reports" / filename
 
     def _case_folder(self) -> Optional[Path]:
@@ -233,6 +290,7 @@ class ReportsTab(QWidget):
         workbook write, forensic audit, rollback) lives in
         :func:`reports.tag_summary_service.export_tag_summary`.
         """
+        self._ensure_loaded()
         if self._db_manager is None or self._evidence_id is None:
             QMessageBox.warning(
                 self,
@@ -273,7 +331,7 @@ class ReportsTab(QWidget):
             self._evidence_id, self._evidence_label
         )
 
-        exported_at_iso = (
+        finished_at_iso = (
             datetime.now(tz=timezone.utc).replace(microsecond=0).isoformat()
         )
 
@@ -285,10 +343,12 @@ class ReportsTab(QWidget):
                 or f"evidence #{self._evidence_id}",
                 case_folder=case_folder,
                 output_path=output_path,
-                exported_at_iso=exported_at_iso,
+                exported_at_iso="see case audit log",
+                finished_at_iso=finished_at_iso,
                 top_n=10,
             )
         except TagSummaryExportError as exc:
+            self._on_process_log_written()
             if exc.stage == "path":
                 QMessageBox.warning(
                     self,
@@ -299,6 +359,7 @@ class ReportsTab(QWidget):
             else:
                 QMessageBox.critical(self, "Export Tag Summary", str(exc))
             return
+        self._on_process_log_written()
 
         QMessageBox.information(
             self,

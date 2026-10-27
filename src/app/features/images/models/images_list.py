@@ -56,6 +56,9 @@ class ImagesListModel(QAbstractListModel):
             "hash_match": None,
             "url_text": None,
             "cache_key_text": None,
+            "url_exclude_text": None,
+            "cache_key_exclude_text": None,
+            "untagged": False,
             "min_size_bytes": None,
             "max_size_bytes": None,
         }
@@ -207,6 +210,9 @@ class ImagesListModel(QAbstractListModel):
         hash_match: Optional[str] = None,
         url_text: Optional[str] = None,
         cache_key_text: Optional[str] = None,
+        url_exclude_text: Optional[str] = None,
+        cache_key_exclude_text: Optional[str] = None,
+        untagged: Optional[bool] = None,
         min_size_bytes: Optional[int] = None,
         max_size_bytes: Optional[int] = None,
     ) -> None:
@@ -218,7 +224,11 @@ class ImagesListModel(QAbstractListModel):
             sources: List of discovered_by source filters
             extension: File extension filter (e.g., 'jpg', 'gif')
             hash_match: Hash list name filter (only show images matching this list)
-            url_text: Case-insensitive URL substring filter
+            url_text: Literal URL substring filter (ASCII case-insensitive)
+            cache_key_text: Literal cache key substring filter
+            url_exclude_text: Literal URL substring to exclude
+            cache_key_exclude_text: Literal cache key substring to exclude
+            untagged: Only images without a tag
             min_size_bytes: Minimum file size in bytes (Phase 3)
             max_size_bytes: Maximum file size in bytes (Phase 3)
         """
@@ -238,6 +248,14 @@ class ImagesListModel(QAbstractListModel):
         # Cache key text filter
         if cache_key_text is not None:
             self._filters["cache_key_text"] = cache_key_text if cache_key_text else None
+        # Exclude filters and untagged (issue #74)
+        if url_exclude_text is not None:
+            self._filters["url_exclude_text"] = url_exclude_text if url_exclude_text else None
+        if cache_key_exclude_text is not None:
+            self._filters["cache_key_exclude_text"] = cache_key_exclude_text if cache_key_exclude_text else None
+        # Kept apart from tags so it never goes through the %tag% wrapping
+        if untagged is not None:
+            self._filters["untagged"] = bool(untagged)
         # Phase 3: Size filtering
         # Always update size filters when explicitly passed (even if None)
         # Use special sentinel _UNSET to detect when parameter was not passed at all
@@ -274,6 +292,9 @@ class ImagesListModel(QAbstractListModel):
             hash_match=self._filters.get("hash_match"),
             url_text=self._filters.get("url_text"),
             cache_key_text=self._filters.get("cache_key_text"),
+            url_excludes=self._filters.get("url_exclude_text"),
+            cache_key_excludes=self._filters.get("cache_key_exclude_text"),
+            untagged=self._filters.get("untagged", False),
             min_size_bytes=self._filters.get("min_size_bytes"),
             max_size_bytes=self._filters.get("max_size_bytes"),
             limit=self.page_size,
@@ -319,7 +340,7 @@ class ImagesListModel(QAbstractListModel):
             evidence_id=self.evidence_id,
             discovered_by=discovered_by,
         )
-        if not image_path.exists():
+        if image_path is None or not image_path.exists():
             return None
         cache_dir = cache_base / ".thumbs"
         return ensure_thumbnail(image_path, cache_dir, size=(self.thumb_size, self.thumb_size))

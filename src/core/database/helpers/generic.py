@@ -226,13 +226,13 @@ def delete_by_run(
     if not schema.supports_run_delete:
         raise ValueError(f"Table {schema.name} does not support run-based deletion")
 
-    before = conn.total_changes
+    # rowcount excludes rows changed by triggers (e.g. URL search index, #62).
     with conn:
-        conn.execute(
+        cursor = conn.execute(
             f"DELETE FROM {schema.name} WHERE evidence_id = ? AND run_id = ?",
             (evidence_id, run_id),
         )
-    return conn.total_changes - before
+    return cursor.rowcount
 
 
 def delete_by_evidence(
@@ -241,12 +241,12 @@ def delete_by_evidence(
     evidence_id: int,
 ) -> int:
     """Delete all rows for an evidence_id (full re-run support)."""
-    before = conn.total_changes
-    conn.execute(
+    # rowcount excludes rows changed by triggers (e.g. URL search index, #62).
+    cursor = conn.execute(
         f"DELETE FROM {schema.name} WHERE evidence_id = ?",
         (evidence_id,),
     )
-    return conn.total_changes - before
+    return cursor.rowcount
 
 
 def get_distinct_values(

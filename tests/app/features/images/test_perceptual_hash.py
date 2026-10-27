@@ -327,6 +327,15 @@ def test_find_similar_images_handles_null_phash(case_with_images: tuple[CaseData
     assert results == []
 
 
+def test_find_similar_images_handles_null_target_phash(case_with_images: tuple[CaseDataAccess, int, Path]) -> None:
+    """Test that a missing target phash returns no matches."""
+    case_data, evidence_id, _images_dir = case_with_images
+
+    results = case_data.find_similar_images(evidence_id, None, threshold=10)
+
+    assert results == []
+
+
 @pytest.mark.skipif(not IMAGEHASH_AVAILABLE, reason="imagehash not available")
 def test_results_sorted_by_distance(case_with_images: tuple[CaseDataAccess, int, Path]) -> None:
     """Test that results are sorted by Hamming distance (closest first)."""

@@ -8,11 +8,10 @@ from __future__ import annotations
 
 import base64
 import sqlite3
-from io import BytesIO
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from jinja2 import Template
+from jinja2 import Environment, FileSystemLoader
 
 from ...dates import format_datetime
 from ..base import (
@@ -21,16 +20,12 @@ from ..base import (
     FilterType,
     ModuleMetadata,
 )
-from core.image_codecs import ensure_pillow_heif_registered
+from core.image_codecs import PIL_AVAILABLE, thumbnail_to_jpeg_bytes
 from core.database.manager import slugify_label
+from core.image_paths import evidence_workspace_root, safe_relative_artifact_path
 from reports.paths import get_module_template_dir
 
-# Try to import PIL for thumbnail generation
-try:
-    from PIL import Image as PILImage
-    HAS_PIL = True
-except ImportError:
-    HAS_PIL = False
+HAS_PIL = PIL_AVAILABLE
 
 # Module directory for template resolution
 _MODULE_DIR = get_module_template_dir(__file__)
@@ -260,9 +255,18 @@ class DownloadedImagesModule(BaseReportModule):
         rows = cursor.fetchall()
         columns = [desc[0] for desc in cursor.description]
 
+        total_count = len(rows)
+        display_rows = rows
+        if limit_str != "all":
+            try:
+                limit = int(limit_str)
+                display_rows = rows[:limit]
+            except (ValueError, TypeError):
+                pass
+
         # Process images
         images = []
-        for row in rows:
+        for row in display_rows:
             row_dict = dict(zip(columns, row))
             image_data = self._process_download(
                 row_dict,
@@ -274,14 +278,6 @@ class DownloadedImagesModule(BaseReportModule):
             )
             images.append(image_data)
 
-        # Apply limit
-        total_count = len(images)
-        if limit_str != "all":
-            try:
-                limit = int(limit_str)
-                images = images[:limit]
-            except (ValueError, TypeError):
-                pass
         shown_count = len(images)
 
         # Build filter description
@@ -292,8 +288,8 @@ class DownloadedImagesModule(BaseReportModule):
         # Load and render template
         template_path = self.get_template_path()
         if template_path and template_path.exists():
-            template_content = template_path.read_text(encoding="utf-8")
-            template = Template(template_content)
+            env = Environment(loader=FileSystemLoader(template_path.parent), autoescape=True)
+            template = env.get_template(template_path.name)
             return template.render(
                 images=images,
                 section_title=section_title,
@@ -496,24 +492,22 @@ class DownloadedImagesModule(BaseReportModule):
             if not image_path or not image_path.exists():
                 return ""
 
-            ensure_pillow_heif_registered()
-            # Open and create thumbnail
-            with PILImage.open(image_path) as img:
-                # Convert to RGB if necessary (for PNG with transparency)
-                if img.mode in ("RGBA", "P"):
-                    img = img.convert("RGB")
-
-                # Create thumbnail (maintains aspect ratio)
-                img.thumbnail(self.THUMB_SIZE, PILImage.Resampling.LANCZOS)
-
-                # Save to bytes
-                buffer = BytesIO()
-                img.save(buffer, format="JPEG", quality=85)
-                buffer.seek(0)
-
-                # Encode as base64
-                b64 = base64.b64encode(buffer.read()).decode("utf-8")
-                return f"data:image/jpeg;base64,{b64}"
+            source_root = evidence_workspace_root(
+                case_folder=Path(case_folder),
+                evidence_id=evidence_id,
+                evidence_label=evidence_label,
+            )
+            if source_root is None:
+                return ""
+            thumb_bytes = thumbnail_to_jpeg_bytes(
+                image_path,
+                size=self.THUMB_SIZE,
+                containment_root=source_root,
+            )
+            if not thumb_bytes:
+                return ""
+            b64 = base64.b64encode(thumb_bytes).decode("utf-8")
+            return f"data:image/jpeg;base64,{b64}"
 
         except Exception:
             return ""
@@ -536,15 +530,12 @@ class DownloadedImagesModule(BaseReportModule):
         Returns:
             Full path to the downloaded file, or None if cannot resolve
         """
-        # Try dest_path directly first (may be absolute)
-        direct_path = Path(dest_path)
-        if direct_path.is_absolute() and direct_path.exists():
-            return direct_path
-
         if not case_folder:
-            # Try as relative path
-            if direct_path.exists():
-                return direct_path
+            return None
+
+        try:
+            case_root = Path(case_folder).resolve()
+        except OSError:
             return None
 
         # Build evidence slug using canonical slugify function
@@ -553,25 +544,35 @@ class DownloadedImagesModule(BaseReportModule):
         else:
             evidence_slug = f"evidence_{evidence_id}"
 
-        evidence_dir = case_folder / "evidences" / evidence_slug
+        evidence_dir = case_root / "evidences" / evidence_slug
+        if evidence_dir.is_symlink():
+            return None
 
-        # Downloads are stored in _downloads folder
+        evidence_root = evidence_dir.resolve()
+        if evidence_root != evidence_dir:
+            return None
+
+        raw_path = Path(dest_path)
+        if raw_path.is_absolute():
+            return None
+        rel_path = safe_relative_artifact_path(dest_path)
+        if rel_path is None:
+            return None
         downloads_dir = evidence_dir / "_downloads"
-
-        # Try with _downloads prefix
-        full_path = downloads_dir / dest_path
-        if full_path.exists():
-            return full_path
-
-        # Try without prefix (maybe dest_path is already relative to downloads)
-        relative_path = evidence_dir / dest_path
-        if relative_path.exists():
-            return relative_path
-
-        # Try from case folder directly
-        last_resort = case_folder / dest_path
-        if last_resort.exists():
-            return last_resort
+        candidates = (
+            downloads_dir / rel_path,
+            evidence_dir / rel_path,
+            case_root / rel_path,
+        )
+        for candidate in candidates:
+            try:
+                resolved = candidate.resolve()
+                resolved.relative_to(case_root)
+                resolved.relative_to(evidence_root)
+            except (OSError, ValueError):
+                continue
+            if resolved.exists():
+                return resolved
 
         return None
 

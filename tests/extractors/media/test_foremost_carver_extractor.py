@@ -1,8 +1,9 @@
 """Unit tests for ForemostCarverExtractor."""
 
+import json
 import sqlite3
 from pathlib import Path
-from unittest.mock import Mock, patch
+from unittest.mock import Mock, call, patch
 
 import pytest
 
@@ -76,6 +77,18 @@ def test_run_extraction_creates_manifest(mock_discover, mock_run, extractor, tmp
     assert manifest.exists()
     data = manifest.read_text()
     assert "foremost" in data
+    # Version recorded for the run comes from a fresh probe (issue #70);
+    # metadata reads during the run do not probe.
+    assert mock_discover.call_args_list == [call(refresh=True)]
+    assert json.loads(data)["tool"]["version"] == "1.5.7"
+
+
+@patch("extractors.media.foremost_carver.extractor.discover_tools")
+def test_metadata_does_not_discover_tools(mock_discover, extractor):
+    """Metadata is read per card and evidence tab; it must not probe (issue #70)."""
+    for _ in range(3):
+        assert extractor.metadata.requires_tools == ["foremost"]
+    mock_discover.assert_not_called()
 
 
 @patch("extractors.media.foremost_carver.extractor.run_image_ingestion")

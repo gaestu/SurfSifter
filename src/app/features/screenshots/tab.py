@@ -192,7 +192,9 @@ class ScreenshotsTab(QWidget):
         # Update model paths for thumbnail loading
         if self.case_folder and evidence_label and evidence_id:
             self.model.set_paths(self.case_folder, evidence_label, evidence_id)
-        self._refresh()
+        # Screenshots are read when the tab is shown (showEvent; issue #63)
+        if self.isVisible():
+            self._refresh()
 
     def _refresh(self) -> None:
         """Refresh the screenshots list."""

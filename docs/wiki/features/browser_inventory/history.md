@@ -20,3 +20,4 @@ History subtab - parsed browser history entries.
 
 ## Notes
 - URL actions open in the sandbox browser when available.
+- After ingestion, History reloads with the filters shown above the table. Browser and profile options are rebuilt from the evidence data; a selected browser or profile that no longer exists falls back to "All".

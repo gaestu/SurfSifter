@@ -8,6 +8,7 @@ from core.database import DatabaseManager
 from ._case import CaseMetadataMixin
 from ._downloads import DownloadQueryMixin
 from ._evidence import EvidenceMetadataMixin, EvidenceCounts
+from ._file_list import FileListQueryMixin
 from ._images import ImageQueryMixin
 from ._indicators import IndicatorQueryMixin
 from ._tags import TagQueryMixin
@@ -15,7 +16,7 @@ from ._timeline import TimelineQueryMixin
 from ._urls import UrlQueryMixin
 
 
-class CaseDataAccess(TagQueryMixin, TimelineQueryMixin, IndicatorQueryMixin, ImageQueryMixin, UrlQueryMixin, DownloadQueryMixin, EvidenceMetadataMixin, CaseMetadataMixin):
+class CaseDataAccess(TagQueryMixin, TimelineQueryMixin, IndicatorQueryMixin, ImageQueryMixin, UrlQueryMixin, FileListQueryMixin, DownloadQueryMixin, EvidenceMetadataMixin, CaseMetadataMixin):
     """Data access layer for case databases.
 
     Inherits connection management and caching from BaseDataAccess (via mixins).
@@ -34,6 +35,7 @@ class CaseDataAccess(TagQueryMixin, TimelineQueryMixin, IndicatorQueryMixin, Ima
     Moved find_similar_images, list_hash_matches to ImageQueryMixin.
     Download queries extracted to DownloadQueryMixin.
     get_top_domains() moved to UrlQueryMixin.
+    File List queries in FileListQueryMixin (issue #73).
     """
 
     def __init__(

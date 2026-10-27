@@ -58,6 +58,7 @@ EXTRACTOR_SECTIONS: List[ExtractorSection] = [
             "chromium_autofill",
             "chromium_sessions",
             "chromium_permissions",
+            "chromium_config",
             # Advanced artifacts
             "chromium_extensions",
             "chromium_favicons",

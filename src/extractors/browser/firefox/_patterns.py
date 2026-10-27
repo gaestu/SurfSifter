@@ -231,6 +231,12 @@ FIREFOX_ARTIFACTS: Dict[str, List[str]] = {
         "*/weave/*",
         "signedInUser.json",  # Tor Browser
     ],
+    "config": [
+        "*/prefs.js",
+        "*/user.js",
+        "prefs.js",  # Tor Browser
+        "user.js",   # Tor Browser
+    ],
     "cache": [
         # Firefox cache2 format (main entry files only)
         # doomed/* and trash/* are handled separately as supporting files

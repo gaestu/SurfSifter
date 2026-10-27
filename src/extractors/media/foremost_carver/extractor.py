@@ -115,11 +115,9 @@ class ForemostCarverExtractor(BaseExtractor):
 
     @property
     def metadata(self) -> ExtractorMetadata:
-        tools = discover_tools()
-        foremost = tools.get("foremost")
+        # Static: no tool discovery here, metadata is read per card and
+        # evidence tab (issue #70). Availability is checked in can_run_extraction.
         requires_tools = ["foremost"]
-        if foremost and foremost.available:
-            requires_tools = ["foremost"]
 
         return ExtractorMetadata(
             name="foremost_carver",
@@ -214,7 +212,8 @@ class ForemostCarverExtractor(BaseExtractor):
         # Get file types configuration (dynamically generates config file)
         file_types = config.get("file_types", self.DEFAULT_FILE_TYPES)
 
-        tools = discover_tools()
+        # Fresh probe: the version recorded in the manifest is the one run.
+        tools = discover_tools(refresh=True)
         foremost = tools.get("foremost")
         if not foremost or not foremost.available or not foremost.path:
             callbacks.on_error("Foremost not available")

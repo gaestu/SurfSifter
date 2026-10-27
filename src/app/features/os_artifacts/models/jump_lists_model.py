@@ -10,8 +10,8 @@ from typing import Any, Dict, List, Optional
 
 from PySide6.QtCore import QAbstractTableModel, QModelIndex, Qt
 
+from core.appid_loader import get_app_name
 from core.database import DatabaseManager
-from extractors._shared.appid_loader import get_app_name
 
 logger = logging.getLogger(__name__)
 
@@ -105,6 +105,8 @@ class JumpListsTableModel(QAbstractTableModel):
 
     def _load_data(self) -> None:
         """Load data from database with current filters."""
+        # Read by the tab to retry a failed load (issue #68)
+        self.load_failed = False
         try:
             conn = self.db_manager.get_evidence_conn(
                 self.evidence_id, self.evidence_label
@@ -153,6 +155,7 @@ class JumpListsTableModel(QAbstractTableModel):
 
         except Exception as e:
             logger.error("Failed to load Jump Lists: %s", e)
+            self.load_failed = True
             self._rows = []
             self._tag_map = {}
 

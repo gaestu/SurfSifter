@@ -13,7 +13,7 @@ Tests cover:
 import sqlite3
 import tempfile
 from pathlib import Path
-from unittest.mock import Mock, MagicMock, patch
+from unittest.mock import Mock, MagicMock, call, patch
 import pytest
 
 from extractors._shared.carving import ImageCarvingExtractor
@@ -242,6 +242,8 @@ def test_run_extraction_success(mock_discover, mock_carving, extractor, temp_wor
 
     assert success is True
     mock_callbacks.on_step.assert_called()
+    # Version recorded for the run comes from a fresh probe (issue #70)
+    assert call(refresh=True) in mock_discover.call_args_list
 
 
 @patch("extractors._shared.carving.worker.run_carving_extraction")

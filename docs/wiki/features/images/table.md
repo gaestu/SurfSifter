@@ -10,7 +10,7 @@ Table subtab - sortable table view of image metadata.
 - Image records and files from the evidence database and case folder.
 
 ## Filters and controls
-- Uses the main Images tab filters (tags, source, extension, size, hash match).
+- Uses the main Images tab filters (tags including **Untagged**, source, extension, size, hash match, URL and cache key with their Exclude fields; see the Filters section of [[./Overview|Overview]]).
 - Table view with selection, context menu, and double-click preview.
 - Actions: Export Selected, Tag Selected/Checked, Check Known Hashes, Find Similar, pagination.
 

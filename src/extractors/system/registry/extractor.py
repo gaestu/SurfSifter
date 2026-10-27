@@ -176,9 +176,22 @@ class SystemRegistryExtractor(BaseExtractor):
             if manifest_path.exists():
                 import json
                 manifest_data = json.loads(manifest_path.read_text())
-                # Registry uses 'extracted_hives' instead of 'files'
+                # Registry uses 'extracted_hives' instead of 'files'. Map the
+                # registry-specific manifest fields onto the shared extracted
+                # files audit contract so source provenance remains the
+                # evidence path, not the exported local hive copy.
                 if "extracted_hives" in manifest_data and "files" not in manifest_data:
-                    manifest_data["files"] = manifest_data["extracted_hives"]
+                    manifest_data["files"] = [
+                        {
+                            **hive_info,
+                            "source_path": hive_info.get("original_path"),
+                            "extracted_path": hive_info.get("local_path"),
+                            "local_filename": Path(str(hive_info.get("local_path") or "")).name,
+                            "file_size_bytes": hive_info.get("size"),
+                            "artifact_type": "registry_hive",
+                        }
+                        for hive_info in manifest_data["extracted_hives"]
+                    ]
                 from extractors._shared.extracted_files_audit import record_browser_files
                 record_browser_files(
                     evidence_conn=config.get("evidence_conn"),

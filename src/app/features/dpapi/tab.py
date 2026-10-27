@@ -69,14 +69,23 @@ class DPAPITab(QWidget):
         self.evidence_id = evidence_id
         self._evidence_label = evidence_label
         self._data_loaded = False
-        if defer_load:
-            self._load_pending = True
-        else:
-            self._load_data()
+        self._load_pending = True
+        if not defer_load:
+            # Same lifecycle as the deferred load
+            self._perform_deferred_load()
 
     def refresh(self) -> None:
-        """Reload all data from the database."""
-        self._load_data()
+        """Reload all data from the database.
+
+        Before the first load only a visible tab loads now; a hidden one keeps
+        its pending load. On failure the tab stays stale so the next show
+        retries (issue #68).
+        """
+        if not self._data_loaded:
+            if self._load_pending and self.isVisible():
+                self._perform_deferred_load()
+            return
+        self._data_stale = not self._load_data()
 
     def mark_stale(self) -> None:
         """Mark data as stale for lazy refresh on next showEvent."""
@@ -84,11 +93,17 @@ class DPAPITab(QWidget):
 
     def showEvent(self, event) -> None:
         super().showEvent(event)
-        if self._load_pending and not self._data_loaded:
-            QTimer.singleShot(10, self._perform_deferred_load)
-        elif self._data_stale and self._data_loaded:
-            self._data_stale = False
-            QTimer.singleShot(10, self.refresh)
+        # State is checked again when the timer fires (no redundant loads)
+        if (self._load_pending and not self._data_loaded) or (self._data_stale and self._data_loaded):
+            QTimer.singleShot(10, self._run_scheduled_update)
+
+    def _run_scheduled_update(self) -> None:
+        """Run the load or refresh scheduled by showEvent, if still needed."""
+        if not self._data_loaded:
+            if self._load_pending:
+                self._perform_deferred_load()
+        elif self._data_stale:
+            self.refresh()
 
     # -- UI setup -------------------------------------------------------------
 
@@ -231,15 +246,22 @@ class DPAPITab(QWidget):
     def _perform_deferred_load(self) -> None:
         if self._data_loaded:
             return
+        # A failed load stays pending and is retried on the next show
+        if not self._load_data():
+            return
         self._data_loaded = True
         self._load_pending = False
-        self._load_data()
+        # Loaded fresh: an earlier mark_stale() is satisfied
+        self._data_stale = False
 
-    def _load_data(self) -> None:
-        """Fetch all DPAPI-related data and populate models."""
+    def _load_data(self) -> bool:
+        """Fetch all DPAPI-related data and populate models.
+
+        Returns False if reading the evidence database failed.
+        """
         if not self._db_manager or self.evidence_id is None or not self._evidence_label:
             self._clear_all()
-            return
+            return True
 
         try:
             conn = self._db_manager.get_evidence_conn(
@@ -253,6 +275,8 @@ class DPAPITab(QWidget):
         except Exception:
             logger.exception("Failed to load DPAPI data for evidence %s", self.evidence_id)
             self._clear_all()
+            return False
+        return True
 
     def _load_users_keys(self, conn: sqlite3.Connection) -> None:
         from core.database.helpers.dpapi import get_windows_users, get_dpapi_master_keys

@@ -9,11 +9,10 @@ from __future__ import annotations
 
 import base64
 import sqlite3
-from io import BytesIO
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from jinja2 import Template
+from jinja2 import Environment, FileSystemLoader
 
 from ..base import (
     BaseReportModule,
@@ -24,16 +23,12 @@ from ..base import (
 from ...dates import format_datetime
 from ...locales import get_translations, DEFAULT_LOCALE
 from core.database.helpers import get_screenshots, get_sequences, get_screenshot_count
-from core.image_codecs import ensure_pillow_heif_registered
+from core.image_codecs import PIL_AVAILABLE, thumbnail_to_jpeg_bytes
 from core.database.manager import slugify_label
+from core.image_paths import safe_relative_artifact_path
 from reports.paths import get_module_template_dir
 
-# Try to import PIL for thumbnail generation
-try:
-    from PIL import Image as PILImage
-    HAS_PIL = True
-except ImportError:
-    HAS_PIL = False
+HAS_PIL = PIL_AVAILABLE
 
 # Module directory for template resolution
 _MODULE_DIR = get_module_template_dir(__file__)
@@ -259,11 +254,11 @@ class ScreenshotsModule(BaseReportModule):
         # Load template
         template_path = self.get_template_path()
         if template_path and template_path.exists():
-            template_str = template_path.read_text(encoding="utf-8")
+            env = Environment(loader=FileSystemLoader(template_path.parent), autoescape=True)
+            template = env.get_template(template_path.name)
         else:
-            template_str = self._get_default_template()
-
-        template = Template(template_str)
+            env = Environment(autoescape=True)
+            template = env.from_string(self._get_default_template())
 
         return template.render(
             sequences=processed_sequences,
@@ -312,10 +307,28 @@ class ScreenshotsModule(BaseReportModule):
             if workspace_path and evidence_label:
                 try:
                     slug = slugify_label(evidence_label, evidence_id)
-                    image_path = workspace_path / "evidences" / slug / screenshot["dest_path"]
+                    rel_path = safe_relative_artifact_path(str(screenshot["dest_path"]))
+                    if rel_path is None:
+                        processed.append(item)
+                        continue
+                    case_root = workspace_path.resolve()
+                    evidence_dir = case_root / "evidences" / slug
+                    if evidence_dir.is_symlink():
+                        processed.append(item)
+                        continue
+                    evidence_root = evidence_dir.resolve()
+                    if evidence_root != evidence_dir:
+                        processed.append(item)
+                        continue
+                    image_path = (evidence_dir / rel_path).resolve()
+                    image_path.relative_to(case_root)
+                    image_path.relative_to(evidence_root)
 
                     if image_path.exists():
-                        item["thumbnail_b64"] = self._generate_thumbnail(image_path)
+                        item["thumbnail_b64"] = self._generate_thumbnail(
+                            image_path,
+                            evidence_root,
+                        )
                 except Exception:
                     pass
 
@@ -323,28 +336,25 @@ class ScreenshotsModule(BaseReportModule):
 
         return processed
 
-    def _generate_thumbnail(self, image_path: Path) -> Optional[str]:
+    def _generate_thumbnail(
+        self,
+        image_path: Path,
+        containment_root: Path,
+    ) -> Optional[str]:
         """Generate base64 encoded thumbnail."""
         if not HAS_PIL:
             return None
 
         try:
-            ensure_pillow_heif_registered()
-            with PILImage.open(image_path) as img:
-                img.thumbnail(self.THUMB_SIZE, PILImage.Resampling.LANCZOS)
-
-                # Convert to RGB if necessary
-                if img.mode in ("RGBA", "P"):
-                    img = img.convert("RGB")
-
-                # Save to buffer
-                buffer = BytesIO()
-                img.save(buffer, format="JPEG", quality=85)
-                buffer.seek(0)
-
-                # Encode to base64
-                b64 = base64.b64encode(buffer.read()).decode("ascii")
-                return f"data:image/jpeg;base64,{b64}"
+            thumb_bytes = thumbnail_to_jpeg_bytes(
+                image_path,
+                size=self.THUMB_SIZE,
+                containment_root=containment_root,
+            )
+            if not thumb_bytes:
+                return None
+            b64 = base64.b64encode(thumb_bytes).decode("ascii")
+            return f"data:image/jpeg;base64,{b64}"
 
         except Exception:
             return None

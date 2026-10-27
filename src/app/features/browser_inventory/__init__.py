@@ -2,7 +2,7 @@
 
 Provides comprehensive browser artifact viewing: history, cookies, bookmarks,
 downloads, autofill, credentials, sessions, permissions, media, extensions,
-storage, tokens, and cache.
+browser config, storage, tokens, and cache.
 """
 
 from .tab import BrowserInventoryTab

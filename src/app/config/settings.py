@@ -57,6 +57,8 @@ class ToolPaths:
 @dataclass
 class GeneralSettings:
     thumbnail_size: int = 180
+    # Rows per page in the URLs tab flat view (issue #61).
+    url_page_size: int = 500
 
 
 @dataclass

@@ -88,6 +88,7 @@ class BaseArtifactSubtab(QWidget):
     - _setup_filters(filter_layout): Add filter widgets to the horizontal layout
     - _create_model(): Create and return the table model
     - _configure_table(): Set column widths after model is assigned
+    - _reload_rows(first_load): Load rows on each load()/reload (default: unfiltered)
     - _populate_filter_options(): Populate filter dropdowns after model is loaded
     - _apply_filters(): Read filter widget values and call model.load(...)
     - _update_status(): Update the status label text from model stats
@@ -171,6 +172,25 @@ class BaseArtifactSubtab(QWidget):
         filter_layout.addWidget(combo)
         return combo
 
+    @staticmethod
+    def _set_combo_options(combo: QComboBox, options: List[tuple]) -> None:
+        """Replace a filter combo's items with "All" plus ``(text, value)`` options.
+
+        The selection is kept by item data; a value that is gone falls back
+        to "All". Signals are blocked while the items are rebuilt.
+        """
+        selected = combo.currentData() or ""
+        combo.blockSignals(True)
+        try:
+            combo.clear()
+            combo.addItem("All", "")
+            for text, value in options:
+                combo.addItem(text, value)
+            index = combo.findData(selected)
+            combo.setCurrentIndex(index if index >= 0 else 0)
+        finally:
+            combo.blockSignals(False)
+
     # ─── Lazy Loading ─────────────────────────────────────────────────
 
     def load(self) -> None:
@@ -182,10 +202,7 @@ class BaseArtifactSubtab(QWidget):
                 self.table.setModel(self._model)
                 self._configure_table()
 
-            self._model.load()
-            if first_load:
-                self._populate_filter_options()
-            self._update_status()
+            self._reload_rows(first_load)
             self._loaded = True
 
         except Exception as e:
@@ -207,6 +224,18 @@ class BaseArtifactSubtab(QWidget):
     def _configure_table(self) -> None:
         """Override: set column widths after model is assigned."""
         pass
+
+    def _reload_rows(self, first_load: bool) -> None:
+        """Load the model's rows; called by load() once the model exists.
+
+        Default: an unfiltered load, filter options populated on the first
+        load only. Override to rebuild options and apply the displayed
+        filters on every reload.
+        """
+        self._model.load()
+        if first_load:
+            self._populate_filter_options()
+        self._update_status()
 
     def _populate_filter_options(self) -> None:
         """Override: populate filter dropdowns from model data."""

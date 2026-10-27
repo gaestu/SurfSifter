@@ -43,8 +43,8 @@ _add_if_exists(
 # collect_submodules() which only gathers .py modules.
 _add_if_exists(
     additional_dirs,
-    source_dir / "extractors" / "_shared" / "appids.json",
-    "extractors/_shared",
+    source_dir / "core" / "appids.json",
+    "core",
 )
 _add_if_exists(
     additional_dirs,

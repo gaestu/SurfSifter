@@ -269,6 +269,7 @@ CHROMIUM_BROWSERS: Dict[str, Dict[str, Any]] = {
             "home/*/.config/opera",
         ],
         "cache_roots": [
+            "Users/*/AppData/Local/Opera Software/Opera Stable",
             "Users/*/Library/Caches/com.operasoftware.Opera",
             "home/*/.cache/opera",
         ],
@@ -285,6 +286,7 @@ CHROMIUM_BROWSERS: Dict[str, Dict[str, Any]] = {
             "home/*/.config/opera-gx",
         ],
         "cache_roots": [
+            "Users/*/AppData/Local/Opera Software/Opera GX Stable",
             "Users/*/Library/Caches/com.operasoftware.OperaGX",
             "home/*/.cache/opera-gx",
         ],
@@ -306,6 +308,9 @@ PROFILE_PATTERNS: List[str] = [
     "Guest Profile",
     "System Profile",
 ]
+
+
+ROOT_SCOPED_ARTIFACTS = {"local_state"}
 
 
 # Artifact paths relative to profile directory
@@ -348,6 +353,9 @@ CHROMIUM_ARTIFACTS: Dict[str, List[str]] = {
         # Alias for Preferences file - used by sync_data and other extractors
         # that need the full Preferences JSON (not just permissions section)
         "Preferences",
+    ],
+    "local_state": [
+        "Local State",
     ],
     "extensions": [
         "Extensions",
@@ -423,7 +431,7 @@ def get_patterns_for_root(root_path: str, artifact: str, flat_profile: bool = Fa
     artifact_paths = CHROMIUM_ARTIFACTS[artifact]
     patterns: List[str] = []
 
-    if flat_profile:
+    if artifact in ROOT_SCOPED_ARTIFACTS or flat_profile:
         for artifact_path in artifact_paths:
             patterns.append(f"{normalized_root}/{artifact_path}")
     else:
@@ -487,7 +495,7 @@ def get_patterns(browser: str, artifact: str) -> List[str]:
 
     patterns = []
     for profile_root in profile_roots:
-        if is_flat:
+        if artifact in ROOT_SCOPED_ARTIFACTS or is_flat:
             # Opera-style: artifacts directly under profile root
             for artifact_path in artifact_paths:
                 patterns.append(f"{profile_root}/{artifact_path}")

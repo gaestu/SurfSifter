@@ -198,7 +198,10 @@ class BulkExtractorExtractor(BaseExtractor):
         # Start statistics tracking (may be None in tests)
         evidence_id = config.get("evidence_id", 1)
         evidence_label = config.get("evidence_label", "")
-        run_id = self._generate_run_id()
+        run_id = config.get("run_id")
+        if not run_id:
+            run_id = self._generate_run_id()
+            config["run_id"] = run_id
         stats = StatisticsCollector.instance()
         if stats:
             stats.start_run(evidence_id, evidence_label, self.metadata.name, run_id)
@@ -379,7 +382,10 @@ class BulkExtractorExtractor(BaseExtractor):
         # Continue statistics tracking from extraction phase (unified card)
         # This continues the same run started during extraction, preserving discovered counts
         evidence_label = config.get("evidence_label", "")
-        run_id = self._generate_run_id()
+        run_id = config.get("run_id")
+        if not run_id:
+            run_id = self._generate_run_id()
+            config["run_id"] = run_id
         stats = StatisticsCollector.instance()
         if stats:
             # Use continue_run to preserve extraction stats in the same card
@@ -466,6 +472,7 @@ class BulkExtractorExtractor(BaseExtractor):
                 artifact_type,
                 evidence_conn,
                 evidence_id,
+                run_id,
                 callbacks
             )
 
@@ -659,7 +666,10 @@ class BulkExtractorExtractor(BaseExtractor):
         processor = ParallelImageProcessor(enable_parallel=enable_parallel)
         results = processor.process_images(image_files, output_dir)
 
-        run_id = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+        run_id = config.get("run_id")
+        if not run_id:
+            run_id = self._generate_run_id()
+            config["run_id"] = run_id
         discovered_by = "bulk_extractor"
         extractor_version = self.metadata.version
 
@@ -814,6 +824,7 @@ class BulkExtractorExtractor(BaseExtractor):
         artifact_type: str,
         evidence_conn,
         evidence_id: int,
+        run_id: str,
         callbacks: ExtractorCallbacks
     ) -> int:
         """
@@ -885,7 +896,7 @@ class BulkExtractorExtractor(BaseExtractor):
                             "info"
                         )
                         inserted = self._insert_artifact_batch(
-                            evidence_conn, evidence_id, artifact_type, artifacts_batch
+                            evidence_conn, evidence_id, artifact_type, artifacts_batch, run_id
                         )
                         total_imported += inserted
                         if inserted < len(artifacts_batch):
@@ -905,7 +916,7 @@ class BulkExtractorExtractor(BaseExtractor):
                     "info"
                 )
                 inserted = self._insert_artifact_batch(
-                    evidence_conn, evidence_id, artifact_type, artifacts_batch
+                    evidence_conn, evidence_id, artifact_type, artifacts_batch, run_id
                 )
                 total_imported += inserted
                 if inserted < len(artifacts_batch):
@@ -1024,7 +1035,8 @@ class BulkExtractorExtractor(BaseExtractor):
         evidence_conn,
         evidence_id: int,
         artifact_type: str,
-        artifacts_batch: list
+        artifacts_batch: list,
+        run_id: str
     ) -> int:
         """
         Insert a batch of artifacts into the appropriate table.
@@ -1057,25 +1069,25 @@ class BulkExtractorExtractor(BaseExtractor):
 
         try:
             if artifact_type == "url":
-                insert_urls(evidence_conn, evidence_id, artifacts_batch)
+                insert_urls(evidence_conn, evidence_id, artifacts_batch, run_id=run_id)
 
             elif artifact_type == "email":
-                insert_emails(evidence_conn, evidence_id, artifacts_batch)
+                insert_emails(evidence_conn, evidence_id, artifacts_batch, run_id=run_id)
 
             elif artifact_type == "domain":
-                insert_domains(evidence_conn, evidence_id, artifacts_batch)
+                insert_domains(evidence_conn, evidence_id, artifacts_batch, run_id=run_id)
 
             elif artifact_type == "ip":
-                insert_ip_addresses(evidence_conn, evidence_id, artifacts_batch)
+                insert_ip_addresses(evidence_conn, evidence_id, artifacts_batch, run_id=run_id)
 
             elif artifact_type == "bitcoin":
-                insert_bitcoin_addresses(evidence_conn, evidence_id, artifacts_batch)
+                insert_bitcoin_addresses(evidence_conn, evidence_id, artifacts_batch, run_id=run_id)
 
             elif artifact_type == "ether":
-                insert_ethereum_addresses(evidence_conn, evidence_id, artifacts_batch)
+                insert_ethereum_addresses(evidence_conn, evidence_id, artifacts_batch, run_id=run_id)
 
             elif artifact_type == "telephone":
-                insert_telephone_numbers(evidence_conn, evidence_id, artifacts_batch)
+                insert_telephone_numbers(evidence_conn, evidence_id, artifacts_batch, run_id=run_id)
 
             else:
                 LOGGER.warning(f"No insert function for artifact type: {artifact_type}")

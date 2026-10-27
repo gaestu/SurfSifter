@@ -15,6 +15,7 @@ from typing import Any, Dict, Iterable, List, Optional, Sequence
 from core.database.helpers import tags as tag_helpers
 
 from ._base import BaseDataAccess
+from ._stats_cache import TAG_STATISTICS_CATEGORIES
 
 
 class TagQueryMixin(BaseDataAccess):
@@ -38,7 +39,8 @@ class TagQueryMixin(BaseDataAccess):
         """
         List all tags for an evidence with usage counts.
 
-        Added in-memory caching for performance.
+        Served from the shared case statistics cache (issue #63); every tag
+        write below invalidates it.
 
         Args:
             evidence_id: Evidence ID
@@ -48,22 +50,20 @@ class TagQueryMixin(BaseDataAccess):
             List of tag dicts with keys: id, name, name_normalized,
             usage_count, created_by, created_at_utc
         """
-        # Guard: return empty list if evidence DB doesn't exist yet
-        if not self._evidence_db_exists(evidence_id):
-            return []
+        def compute() -> List[Dict[str, Any]]:
+            with self._use_evidence_conn(evidence_id):
+                with self._connect() as conn:
+                    return tag_helpers.get_all_tags(conn, evidence_id)
 
-        cache_key = f"tags_{evidence_id}"
-        if use_cache:
-            cached = self._get_cached(cache_key)
-            if cached is not None:
-                return cached
-
-        with self._use_evidence_conn(evidence_id):
-            with self._connect() as conn:
-                result = tag_helpers.get_all_tags(conn, evidence_id)
-
-        self._set_cached(cache_key, result)
-        return result
+        return self._cached_stat(
+            evidence_id,
+            ("tags",),
+            TAG_STATISTICS_CATEGORIES,
+            compute,
+            use_cache=use_cache,
+            # Guard: empty list (uncached) if the evidence DB doesn't exist yet
+            empty=list,
+        )
 
     def get_tag(self, evidence_id: int, name: str) -> Optional[Dict[str, Any]]:
         """
@@ -135,12 +135,10 @@ class TagQueryMixin(BaseDataAccess):
         """
         Invalidate tag-related caches for an evidence.
 
-        Added thread lock for thread-safety (Bug #4 fix).
+        Bumps the ``tags`` category of the shared case statistics cache
+        (tag lists with usage counts, tag statistics; issue #63).
         """
-        cache_key = f"tags_{evidence_id}"
-        with self._filter_cache_lock:
-            if cache_key in self._filter_cache:
-                del self._filter_cache[cache_key]
+        self.stats_cache.invalidate(evidence_id, TAG_STATISTICS_CATEGORIES)
 
     def merge_tags(
         self,

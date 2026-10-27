@@ -5,6 +5,7 @@ This package provides domain-specific CRUD operations for all artifact tables.
 
 Exports:
 - Generic CRUD: insert_rows, insert_row, get_rows, delete_by_run, get_distinct_values, get_count
+- SQL utilities: escape_like, LIKE_ESCAPE_CHAR
 - Statistics: upsert_extractor_statistics, get_extractor_statistics_*
 - Browser History: insert_browser_history*, get_browser_history*, delete_browser_history_by_run
 - Cookies: insert_cookie*, get_cookies, get_cookie_*, delete_cookies_by_run
@@ -12,6 +13,7 @@ Exports:
 - Browser Downloads: insert_browser_download*, get_browser_downloads, delete_browser_downloads_by_run
 - Images: insert_image*, get_image*, delete_images_by_run
 - URLs: insert_url*, get_urls, delete_urls_by_run
+- URL search index: ensure_url_search_index, build_url_search_index_step, plan_url_search_candidates
 - Timeline: insert_timeline_*, get_timeline_*, delete_timeline_by_run
 - Process Log: insert_process_log, get_process_logs
 - Artifacts (bulk_extractor): insert_bitcoins, insert_emails, insert_ips, etc.
@@ -26,6 +28,7 @@ Exports:
 - Sync Data: insert_sync_data*, get_sync_data*
 - Favicons: insert_favicon*, get_favicons*, favicon_mappings, top_sites
 - Browser Inventory: get_browser_inventory
+- Browser Config: insert_browser_config*, get_browser_config*, delete_browser_config_by_run
 - Batch Operations: get_evidence_table_counts, purge_evidence_data
 - OS Indicators: insert_os_indicator*, get_os_indicators*, platform_detections
 - Hash Matches: insert_hash_match*, get_hash_matches*, url_matches
@@ -42,6 +45,7 @@ from .generic import (
     insert_row,
     insert_rows,
 )
+from .sql_utils import LIKE_ESCAPE_CHAR, escape_like
 from .statistics import (
     delete_extractor_statistics_by_evidence,
     delete_extractor_statistics_by_run,
@@ -162,6 +166,19 @@ from .urls import (
     # Deduplication
     analyze_url_duplicates,
     deduplicate_urls,
+)
+
+# URL search index (issue #62)
+from .url_search_index import (
+    URL_SEARCH_INDEX_BUILD_TASK,
+    UrlSearchIndexStatus,
+    url_search_index_supported,
+    ensure_url_search_index,
+    get_url_search_index_status,
+    build_url_search_index_step,
+    reset_url_search_index,
+    url_search_match_query,
+    plan_url_search_candidates,
 )
 
 # URL Tags
@@ -487,6 +504,7 @@ from .browser_config import (
     insert_browser_configs,
     get_browser_configs,
     get_browser_config_keys,
+    get_browser_config_filter_values,
     delete_browser_config_by_run,
     insert_tor_state,
     insert_tor_states,
@@ -672,6 +690,9 @@ __all__ = [
     "get_rows",
     "insert_row",
     "insert_rows",
+    # SQL utilities
+    "LIKE_ESCAPE_CHAR",
+    "escape_like",
     # Statistics
     "delete_extractor_statistics_by_evidence",
     "delete_extractor_statistics_by_run",
@@ -765,6 +786,16 @@ __all__ = [
     # Deduplication
     "analyze_url_duplicates",
     "deduplicate_urls",
+    # URL search index
+    "URL_SEARCH_INDEX_BUILD_TASK",
+    "UrlSearchIndexStatus",
+    "url_search_index_supported",
+    "ensure_url_search_index",
+    "get_url_search_index_status",
+    "build_url_search_index_step",
+    "reset_url_search_index",
+    "url_search_match_query",
+    "plan_url_search_candidates",
     # URL Tags
     "insert_url_tags",
     "get_url_tags",
@@ -1109,6 +1140,7 @@ __all__ = [
     "insert_browser_configs",
     "get_browser_configs",
     "get_browser_config_keys",
+    "get_browser_config_filter_values",
     "delete_browser_config_by_run",
     "insert_tor_state",
     "insert_tor_states",

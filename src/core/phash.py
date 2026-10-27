@@ -4,17 +4,15 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Optional, BinaryIO
 
+from .image_codecs import DEFAULT_MAX_IMAGE_PIXELS, ensure_pillow_heif_registered
+
 try:
     import imagehash
     from PIL import Image
     IMAGEHASH_AVAILABLE = True
-    # Set a reasonable pixel limit to prevent decompression bombs during phash
-    # This is checked by Image.open() when loading the image data
-    Image.MAX_IMAGE_PIXELS = 175_000_000
 except ImportError:
     IMAGEHASH_AVAILABLE = False
 
-from .image_codecs import ensure_pillow_heif_registered
 from .logging import get_logger
 
 LOGGER = get_logger("core.phash")
@@ -41,10 +39,16 @@ def compute_phash(image_path_or_stream: Path | BinaryIO) -> Optional[str]:
 
     try:
         ensure_pillow_heif_registered()
-        img = Image.open(image_path_or_stream)
-        # Use average hash - good balance of speed and accuracy
-        phash = imagehash.average_hash(img)
-        return str(phash)
+        with Image.open(image_path_or_stream) as img:
+            if img.width * img.height > DEFAULT_MAX_IMAGE_PIXELS:
+                LOGGER.debug(
+                    "Skipping phash for oversized image: %sx%s pixels",
+                    img.width,
+                    img.height,
+                )
+                return None
+            phash = imagehash.average_hash(img)
+            return str(phash)
     except Exception as exc:
         LOGGER.debug("Failed to compute phash: %s", exc)
         return None

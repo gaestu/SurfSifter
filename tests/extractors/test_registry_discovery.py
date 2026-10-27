@@ -13,6 +13,7 @@ from extractors.browser.chromium.cookies import ChromiumCookiesExtractor
 from extractors.browser.chromium.downloads import ChromiumDownloadsExtractor
 from extractors.browser.firefox.autofill import FirefoxAutofillExtractor
 from extractors.browser.firefox.bookmarks import FirefoxBookmarksExtractor
+from extractors.browser.firefox.config import FirefoxConfigExtractor
 from extractors.browser.firefox.cookies import FirefoxCookiesExtractor
 from extractors.browser.firefox.downloads import FirefoxDownloadsExtractor
 from extractors.browser.firefox.history import FirefoxHistoryExtractor
@@ -43,6 +44,7 @@ EXPECTED_NAMES = {
 }
 
 EXPECTED_FIREFOX = {
+    "firefox_config",
     "firefox_history",
     "firefox_cookies",
     "firefox_bookmarks",
@@ -66,6 +68,7 @@ REGISTRY_INSTANCES = [
     ("chromium_downloads", ChromiumDownloadsExtractor),
     ("firefox_autofill", FirefoxAutofillExtractor),
     ("firefox_bookmarks", FirefoxBookmarksExtractor),
+    ("firefox_config", FirefoxConfigExtractor),
     ("firefox_cookies", FirefoxCookiesExtractor),
     ("firefox_downloads", FirefoxDownloadsExtractor),
     ("firefox_history", FirefoxHistoryExtractor),

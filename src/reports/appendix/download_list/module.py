@@ -6,7 +6,7 @@ Uses parallel thumbnail generation with disk caching for performance.
 Performance notes:
 - Thumbnails are generated in parallel via ThreadPoolExecutor
 - Thumbnails are cached to disk under ``{case_folder}/report_thumbs/downloads/``
-- Thumbnails are referenced via file:// URIs to keep HTML small
+- Cached thumbnails are read back through no-follow checks and embedded inline
 """
 
 from __future__ import annotations
@@ -14,9 +14,9 @@ from __future__ import annotations
 import base64
 import hashlib
 import logging
+import re
 import sqlite3
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from io import BytesIO
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
@@ -25,24 +25,28 @@ from jinja2 import Environment, FileSystemLoader
 from ..base import BaseAppendixModule, FilterField, FilterType, ModuleMetadata
 from ...dates import format_datetime
 from ...paths import get_module_template_dir
-from core.image_codecs import ensure_pillow_heif_registered
+from core.image_codecs import (
+    PIL_AVAILABLE,
+    ensure_pillow_heif_registered,
+    thumbnail_to_jpeg_bytes,
+)
 from core.database.manager import slugify_label
+from core.image_paths import evidence_workspace_root, safe_relative_artifact_path
+from core.safe_io import (
+    ensure_dir_no_follow,
+    write_bytes_no_follow,
+)
 
 logger = logging.getLogger(__name__)
+_MD5_HEX_RE = re.compile(r"^[0-9a-fA-F]{32}$")
 
-# Try to import PIL for thumbnail generation
-try:
-    from PIL import Image as PILImage
-
-    HAS_PIL = True
-except ImportError:
-    HAS_PIL = False
+HAS_PIL = PIL_AVAILABLE
 
 # Maximum number of SQL parameters per query (conservative, SQLite default is 999)
 _SQL_CHUNK_SIZE = 500
 
 # Number of parallel threads for thumbnail generation
-_THUMB_WORKERS = 8
+_THUMB_WORKERS = 2
 
 
 class AppendixDownloadListModule(BaseAppendixModule):
@@ -399,52 +403,80 @@ class AppendixDownloadListModule(BaseAppendixModule):
         """Return (and create) thumbnail cache directory under the case folder."""
         if not case_folder:
             return None
-        cache_dir = Path(case_folder) / "report_thumbs" / "downloads"
+        case_root = Path(case_folder).resolve()
+        cache_root = case_root / "report_thumbs"
         try:
-            cache_dir.mkdir(parents=True, exist_ok=True)
-        except OSError:
+            ensure_dir_no_follow(cache_root, containment_root=case_root)
+            resolved_cache_root = cache_root.resolve()
+            if resolved_cache_root != cache_root:
+                return None
+            resolved_cache_root.relative_to(case_root)
+            cache_dir = resolved_cache_root / "downloads"
+            ensure_dir_no_follow(cache_dir, containment_root=case_root)
+            resolved_cache_dir = cache_dir.resolve()
+            if resolved_cache_dir != cache_dir:
+                return None
+            resolved_cache_dir.relative_to(case_root)
+        except (OSError, ValueError):
             return None
-        return cache_dir
+        return resolved_cache_dir
 
     @staticmethod
-    def _thumb_cache_key(download_id: int, md5: Optional[str]) -> str:
+    def _thumb_cache_key(
+        download_id: int,
+        md5: Optional[str],
+        evidence_id: Optional[int] = None,
+        dest_path: str = "",
+    ) -> str:
         """Deterministic cache key for a thumbnail."""
-        if md5:
-            return md5
-        raw = f"download:{download_id}"
+        digest = md5.lower() if md5 and _MD5_HEX_RE.fullmatch(md5) else ""
+        raw = f"download:{evidence_id}:{download_id}:{digest}:{dest_path}"
         return hashlib.md5(raw.encode(), usedforsecurity=False).hexdigest()
+
+    @staticmethod
+    def _safe_thumb_cache_path(cache_dir: Path, key: str) -> Optional[Path]:
+        """Return a cache path only if it resolves under ``cache_dir``."""
+        try:
+            cache_root = cache_dir.resolve()
+            cache_path = cache_root / f"{key}.jpg"
+            resolved_cache_path = cache_path.resolve()
+            resolved_cache_path.relative_to(cache_root)
+        except (OSError, ValueError):
+            return None
+        return cache_path
 
     def _generate_single_thumbnail(
         self,
         image_path: Optional[Path],
         cache_path: Optional[Path],
+        cache_containment_root: Optional[Path] = None,
+        source_containment_root: Optional[Path] = None,
     ) -> str:
-        """Generate a thumbnail for one image, using cache when available.
+        """Generate a thumbnail for one image from the selected source artifact.
 
-        Returns a ``file://`` URI if cache is available, otherwise inline base64.
+        Returns an inline ``data:image/jpeg;base64,...`` string.
         """
-        # Check disk cache first
-        if cache_path and cache_path.exists() and cache_path.stat().st_size > 100:
-            return cache_path.as_uri()
-
         if not image_path:
             return ""
 
         try:
-            with PILImage.open(image_path) as img:
-                if img.mode in ("RGBA", "P"):
-                    img = img.convert("RGB")
-                img.thumbnail(self.THUMB_SIZE, PILImage.Resampling.LANCZOS)
-
-                buffer = BytesIO()
-                img.save(buffer, format="JPEG", quality=85)
-                thumb_bytes = buffer.getvalue()
+            thumb_bytes = thumbnail_to_jpeg_bytes(
+                image_path,
+                size=self.THUMB_SIZE,
+                containment_root=source_containment_root,
+            )
+            if not thumb_bytes:
+                return ""
 
             # Try to write to disk cache
             if cache_path:
                 try:
-                    cache_path.write_bytes(thumb_bytes)
-                    return cache_path.as_uri()
+                    write_bytes_no_follow(
+                        cache_path,
+                        thumb_bytes,
+                        containment_root=cache_containment_root or cache_path.parent,
+                        exclusive=True,
+                    )
                 except OSError:
                     pass
 
@@ -470,6 +502,20 @@ class AppendixDownloadListModule(BaseAppendixModule):
             return result
 
         work_items: List[tuple] = []
+        cache_containment_root = (
+            thumb_cache_dir.parent.parent
+            if thumb_cache_dir
+            else (Path(case_folder).resolve() if case_folder else None)
+        )
+        source_containment_root = (
+            evidence_workspace_root(
+                case_folder=Path(case_folder),
+                evidence_id=evidence_id,
+                evidence_label=evidence_label,
+            )
+            if case_folder
+            else None
+        )
         for row in download_rows:
             dest_path = row.get("dest_path")
             if not dest_path:
@@ -478,35 +524,33 @@ class AppendixDownloadListModule(BaseAppendixModule):
 
             cache_path: Optional[Path] = None
             if thumb_cache_dir:
-                key = self._thumb_cache_key(download_id, row.get("md5"))
-                cache_path = thumb_cache_dir / f"{key}.jpg"
+                key = self._thumb_cache_key(
+                    download_id,
+                    row.get("md5"),
+                    evidence_id,
+                    dest_path,
+                )
+                cache_path = self._safe_thumb_cache_path(thumb_cache_dir, key)
 
-                # Cache hit — skip path resolution
-                if cache_path.exists() and cache_path.stat().st_size > 100:
-                    work_items.append((download_id, None, cache_path))
-                    continue
-
-            # Resolve source path
             source_path = self._resolve_download_path(
                 dest_path, case_folder, evidence_id, evidence_label
             )
             if not source_path or not source_path.exists():
                 continue
 
-            work_items.append((download_id, source_path, cache_path))
+            has_stable_cache_key = bool(row.get("md5") and _MD5_HEX_RE.match(str(row.get("md5"))))
+            work_items.append(
+                (
+                    download_id,
+                    source_path,
+                    cache_path if has_stable_cache_key else None,
+                    cache_containment_root,
+                    source_containment_root,
+                )
+            )
 
         total = len(work_items)
         if total == 0:
-            return result
-
-        # Fast path: all cached
-        uncached = [item for item in work_items if item[1] is not None]
-        if not uncached:
-            logger.debug("All %d download thumbnails served from cache", total)
-            for download_id, _src, cache_path in work_items:
-                result[download_id] = cache_path.as_uri()  # type: ignore[union-attr]
-            if progress_cb:
-                progress_cb(60, f"All {total} thumbnails loaded from cache")
             return result
 
         # Parallel generation
@@ -514,8 +558,13 @@ class AppendixDownloadListModule(BaseAppendixModule):
         workers = min(_THUMB_WORKERS, total)
 
         def _task(item: tuple) -> tuple:
-            download_id, source_path, cache_path = item
-            ref = self._generate_single_thumbnail(source_path, cache_path)
+            download_id, source_path, cache_path, cache_root, source_root = item
+            ref = self._generate_single_thumbnail(
+                source_path,
+                cache_path,
+                cache_root,
+                source_root,
+            )
             return (download_id, ref)
 
         with ThreadPoolExecutor(max_workers=workers) as executor:
@@ -547,14 +596,12 @@ class AppendixDownloadListModule(BaseAppendixModule):
         evidence_label: Optional[str],
     ) -> Optional[Path]:
         """Resolve a download's destination path to its full filesystem path."""
-        # Try dest_path directly first (may be absolute)
-        direct_path = Path(dest_path)
-        if direct_path.is_absolute() and direct_path.exists():
-            return direct_path
-
         if not case_folder:
-            if direct_path.exists():
-                return direct_path
+            return None
+
+        try:
+            case_root = Path(case_folder).resolve()
+        except OSError:
             return None
 
         # Build evidence slug
@@ -563,24 +610,33 @@ class AppendixDownloadListModule(BaseAppendixModule):
         else:
             evidence_slug = f"evidence_{evidence_id}"
 
-        evidence_dir = case_folder / "evidences" / evidence_slug
+        evidence_dir = case_root / "evidences" / evidence_slug
+        if evidence_dir.is_symlink():
+            return None
+        evidence_root = evidence_dir.resolve()
+        if evidence_root != evidence_dir:
+            return None
 
-        # Downloads are stored in _downloads folder
+        raw_path = Path(dest_path)
+        if raw_path.is_absolute():
+            return None
+        rel_path = safe_relative_artifact_path(dest_path)
+        if rel_path is None:
+            return None
         downloads_dir = evidence_dir / "_downloads"
-
-        # Try with _downloads prefix
-        full_path = downloads_dir / dest_path
-        if full_path.exists():
-            return full_path
-
-        # Try without prefix
-        relative_path = evidence_dir / dest_path
-        if relative_path.exists():
-            return relative_path
-
-        # Try from case folder directly
-        last_resort = case_folder / dest_path
-        if last_resort.exists():
-            return last_resort
+        candidates = (
+            downloads_dir / rel_path,
+            evidence_dir / rel_path,
+            case_root / rel_path,
+        )
+        for candidate in candidates:
+            try:
+                resolved = candidate.resolve()
+                resolved.relative_to(case_root)
+                resolved.relative_to(evidence_root)
+            except (OSError, ValueError):
+                continue
+            if resolved.exists():
+                return resolved
 
         return None

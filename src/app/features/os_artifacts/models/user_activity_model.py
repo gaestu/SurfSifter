@@ -92,6 +92,8 @@ class UserActivityModel(QAbstractTableModel):
 
     def _load_data(self) -> None:
         """Load data from database with current filters."""
+        # Read by the tab to retry a failed load (issue #68)
+        self.load_failed = False
         try:
             conn = self.db_manager.get_evidence_conn(
                 self.evidence_id, self.evidence_label
@@ -153,6 +155,7 @@ class UserActivityModel(QAbstractTableModel):
 
         except Exception as e:
             logger.exception("Failed to load user activity data: %s", e)
+            self.load_failed = True
             self._rows = []
             self._tag_map = {}
 

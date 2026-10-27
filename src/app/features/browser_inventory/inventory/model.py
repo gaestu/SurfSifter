@@ -70,7 +70,15 @@ class BrowserInventoryModel(QAbstractTableModel):
         "pending": "⊙",
     }
 
-    def __init__(self, case_folder: str, evidence_id: int, case_db_path: Path, parent=None):
+    def __init__(
+        self,
+        case_folder: str,
+        evidence_id: int,
+        case_db_path: Path,
+        parent=None,
+        *,
+        load: bool = True,
+    ):
         """
         Initialize browser inventory model.
 
@@ -79,6 +87,7 @@ class BrowserInventoryModel(QAbstractTableModel):
             evidence_id: Evidence ID
             case_db_path: Path to case database file
             parent: Parent widget
+            load: Load the data now (False: on the first ``refresh()``)
         """
         super().__init__(parent)
         self.case_folder = Path(case_folder)
@@ -99,7 +108,8 @@ class BrowserInventoryModel(QAbstractTableModel):
             "status": "",  # All statuses (or specific: ok, partial, error, pending)
         }
 
-        self._load_data()
+        if load:
+            self._load_data()
 
     def _get_evidence_label(self) -> str:
         """
