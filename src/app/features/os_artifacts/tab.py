@@ -299,24 +299,12 @@ class OSArtifactsTab(QWidget):
         """
         self.evidence_id = evidence_id
         self._data_loaded = False
+        # Pending until loaded; deferred loading waits for showEvent
+        self._load_pending = True
 
         if not defer_load:
-            # Immediate loading (legacy behavior)
-            self.model.set_evidence(evidence_id)
-            self._init_jump_lists_model()  # Initialize Jump Lists model
-            self._init_software_model()  # Initialize Installed Software model
-            self._init_app_execution_model()  # Initialize App Execution model
-            self._init_user_activity_model()  # Initialize User Activity model
-            self._populate_filters()
-            self._populate_jump_lists_filters()
-            self._update_summary()
-            self._update_jump_lists_summary()
-            self._update_software_summary()
-            self._update_app_execution_summary()
-            self._update_user_activity_summary()
-        else:
-            # Deferred loading - just store the ID, load on showEvent
-            self._load_pending = True
+            # Immediate loading (legacy behavior), same lifecycle as deferred
+            self._perform_deferred_load()
 
     def set_db_manager(self, db_manager, evidence_label: str = "") -> None:
         """Store database manager reference for subtab models."""
@@ -333,22 +321,23 @@ class OSArtifactsTab(QWidget):
         self.tabs.addTab(widget, label)
 
     def refresh(self) -> None:
-        self.model.reload()
-        if self.jl_model:
-            self.jl_model.reload()
-        if self.sw_model:
-            self.sw_model.reload()
-        if self.ae_model:
-            self.ae_model.reload()
-        if self.ua_model:
-            self.ua_model.reload()
-        if self._dpapi_tab:
-            self._dpapi_tab.refresh()
-        self._update_summary()
-        self._update_jump_lists_summary()
-        self._update_software_summary()
-        self._update_app_execution_summary()
-        self._update_user_activity_summary()
+        """Reload rows, filter choices and summaries of every subtab (issue #68).
+
+        Before the first load only a visible tab loads now; a hidden one keeps
+        its pending load, which reads the current rows when shown. On failure
+        the tab stays stale so the next show retries.
+        """
+        if not self._data_loaded:
+            if self._load_pending and self.isVisible():
+                self._perform_deferred_load()
+            return
+        try:
+            self._reload_data()
+        except Exception:
+            LOGGER.exception("Failed to refresh OS Artifacts for evidence %s", self.evidence_id)
+            self._data_stale = True
+            return
+        self._data_stale = False
 
     def mark_stale(self) -> None:
         """Mark data as stale - will refresh on next showEvent.
@@ -357,30 +346,52 @@ class OSArtifactsTab(QWidget):
         Called by main.py when data changes but tab is not visible.
         """
         self._data_stale = True
-        if self._dpapi_tab:
+        # Once loaded, the refresh on next show also covers DPAPI (refreshed
+        # if shown, else marked stale); marking it here too would load twice
+        if self._dpapi_tab and not self._data_loaded:
             self._dpapi_tab.mark_stale()
 
     def showEvent(self, event):
         """Override showEvent to perform lazy loading when tab becomes visible."""
         super().showEvent(event)
 
-        # Phase 3: Lazy loading - load data on first visibility
-        if self._load_pending and not self._data_loaded:
-            QTimer.singleShot(10, self._perform_deferred_load)
-        # Refresh if data was marked stale while tab was hidden
-        elif self._data_stale and self._data_loaded:
-            self._data_stale = False
-            QTimer.singleShot(10, self.refresh)
+        # Phase 3: load on first visibility, or refresh data marked stale while
+        # hidden. State is checked again when the timer fires, so repeated
+        # show events and MainWindow's sub-tab fallback do no redundant work.
+        if (self._load_pending and not self._data_loaded) or (self._data_stale and self._data_loaded):
+            QTimer.singleShot(10, self._run_scheduled_update)
+
+    def _run_scheduled_update(self) -> None:
+        """Run the load or refresh scheduled by showEvent, if still needed."""
+        if not self._data_loaded:
+            if self._load_pending:
+                self._perform_deferred_load()
+        elif self._data_stale:
+            self.refresh()
 
     def _perform_deferred_load(self) -> None:
-        """Perform the deferred data loading."""
+        """Perform the deferred data loading.
+
+        The tab counts as loaded only after the load succeeded; a failed load
+        stays pending and is retried on the next show.
+        """
         if self._data_loaded:
+            return
+
+        try:
+            self._load_data()
+        except Exception:
+            LOGGER.exception("Failed to load OS Artifacts for evidence %s", self.evidence_id)
+            self._load_pending = True
             return
 
         self._data_loaded = True
         self._load_pending = False
+        # Loaded fresh: an earlier mark_stale() is satisfied
+        self._data_stale = False
 
-        # Now actually load the data
+    def _load_data(self) -> None:
+        """Initialize all subtab models, filter choices and summaries."""
         if self.evidence_id is not None:
             self.model.set_evidence(self.evidence_id)
             self._init_jump_lists_model()
@@ -389,6 +400,52 @@ class OSArtifactsTab(QWidget):
             self._init_user_activity_model()
         self._populate_filters()
         self._populate_jump_lists_filters()
+        self._update_all_summaries()
+        self._raise_if_model_load_failed()
+
+    def _raise_if_model_load_failed(self) -> None:
+        """Turn a load error caught inside a model into a retryable failure."""
+        failed = [
+            type(model).__name__
+            for model in (self.jl_model, self.sw_model, self.ae_model, self.ua_model)
+            if model is not None and getattr(model, "load_failed", False)
+        ]
+        if failed:
+            raise RuntimeError(f"Failed to load {', '.join(failed)}")
+
+    def _reload_data(self) -> None:
+        """Reload the loaded models together with their filter choices."""
+        if self._dpapi_tab:
+            # Embedded DPAPI refreshes now only if shown, else on its next show.
+            # First, so a failure below cannot skip it.
+            if self._dpapi_tab.isVisible():
+                self._dpapi_tab.refresh()
+            else:
+                self._dpapi_tab.mark_stale()
+        # Rebuilds the indicator types and reloads the indicator model
+        self._populate_filters()
+        # Reload existing models; create those that could not be created before
+        if self.jl_model:
+            self.jl_model.reload()
+        else:
+            self._init_jump_lists_model()
+        if self.sw_model:
+            self.sw_model.reload()
+        else:
+            self._init_software_model()
+        if self.ae_model:
+            self.ae_model.reload()
+        else:
+            self._init_app_execution_model()
+        if self.ua_model:
+            self.ua_model.reload()
+        else:
+            self._init_user_activity_model()
+        self._populate_jump_lists_filters()
+        self._update_all_summaries()
+        self._raise_if_model_load_failed()
+
+    def _update_all_summaries(self) -> None:
         self._update_summary()
         self._update_jump_lists_summary()
         self._update_software_summary()
@@ -411,11 +468,13 @@ class OSArtifactsTab(QWidget):
         self.type_combo.addItem("All", userData="")
         for indicator_type in types:
             self.type_combo.addItem(indicator_type.title(), userData=indicator_type)
-        self.type_combo.blockSignals(False)
+        # Keep a selection that still exists; otherwise "All" (issue #68)
         if current is not None:
             index = self.type_combo.findData(current)
             if index != -1:
                 self.type_combo.setCurrentIndex(index)
+        self.type_combo.blockSignals(False)
+        # Apply the (possibly reset) selection to the model once
         self._on_filters_changed()
 
     def _on_filters_changed(self) -> None:
@@ -468,12 +527,14 @@ class OSArtifactsTab(QWidget):
         self.jl_browser_combo.addItem("All", userData="")
         for browser in browsers:
             self.jl_browser_combo.addItem(browser, userData=browser)
-        self.jl_browser_combo.blockSignals(False)
-
+        # Keep a selection that still exists; otherwise "All" (issue #68)
         if current:
             index = self.jl_browser_combo.findData(current)
             if index != -1:
                 self.jl_browser_combo.setCurrentIndex(index)
+        self.jl_browser_combo.blockSignals(False)
+        # Apply the widgets' filters to the model (reloads only if they differ)
+        self._on_jump_lists_filters_changed()
 
     def _on_jump_lists_filters_changed(self) -> None:
         """Apply Jump Lists filters."""
