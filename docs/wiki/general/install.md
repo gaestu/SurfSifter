@@ -56,6 +56,11 @@ python -m app.main
 
 ## System Requirements
 
+### Screen
+- Smallest supported screen: **1366×768**, or **1280×720** logical pixels (for example 1080p at 150% scaling).
+- The main window and the dialogs can be made as low as 600 px (with a font size of up to 11 pt). Message boxes with a long list, such as **Similar Images**, can be higher.
+- On small screens, the Case, Overview and Reports tabs and tall dialogs scroll. The Preview and PDF buttons in Reports and the button row of dialogs (OK, Cancel, Close…) always stay visible.
+
 ### Required system packages (Linux: Debian/Ubuntu)
 ```bash
 sudo apt-get install libewf-dev libtsk-dev build-essential python3-dev \

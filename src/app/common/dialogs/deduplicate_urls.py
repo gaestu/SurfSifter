@@ -31,6 +31,9 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from app.common.screen_fit import limit_to_screen
+from app.common.widgets import add_dialog_body
+
 logger = logging.getLogger(__name__)
 
 
@@ -146,14 +149,15 @@ class DeduplicateUrlsDialog(QDialog):
         self._analysis_result: Optional[Dict[str, Any]] = None
 
         self.setWindowTitle("Deduplicate URLs")
-        self.resize(550, 500)
 
         self._init_ui()
+        # High enough for the analysis result.
+        limit_to_screen(self, 550, 660)
         self._load_sources()
 
     def _init_ui(self) -> None:
         """Initialize the UI."""
-        layout = QVBoxLayout(self)
+        layout = add_dialog_body(self)
 
         # Sources selection
         sources_group = QGroupBox("Sources to deduplicate")
@@ -210,7 +214,7 @@ class DeduplicateUrlsDialog(QDialog):
 
         layout.addWidget(constraints_group)
 
-        # Analysis result / preview
+        # Analysis result and warning stay visible above the buttons
         preview_group = QGroupBox("Preview")
         preview_layout = QVBoxLayout(preview_group)
 
@@ -222,7 +226,7 @@ class DeduplicateUrlsDialog(QDialog):
         self.progress_bar.setVisible(False)
         preview_layout.addWidget(self.progress_bar)
 
-        layout.addWidget(preview_group)
+        self.layout().addWidget(preview_group)
 
         # Warning
         warning_layout = QHBoxLayout()
@@ -236,7 +240,7 @@ class DeduplicateUrlsDialog(QDialog):
         )
         warning_text.setWordWrap(True)
         warning_layout.addWidget(warning_text, 1)
-        layout.addLayout(warning_layout)
+        self.layout().addLayout(warning_layout)
 
         # Buttons
         button_layout = QHBoxLayout()
@@ -259,7 +263,7 @@ class DeduplicateUrlsDialog(QDialog):
         self.button_box.rejected.connect(self.reject)
 
         button_layout.addWidget(self.button_box)
-        layout.addLayout(button_layout)
+        self.layout().addLayout(button_layout)
 
     def _load_sources(self) -> None:
         """Load available URL sources."""

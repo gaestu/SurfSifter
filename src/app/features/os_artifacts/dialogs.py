@@ -10,13 +10,15 @@ from typing import Dict, Any, Optional
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QDialog,
-    QVBoxLayout,
     QHBoxLayout,
     QFormLayout,
     QLabel,
     QTextEdit,
     QPushButton,
 )
+
+from app.common.screen_fit import limit_to_screen
+from app.common.widgets import add_dialog_body
 
 
 class JumpListDetailsDialog(QDialog):
@@ -35,13 +37,13 @@ class JumpListDetailsDialog(QDialog):
 
         self.setWindowTitle("Jump List Entry Details")
         self.setModal(True)
-        self.resize(600, 500)
 
         self._setup_ui()
+        limit_to_screen(self, 600, 500)
 
     def _setup_ui(self) -> None:
         """Create UI layout."""
-        layout = QVBoxLayout(self)
+        layout = add_dialog_body(self, read_only=True)
 
         # Form layout for fields
         form = QFormLayout()
@@ -139,7 +141,7 @@ class JumpListDetailsDialog(QDialog):
         close_btn.clicked.connect(self.accept)
         button_layout.addWidget(close_btn)
 
-        layout.addLayout(button_layout)
+        self.layout().addLayout(button_layout)
 
     def _copy_url(self) -> None:
         """Copy URL to clipboard."""
@@ -166,13 +168,13 @@ class SoftwareDetailsDialog(QDialog):
 
         self.setWindowTitle("Installed Software Details")
         self.setModal(True)
-        self.resize(600, 550)
 
         self._setup_ui()
+        limit_to_screen(self, 600, 550)
 
     def _setup_ui(self) -> None:
         """Create UI layout."""
-        layout = QVBoxLayout(self)
+        layout = add_dialog_body(self, read_only=True)
 
         # Form layout for fields
         form = QFormLayout()
@@ -296,7 +298,7 @@ class SoftwareDetailsDialog(QDialog):
         close_btn.clicked.connect(self.accept)
         button_layout.addWidget(close_btn)
 
-        layout.addLayout(button_layout)
+        self.layout().addLayout(button_layout)
 
 
 class AppExecutionDetailsDialog(QDialog):
@@ -315,13 +317,13 @@ class AppExecutionDetailsDialog(QDialog):
 
         self.setWindowTitle("Application Execution Details")
         self.setModal(True)
-        self.resize(600, 500)
 
         self._setup_ui()
+        limit_to_screen(self, 600, 500)
 
     def _setup_ui(self) -> None:
         """Create UI layout."""
-        layout = QVBoxLayout(self)
+        layout = add_dialog_body(self, read_only=True)
 
         form = QFormLayout()
 
@@ -412,7 +414,7 @@ class AppExecutionDetailsDialog(QDialog):
         close_btn.clicked.connect(self.accept)
         button_layout.addWidget(close_btn)
 
-        layout.addLayout(button_layout)
+        self.layout().addLayout(button_layout)
 
     def _copy_path(self) -> None:
         """Copy decoded path to clipboard."""
@@ -439,13 +441,13 @@ class UserActivityDetailsDialog(QDialog):
 
         self.setWindowTitle("User Activity Details")
         self.setModal(True)
-        self.resize(600, 500)
 
         self._setup_ui()
+        limit_to_screen(self, 600, 500)
 
     def _setup_ui(self) -> None:
         """Create UI layout."""
-        layout = QVBoxLayout(self)
+        layout = add_dialog_body(self, read_only=True)
 
         form = QFormLayout()
 
@@ -535,7 +537,7 @@ class UserActivityDetailsDialog(QDialog):
         close_btn.clicked.connect(self.accept)
         button_layout.addWidget(close_btn)
 
-        layout.addLayout(button_layout)
+        self.layout().addLayout(button_layout)
 
     def _copy_value(self) -> None:
         """Copy value to clipboard."""

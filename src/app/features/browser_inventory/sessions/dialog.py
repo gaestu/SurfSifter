@@ -17,6 +17,9 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
 )
 
+from app.common.screen_fit import limit_to_screen
+from app.common.widgets import add_dialog_body
+
 
 class SessionDetailsDialog(QDialog):
     """Dialog showing full details for a session tab with navigation history."""
@@ -41,12 +44,12 @@ class SessionDetailsDialog(QDialog):
 
         self.setWindowTitle("Session Tab Details")
         self.setModal(True)
-        self.resize(700, 550)
 
         # Load additional data from database
         self._load_additional_data()
 
         self._setup_ui()
+        limit_to_screen(self, 700, 550)
 
     def _load_additional_data(self) -> None:
         """Load navigation history and window info from database."""
@@ -82,7 +85,7 @@ class SessionDetailsDialog(QDialog):
             logging.getLogger(__name__).warning(f"Failed to load session details: {e}")
 
     def _setup_ui(self) -> None:
-        layout = QVBoxLayout(self)
+        layout = add_dialog_body(self, read_only=True)
 
         # Use tab widget if we have history or window info
         from PySide6.QtWidgets import QTabWidget, QWidget
@@ -164,7 +167,7 @@ class SessionDetailsDialog(QDialog):
         close_btn = QPushButton("Close")
         close_btn.clicked.connect(self.reject)
         button_layout.addWidget(close_btn)
-        layout.addLayout(button_layout)
+        self.layout().addLayout(button_layout)
 
     def _build_history_tab(self) -> "QWidget":
         """Build navigation history table tab."""

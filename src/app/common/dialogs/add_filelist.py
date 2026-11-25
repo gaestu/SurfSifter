@@ -27,6 +27,9 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from app.common.screen_fit import limit_to_screen
+from app.common.widgets import add_dialog_body
+
 
 class AddFileListDialog(QDialog):
     """Dialog for configuring file list metadata before import."""
@@ -68,13 +71,14 @@ class AddFileListDialog(QDialog):
 
         self.setWindowTitle("Add File List")
         self.setMinimumWidth(600)
-        self.setMinimumHeight(500)
+        self.setMinimumHeight(400)
 
         self._build_ui()
+        limit_to_screen(self, 600, 500)
 
     def _build_ui(self) -> None:
         """Build the dialog UI."""
-        layout = QVBoxLayout()
+        layout = add_dialog_body(self)
 
         # Info label
         info_label = QLabel(
@@ -165,9 +169,7 @@ class AddFileListDialog(QDialog):
         )
         button_box.accepted.connect(self._on_accept)
         button_box.rejected.connect(self.reject)
-        layout.addWidget(button_box)
-
-        self.setLayout(layout)
+        self.layout().addWidget(button_box)
 
     def _on_category_changed(self, category: str) -> None:
         """Handle category selection change."""

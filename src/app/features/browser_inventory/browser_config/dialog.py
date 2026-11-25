@@ -13,8 +13,10 @@ from PySide6.QtWidgets import (
     QLabel,
     QPushButton,
     QTextEdit,
-    QVBoxLayout,
 )
+
+from app.common.screen_fit import limit_to_screen
+from app.common.widgets import add_dialog_body
 
 
 class BrowserConfigDetailsDialog(QDialog):
@@ -25,11 +27,11 @@ class BrowserConfigDetailsDialog(QDialog):
         self.row_data = row_data
         self.setWindowTitle("Browser Config Details")
         self.setModal(True)
-        self.resize(700, 620)
         self._setup_ui()
+        limit_to_screen(self, 700, 620)
 
     def _setup_ui(self) -> None:
-        layout = QVBoxLayout(self)
+        layout = add_dialog_body(self, read_only=True)
 
         form = QFormLayout()
         for label, key in (
@@ -69,7 +71,7 @@ class BrowserConfigDetailsDialog(QDialog):
         close = QPushButton("Close")
         close.clicked.connect(self.reject)
         buttons.addWidget(close)
-        layout.addLayout(buttons)
+        self.layout().addLayout(buttons)
 
     def _add_text_block(self, layout: QVBoxLayout, label: str, value: Any, max_height: int) -> None:
         layout.addWidget(self._plain_label(label))

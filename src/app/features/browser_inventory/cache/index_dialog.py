@@ -10,8 +10,10 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QPushButton,
-    QVBoxLayout,
 )
+
+from app.common.screen_fit import limit_to_screen
+from app.common.widgets import add_dialog_body
 
 
 class CacheIndexDetailsDialog(QDialog):
@@ -22,11 +24,11 @@ class CacheIndexDetailsDialog(QDialog):
         self.row_data = row_data
         self.setWindowTitle("Cache Index Entry Details")
         self.setModal(True)
-        self.resize(600, 550)
         self._setup_ui()
+        limit_to_screen(self, 600, 550)
 
     def _setup_ui(self) -> None:
-        layout = QVBoxLayout(self)
+        layout = add_dialog_body(self, read_only=True)
 
         # Entry hash header
         entry_hash = self.row_data.get("entry_hash", "Unknown")
@@ -177,4 +179,4 @@ class CacheIndexDetailsDialog(QDialog):
         close_btn = QPushButton("Close")
         close_btn.clicked.connect(self.reject)
         button_layout.addWidget(close_btn)
-        layout.addLayout(button_layout)
+        self.layout().addLayout(button_layout)

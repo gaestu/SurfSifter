@@ -29,6 +29,7 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtGui import QFont
 
+from app.common.screen_fit import limit_to_screen
 from core.logging import get_logger
 from core.extractor_sections import (
     EXTRACTOR_SECTIONS,
@@ -70,9 +71,10 @@ class PurgeDataDialog(QDialog):
         self.confirmed = False
 
         self.setWindowTitle("⚠️ Purge Evidence Data")
-        self.setMinimumSize(700, 600)
+        self.setMinimumSize(700, 400)
 
         self._setup_ui()
+        limit_to_screen(self, 700, 600)
         self._load_counts()
 
     def _setup_ui(self):
@@ -258,10 +260,10 @@ class ExtractAndIngestDialog(QDialog):
         self.selected_mode = 'overwrite'
 
         self.setWindowTitle("Extract & Ingest")
-        self.setMinimumSize(700, 550)
-        self.resize(800, 600)
+        self.setMinimumWidth(700)
 
         self._setup_ui()
+        limit_to_screen(self, 800, 600)
 
     def _setup_ui(self):
         """Build the dialog UI."""

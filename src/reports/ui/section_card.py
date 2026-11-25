@@ -94,8 +94,9 @@ class SectionCard(QFrame):
         # Title label
         self._title_label = QLabel(self._title)
         self._title_label.setStyleSheet("font-weight: bold; font-size: 14px;")
-        self._title_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
-        header_layout.addWidget(self._title_label)
+        self._title_label.setWordWrap(True)
+        self._ignore_text_width(self._title_label)
+        header_layout.addWidget(self._title_label, 1)
 
         # Move up button
         self._move_up_btn = QPushButton("↑")
@@ -183,9 +184,17 @@ class SectionCard(QFrame):
                 mod_label = QLabel(f"  {name}: {summary}")
                 mod_label.setStyleSheet("color: palette(text); font-size: 11px;")
                 mod_label.setWordWrap(True)
+                self._ignore_text_width(mod_label)
                 modules_layout.addWidget(mod_label)
 
             layout.addWidget(modules_container)
+
+    @staticmethod
+    def _ignore_text_width(label: QLabel) -> None:
+        """Keep long text without spaces from widening the whole Reports page."""
+        policy = label.sizePolicy()  # keeps height-for-width of the word wrap
+        policy.setHorizontalPolicy(QSizePolicy.Ignored)
+        label.setSizePolicy(policy)
 
     @property
     def section_id(self) -> int:

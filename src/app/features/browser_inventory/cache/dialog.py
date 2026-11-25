@@ -10,8 +10,10 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QPushButton,
-    QVBoxLayout,
 )
+
+from app.common.screen_fit import limit_to_screen
+from app.common.widgets import add_dialog_body
 
 
 class CacheEntryDetailsDialog(QDialog):
@@ -30,13 +32,13 @@ class CacheEntryDetailsDialog(QDialog):
 
         self.setWindowTitle("Cache Entry Details")
         self.setModal(True)
-        self.resize(700, 500)
 
         self._setup_ui()
+        limit_to_screen(self, 700, 500)
 
     def _setup_ui(self) -> None:
         """Create UI layout."""
-        layout = QVBoxLayout(self)
+        layout = add_dialog_body(self, read_only=True)
 
         # URL header (truncated with tooltip)
         url = self.row_data.get("url", "Unknown")
@@ -141,4 +143,4 @@ class CacheEntryDetailsDialog(QDialog):
         close_btn = QPushButton("Close")
         close_btn.clicked.connect(self.reject)
         button_layout.addWidget(close_btn)
-        layout.addLayout(button_layout)
+        self.layout().addLayout(button_layout)

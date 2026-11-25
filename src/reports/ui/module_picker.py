@@ -4,7 +4,6 @@ import sqlite3
 from typing import Any, Dict, List, Optional
 
 from PySide6.QtWidgets import (
-    QDialog,
     QVBoxLayout,
     QHBoxLayout,
     QLabel,
@@ -27,10 +26,11 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtCore import Qt, QDate
 
+from .small_screens import ScreenLimitedDialog, WheelGuard
 from ..modules import ModuleRegistry, BaseReportModule, FilterType, FilterField
 
 
-class ModulePickerDialog(QDialog):
+class ModulePickerDialog(ScreenLimitedDialog):
     """Dialog for selecting a module and configuring its filters.
 
     Shows available modules in a list on the left, and filter configuration
@@ -68,9 +68,10 @@ class ModulePickerDialog(QDialog):
         self._show_title_input = show_title_input
         self._module_title = title or ""
         self._filter_widgets: Dict[str, QWidget] = {}
+        self._wheel_guard = WheelGuard(self)
 
         self.setWindowTitle("Edit Module" if edit_mode else "Add Module")
-        self.setMinimumSize(600, 450)
+        self.setMinimumSize(600, 400)
         self.resize(700, 500)
 
         self._setup_ui()
@@ -291,6 +292,8 @@ class ModulePickerDialog(QDialog):
                 help_label.setStyleSheet("color: palette(mid); font-size: 11px; margin-left: 4px;")
                 help_label.setWordWrap(True)
                 self._config_form_layout.addRow("", help_label)
+
+        self._wheel_guard.protect(self._config_form_widget)
 
     def _create_filter_widget(
         self, field: FilterField, options: Optional[List[tuple]] = None

@@ -13,6 +13,7 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Signal
 
 from .evidence_list import EvidenceListWidget
+from .scroll_area import add_scroll_body
 
 
 class CaseInfoWidget(QWidget):
@@ -31,7 +32,9 @@ class CaseInfoWidget(QWidget):
         self._connect_signals()
 
     def _setup_ui(self):
-        layout = QVBoxLayout(self)
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        layout = add_scroll_body(outer)
 
         # Case details group
         group = QGroupBox("Case Information")

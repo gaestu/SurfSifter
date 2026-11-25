@@ -39,7 +39,8 @@ from PySide6.QtGui import QFont
 
 from app.data import StatsWriteScope
 from app.data.case_data import CaseDataAccess
-from app.common.widgets import ExtractorRunStatusWidget, CollapsibleSection
+from app.common.screen_fit import limit_to_screen
+from app.common.widgets import ExtractorRunStatusWidget, CollapsibleSection, wrap_in_scroll_area
 from extractors import ExtractorRegistry
 from extractors.workers import ExtractionWorker, IngestionWorker
 from core.database import slugify_label
@@ -907,7 +908,6 @@ class ExtractionTab(QWidget):
 
         dialog = QDialog(self)
         dialog.setWindowTitle(f"{extractor.metadata.display_name} - Configuration")
-        dialog.resize(600, 400)
 
         layout = QVBoxLayout()
 
@@ -921,7 +921,7 @@ class ExtractionTab(QWidget):
         layout.addWidget(info)
 
         # The actual config widget
-        layout.addWidget(config_widget)
+        layout.addWidget(wrap_in_scroll_area(config_widget), 1)
 
         # Buttons
         button_box = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
@@ -930,6 +930,7 @@ class ExtractionTab(QWidget):
         layout.addWidget(button_box)
 
         dialog.setLayout(layout)
+        limit_to_screen(dialog, 600, 400)
 
         if dialog.exec() == QDialog.Accepted:
             # Save config to extractor instance

@@ -31,6 +31,8 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from app.common.screen_fit import limit_to_screen
+from app.common.widgets import add_dialog_body
 from core.database.helpers import get_sequences, insert_screenshot
 from app.features.screenshots.storage import ScreenshotMetadata, save_screenshot
 
@@ -78,9 +80,10 @@ class ScreenshotCaptureDialog(QDialog):
 
         self.setWindowTitle("📷 Edit Screenshot" if self._is_edit_mode else "📷 Save Screenshot")
         self.setMinimumWidth(600)
-        self.setMinimumHeight(500)
+        self.setMinimumHeight(400)
 
         self._init_ui()
+        limit_to_screen(self, 600, self.sizeHint().height())
         self._load_sequences()
 
         if self._is_edit_mode:
@@ -88,7 +91,7 @@ class ScreenshotCaptureDialog(QDialog):
 
     def _init_ui(self) -> None:
         """Initialize the user interface."""
-        layout = QVBoxLayout(self)
+        layout = add_dialog_body(self)
 
         # Preview section
         preview_group = QGroupBox("Preview")
@@ -207,7 +210,7 @@ class ScreenshotCaptureDialog(QDialog):
         self.button_box.accepted.connect(self._on_save)
         self.button_box.rejected.connect(self.reject)
 
-        layout.addWidget(self.button_box)
+        self.layout().addWidget(self.button_box)
 
     def _load_sequences(self) -> None:
         """Load existing sequences from database."""

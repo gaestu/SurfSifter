@@ -10,8 +10,10 @@ from PySide6.QtWidgets import (
     QLabel,
     QPushButton,
     QTextEdit,
-    QVBoxLayout,
 )
+
+from app.common.screen_fit import limit_to_screen
+from app.common.widgets import add_dialog_body
 
 
 class StorageKeyDetailsDialog(QDialog):
@@ -30,13 +32,13 @@ class StorageKeyDetailsDialog(QDialog):
 
         self.setWindowTitle("Storage Key Details")
         self.setModal(True)
-        self.resize(650, 500)
 
         self._setup_ui()
+        limit_to_screen(self, 650, 500)
 
     def _setup_ui(self) -> None:
         """Create UI layout."""
-        layout = QVBoxLayout(self)
+        layout = add_dialog_body(self, read_only=True)
 
         # Origin header
         origin = self.row_data.get("origin", "Unknown")
@@ -140,4 +142,4 @@ class StorageKeyDetailsDialog(QDialog):
         close_btn = QPushButton("Close")
         close_btn.clicked.connect(self.reject)
         button_layout.addWidget(close_btn)
-        layout.addLayout(button_layout)
+        self.layout().addLayout(button_layout)

@@ -10,7 +10,7 @@ from pathlib import Path
 from urllib.parse import urlparse
 from typing import Any, Dict, List, Optional, Tuple
 
-from PySide6.QtCore import Qt, QThreadPool, QCoreApplication, QEvent, QUrl, Signal, QObject, QTimer
+from PySide6.QtCore import Qt, QThreadPool, QCoreApplication, QEvent, QMargins, QRect, QUrl, Signal, QObject, QTimer
 from PySide6.QtWidgets import (
     QApplication,
     QFileDialog,
@@ -69,9 +69,12 @@ from .services.workers import (
 )
 from .config.settings import AppSettings, settings_path
 from .features.downloads.legacy import DownloadManagerDialog, DownloadQueueItem
-from .common.widgets import DiskLayoutWidget, CaseInfoWidget, DiskTabWidget
+from .common.screen_fit import ASSUMED_FRAME_MARGINS, find_screen, fit_rect, keep_on_screen
+from .common.widgets import DiskLayoutWidget, CaseInfoWidget, DiskTabWidget, add_scroll_body
 
 LOGGER = get_logger("app.main")
+
+_MAX_COORDINATE = 2**20  # far larger than any desktop
 
 
 class MainWindow(QMainWindow):
@@ -219,15 +222,18 @@ class MainWindow(QMainWindow):
         x = window_settings.x if window_settings.x is not None else default_x
         y = window_settings.y if window_settings.y is not None else default_y
 
-        screen = QApplication.primaryScreen()
+        # Qt accepts only 32-bit values; settings.json may contain others.
+        geometry = QRect(*(int(max(-_MAX_COORDINATE, min(_MAX_COORDINATE, v))) for v in (x, y, width, height)))
+        # The screen where the window was saved, if it still exists.
+        screen = find_screen(geometry, QApplication.screens()) or QApplication.primaryScreen()
         if screen:
-            available = screen.availableGeometry()
-            width = min(width, available.width())
-            height = min(height, available.height())
-            x = min(max(x, available.left()), available.right() - width + 1)
-            y = min(max(y, available.top()), available.bottom() - height + 1)
+            # The frame of a normal window is known, and taken into account,
+            # only once the window is shown (keep_on_screen).
+            margins = ASSUMED_FRAME_MARGINS if window_settings.maximized else QMargins()
+            geometry = fit_rect(geometry, screen.availableGeometry(), margins)
 
-        self.setGeometry(x, y, width, height)
+        self.setGeometry(geometry)
+        keep_on_screen(self)
         if window_settings.maximized:
             self.setWindowState(self.windowState() | Qt.WindowMaximized)
 
@@ -344,7 +350,9 @@ class MainWindow(QMainWindow):
         Disk selection moved from Extraction tab (UI refinements phase).
         """
         widget = QWidget()
-        layout = QVBoxLayout()
+        outer = QVBoxLayout(widget)
+        outer.setContentsMargins(0, 0, 0, 0)
+        layout = add_scroll_body(outer)
 
         # Info label explaining workflow
         info_label = QLabel(
@@ -418,7 +426,6 @@ class MainWindow(QMainWindow):
         layout.addWidget(overview_text)
 
         layout.addStretch()
-        widget.setLayout(layout)
 
         # Store references as properties for later access
         widget.setProperty("disk_tab_widget", disk_tab_widget)

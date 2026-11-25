@@ -11,8 +11,10 @@ from PySide6.QtWidgets import (
     QLabel,
     QPushButton,
     QTextEdit,
-    QVBoxLayout,
 )
+
+from app.common.screen_fit import limit_to_screen
+from app.common.widgets import add_dialog_body
 
 
 class ExtensionDetailsDialog(QDialog):
@@ -24,12 +26,12 @@ class ExtensionDetailsDialog(QDialog):
 
         self.setWindowTitle("Extension Details")
         self.setModal(True)
-        self.resize(650, 550)
 
         self._setup_ui()
+        limit_to_screen(self, 650, 550)
 
     def _setup_ui(self) -> None:
-        layout = QVBoxLayout(self)
+        layout = add_dialog_body(self, read_only=True)
 
         form = QFormLayout()
 
@@ -137,4 +139,4 @@ class ExtensionDetailsDialog(QDialog):
         close_btn = QPushButton("Close")
         close_btn.clicked.connect(self.reject)
         button_layout.addWidget(close_btn)
-        layout.addLayout(button_layout)
+        self.layout().addLayout(button_layout)

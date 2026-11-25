@@ -11,8 +11,10 @@ from PySide6.QtWidgets import (
     QLabel,
     QPushButton,
     QTextEdit,
-    QVBoxLayout,
 )
+
+from app.common.screen_fit import limit_to_screen
+from app.common.widgets import add_dialog_body
 
 
 class SiteEngagementDetailsDialog(QDialog):
@@ -26,12 +28,12 @@ class SiteEngagementDetailsDialog(QDialog):
         title = "Site Engagement Details" if engagement_type == "site_engagement" else "Media Engagement Details"
         self.setWindowTitle(title)
         self.setModal(True)
-        self.resize(550, 450)
 
         self._setup_ui()
+        limit_to_screen(self, 550, 450)
 
     def _setup_ui(self) -> None:
-        layout = QVBoxLayout(self)
+        layout = add_dialog_body(self, read_only=True)
 
         form = QFormLayout()
 
@@ -125,4 +127,4 @@ class SiteEngagementDetailsDialog(QDialog):
         close_btn.clicked.connect(self.reject)
         button_layout.addWidget(close_btn)
 
-        layout.addLayout(button_layout)
+        self.layout().addLayout(button_layout)

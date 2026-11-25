@@ -29,6 +29,9 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from app.common.screen_fit import limit_to_screen
+from app.common.widgets import add_dialog_body
+
 
 class BatchHashListImportDialog(QDialog):
     """
@@ -51,7 +54,7 @@ class BatchHashListImportDialog(QDialog):
     ) -> None:
         super().__init__(parent)
         self.setWindowTitle(window_title)
-        self.setMinimumSize(600, 500)
+        self.setMinimumSize(600, 400)
 
         self.files = files
         self.existing_names = existing_names
@@ -62,9 +65,10 @@ class BatchHashListImportDialog(QDialog):
         self._build_ui()
         self._populate_file_list()
         self._update_import_button()
+        limit_to_screen(self, 600, max(500, self.sizeHint().height()))
 
     def _build_ui(self) -> None:
-        layout = QVBoxLayout()
+        layout = add_dialog_body(self)
 
         # Header
         self.header_label = QLabel(f"Found {len(self.files)} {self.list_label} files")
@@ -174,8 +178,7 @@ class BatchHashListImportDialog(QDialog):
         button_box.rejected.connect(self.reject)
         button_box.accepted.connect(self._on_accept)
 
-        layout.addWidget(button_box)
-        self.setLayout(layout)
+        self.layout().addWidget(button_box)
 
     def _populate_file_list(self) -> None:
         """Populate the file list with checkboxes and conflict indicators."""

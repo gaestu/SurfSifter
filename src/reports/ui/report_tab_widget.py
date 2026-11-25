@@ -34,6 +34,7 @@ from .collapsible_group import CollapsibleGroupBox
 from .section_editor import SectionEditorDialog
 from .module_picker import ModulePickerDialog
 from .section_card import SectionCard
+from .small_screens import WheelGuard
 from ..locales import SUPPORTED_LOCALES, LOCALE_NAMES, DEFAULT_LOCALE
 from ..database import (
     insert_custom_section,
@@ -107,13 +108,20 @@ class ReportTabWidget(QWidget):
     def _setup_ui(self) -> None:
         """Setup the report tab UI.
 
-        Three sections:
+        Three sections that scroll together:
         1. Report Settings (collapsible) — title, language, branding, author
         2. Custom Sections (not collapsible) — main work area
         3. Appendix (collapsible) — appendix modules
+
+        The report generation buttons stay pinned below them.
         """
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(16, 16, 16, 16)
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(16, 16, 16, 16)
+        outer.setSpacing(8)
+
+        content = QWidget()
+        layout = QVBoxLayout(content)
+        layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(8)
 
         # Report Settings section (collapsible, expanded by default)
@@ -133,9 +141,23 @@ class ReportTabWidget(QWidget):
         self._appendix_group.collapsed_changed.connect(self._on_collapse_changed)
         layout.addWidget(self._appendix_group)
 
-        # Report generation buttons at the bottom
+        self._wheel_guard = WheelGuard(self)
+        self._wheel_guard.protect(content)
+
+        self._scroll_area = QScrollArea()
+        self._scroll_area.setWidgetResizable(True)
+        self._scroll_area.setFrameShape(QFrame.NoFrame)
+        self._scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self._scroll_area.setFocusPolicy(Qt.NoFocus)
+        self._scroll_area.setWidget(content)
+        # Keep the background of the tab.
+        content.setAutoFillBackground(False)
+        self._scroll_area.viewport().setAutoFillBackground(False)
+        outer.addWidget(self._scroll_area, 1)
+
+        # Report generation buttons, always visible below the scroll area
         buttons_layout = self._build_generation_buttons()
-        layout.addLayout(buttons_layout)
+        outer.addLayout(buttons_layout)
 
     def _make_sub_heading(self, text: str) -> QLabel:
         """Create a styled sub-heading label for section groups."""
@@ -468,26 +490,23 @@ class ReportTabWidget(QWidget):
 
         group_layout.addLayout(header_layout)
 
-        # Scroll area for section cards
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setFrameShape(QFrame.NoFrame)
-        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-
-        # Container widget for cards
+        # Container widget for cards; grows with them
         self._sections_container = QWidget()
+        self._sections_container.setAutoFillBackground(True)
         self._sections_layout = QVBoxLayout(self._sections_container)
         self._sections_layout.setContentsMargins(0, 0, 0, 0)
         self._sections_layout.setSpacing(8)
         self._sections_layout.addStretch()  # Push cards to top
 
-        scroll.setWidget(self._sections_container)
-        group_layout.addWidget(scroll, 1)
+        group_layout.addWidget(self._sections_container, 1)
 
         # Empty state label (shown when no sections)
         self._empty_label = QLabel("No custom sections yet. Click 'Add Section' to create one.")
         self._empty_label.setStyleSheet("color: palette(mid); font-style: italic;")
         self._empty_label.setAlignment(Qt.AlignCenter)
+        # Word wrap here and in the cards gives the content a height-for-width,
+        # so the scroll area shows it at its preferred height instead of squeezing it.
+        self._empty_label.setWordWrap(True)
         self._sections_layout.insertWidget(0, self._empty_label)
 
         return group

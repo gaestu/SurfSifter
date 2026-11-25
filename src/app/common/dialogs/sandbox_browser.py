@@ -28,6 +28,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional, List
 
+from app.common.screen_fit import limit_to_screen
 from core.subprocess_env import clean_subprocess_env
 from PySide6.QtCore import Qt, QUrl, Signal
 from PySide6.QtWidgets import (
@@ -327,11 +328,11 @@ class SandboxBrowserDialog(QDialog):
         self.forensic_context = forensic_context
 
         self.setWindowTitle(f"🔒 Sandbox Browser")
-        self.setMinimumSize(900, 700)
-        self.resize(1200, 800)
+        self.setMinimumSize(900, 450)
 
         self._setup_ui()
         self._setup_webview()
+        limit_to_screen(self, 1200, 800)
 
         # Navigate to URL
         self.webview.setUrl(QUrl(url))

@@ -24,6 +24,8 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from app.common.screen_fit import limit_to_screen
+
 
 # Maximum file size (in bytes) before requiring confirmation
 MAX_IMAGE_AUTO_LOAD_SIZE = 50 * 1024 * 1024  # 50 MB
@@ -99,10 +101,10 @@ class ImagePreviewDialog(QDialog):
         self._full_pixmap = None
 
         self.setWindowTitle("Image Preview")
-        self.setMinimumSize(900, 600)
-        self.resize(1100, 750)
+        self.setMinimumSize(900, 450)
 
         self._setup_ui()
+        limit_to_screen(self, 1100, 750)
         self._load_thumbnail()
 
     def _setup_ui(self) -> None:

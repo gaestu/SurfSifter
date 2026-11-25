@@ -26,6 +26,8 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from app.common.screen_fit import limit_to_screen
+from app.common.widgets import add_dialog_body
 from app.data.case_data import CaseDataAccess
 from app.features.screenshots.models import ScreenshotsTableModel
 from core.database.helpers import (
@@ -520,7 +522,7 @@ class UploadScreenshotDialog(QWidget):
             QPlainTextEdit, QSpinBox, QComboBox
         )
 
-        layout = QVBoxLayout(self._dialog)
+        layout = add_dialog_body(self._dialog)
 
         # Preview
         preview_group = QGroupBox("Preview")
@@ -591,7 +593,8 @@ class UploadScreenshotDialog(QWidget):
         button_box.accepted.connect(self._on_save)
         button_box.rejected.connect(self._dialog.reject)
 
-        layout.addWidget(button_box)
+        self._dialog.layout().addWidget(button_box)
+        limit_to_screen(self._dialog, 600, self._dialog.sizeHint().height())
 
     def _load_sequences(self) -> None:
         from core.database.helpers import get_sequences

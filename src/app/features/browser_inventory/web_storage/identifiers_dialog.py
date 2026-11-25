@@ -9,8 +9,10 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QPushButton,
-    QVBoxLayout,
 )
+
+from app.common.screen_fit import limit_to_screen
+from app.common.widgets import add_dialog_body
 
 
 class StorageIdentifierDetailsDialog(QDialog):
@@ -29,13 +31,13 @@ class StorageIdentifierDetailsDialog(QDialog):
 
         self.setWindowTitle("Storage Identifier Details")
         self.setModal(True)
-        self.resize(600, 450)
 
         self._setup_ui()
+        limit_to_screen(self, 600, 450)
 
     def _setup_ui(self) -> None:
         """Create UI layout."""
-        layout = QVBoxLayout(self)
+        layout = add_dialog_body(self, read_only=True)
 
         # Identifier type header with styling
         id_type = self.row_data.get("identifier_type", "unknown")
@@ -127,4 +129,4 @@ class StorageIdentifierDetailsDialog(QDialog):
         close_btn.clicked.connect(self.reject)
         button_layout.addWidget(close_btn)
 
-        layout.addLayout(button_layout)
+        self.layout().addLayout(button_layout)

@@ -29,6 +29,8 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from app.common.screen_fit import limit_to_screen
+
 from .utils import show_error_dialog
 
 
@@ -368,7 +370,6 @@ class ValidationDialog(QDialog):
         self.validation_report = validation_report
 
         self.setWindowTitle("Case Validation Report")
-        self.resize(900, 600)
 
         layout = QVBoxLayout()
 
@@ -404,6 +405,7 @@ class ValidationDialog(QDialog):
         layout.addLayout(button_layout)
 
         self.setLayout(layout)
+        limit_to_screen(self, 900, 600)
 
     def _create_header(self) -> QVBoxLayout:
         """Create header section with case info and overall status."""

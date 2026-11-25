@@ -27,6 +27,8 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from app.common.screen_fit import limit_to_screen
+from app.common.widgets import wrap_in_scroll_area
 from app.config.settings import AppSettings, GeneralSettings, NetworkSettings, ToolPaths, ReportSettings
 from core.tool_discovery import get_tool_version
 import shutil
@@ -83,10 +85,14 @@ class PreferencesDialog(QDialog):
         layout.addWidget(self.error_label)
         layout.addWidget(buttons)
         self.setLayout(layout)
-        self.resize(520, self.sizeHint().height())
+        limit_to_screen(self, 520, self.sizeHint().height())
 
         self._select_initial_tab()
         self._validate()
+
+    def _add_page(self, widget: QWidget, title: str) -> None:
+        """Add a page that scrolls if the dialog is lower than its content."""
+        self.tabs.addTab(wrap_in_scroll_area(widget), title)
 
     def _select_initial_tab(self) -> None:
         """Select the configured initial tab if it exists."""
@@ -121,7 +127,7 @@ class PreferencesDialog(QDialog):
         form.addRow("", self.open_config_button)
 
         widget.setLayout(form)
-        self.tabs.addTab(widget, "General")
+        self._add_page(widget, "General")
 
     # Tools ---------------------------------------------------------------
 
@@ -130,7 +136,7 @@ class PreferencesDialog(QDialog):
         if self._tool_registry:
             from app.common.widgets import ToolsTab
             widget = ToolsTab(self._tool_registry, self)
-            self.tabs.addTab(widget, "Tools")
+            self._add_page(widget, "Tools")
             return
 
         # Fallback to legacy simple tools tab
@@ -143,7 +149,7 @@ class PreferencesDialog(QDialog):
         self.ewfmount_edit = self._create_path_row("ewfmount", settings.tools.ewfmount, form)
 
         widget.setLayout(form)
-        self.tabs.addTab(widget, "Tools")
+        self._add_page(widget, "Tools")
 
     def _create_path_row(self, name: str, value: str, form: QFormLayout) -> QLineEdit:
         line = QLineEdit(value)
@@ -199,7 +205,7 @@ class PreferencesDialog(QDialog):
         form.addRow("Allowed content types", self.allowed_types_edit)
 
         widget.setLayout(form)
-        self.tabs.addTab(widget, "Network")
+        self._add_page(widget, "Network")
 
     # Reports --------------------------------------------------
 
@@ -354,7 +360,7 @@ class PreferencesDialog(QDialog):
         layout.addStretch()
 
         widget.setLayout(layout)
-        self.tabs.addTab(widget, "Reports")
+        self._add_page(widget, "Reports")
 
     def _build_text_blocks_tab(self) -> None:
         """Build the text blocks management tab."""
@@ -362,7 +368,7 @@ class PreferencesDialog(QDialog):
 
         # Text blocks are global user-level settings, independent from case workspace.
         widget = TextBlocksTab(None, self)
-        self.tabs.addTab(widget, "Text Blocks")
+        self._add_page(widget, "Text Blocks")
 
     def _on_report_logo_browse(self) -> None:
         """Handle logo browse button - copy to config/branding/."""
@@ -473,7 +479,7 @@ class PreferencesDialog(QDialog):
         layout.addWidget(self.install_predefined_btn)
 
         widget.setLayout(layout)
-        self.tabs.addTab(widget, "File Lists")
+        self._add_page(widget, "File Lists")
 
         # Load file lists
         self._refresh_file_lists()
@@ -529,7 +535,7 @@ class PreferencesDialog(QDialog):
         layout.addLayout(buttons_layout)
 
         widget.setLayout(layout)
-        self.tabs.addTab(widget, "Hash Lists")
+        self._add_page(widget, "Hash Lists")
 
         # Load hash lists
         self._refresh_hash_lists()
@@ -588,7 +594,7 @@ class PreferencesDialog(QDialog):
         # No need to add another button here - it's in the File Lists tab
 
         widget.setLayout(layout)
-        self.tabs.addTab(widget, "URL Lists")
+        self._add_page(widget, "URL Lists")
 
         # Load URL lists
         self._refresh_url_lists()

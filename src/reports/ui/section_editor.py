@@ -24,10 +24,11 @@ from PySide6.QtGui import QFont, QTextCharFormat, QTextCursor, QAction, QTextLis
 from PySide6.QtCore import Qt, Signal
 
 from .module_picker import ModulePickerDialog
+from .small_screens import ScreenLimitedDialog
 from ..modules import ModuleRegistry
 
 
-class SectionEditorDialog(QDialog):
+class SectionEditorDialog(ScreenLimitedDialog):
     """Dialog for creating or editing a custom report section.
 
     Supports basic text formatting: bold, italic, underline.
@@ -65,7 +66,7 @@ class SectionEditorDialog(QDialog):
         self._db_conn = db_conn
 
         self.setWindowTitle("Edit Section" if edit_mode else "Add Section")
-        self.setMinimumSize(550, 550)
+        self.setMinimumWidth(550)
         self.resize(650, 600)
 
         self._setup_ui()
@@ -119,7 +120,7 @@ class SectionEditorDialog(QDialog):
         # Rich text editor (create BEFORE toolbar so toolbar can connect signals)
         self._content_edit = QTextEdit()
         self._content_edit.setPlaceholderText("Enter section content...")
-        self._content_edit.setMinimumHeight(150)
+        self._content_edit.setMinimumHeight(100)
 
         # Formatting toolbar
         toolbar = self._build_formatting_toolbar()
@@ -156,7 +157,7 @@ class SectionEditorDialog(QDialog):
 
         # Module list
         self._modules_list = QListWidget()
-        self._modules_list.setMinimumHeight(80)
+        self._modules_list.setMinimumHeight(60)
         self._modules_list.setMaximumHeight(150)
         self._modules_list.itemDoubleClicked.connect(self._on_edit_module)
         self._modules_list.currentRowChanged.connect(self._on_module_selection_changed)

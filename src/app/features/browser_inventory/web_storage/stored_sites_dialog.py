@@ -17,6 +17,9 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
 )
 
+from app.common.screen_fit import limit_to_screen
+from app.common.widgets import add_dialog_body
+
 
 class StoredSiteDetailsDialog(QDialog):
     """Dialog showing storage summary and key previews for a site.
@@ -65,9 +68,9 @@ class StoredSiteDetailsDialog(QDialog):
 
         self.setWindowTitle("Stored Site Details")
         self.setModal(True)
-        self.resize(700, 550)
 
         self._setup_ui()
+        limit_to_screen(self, 700, 550)
 
         # Load keys if we have database access
         if self.db_manager and self.evidence_id and self.evidence_label:
@@ -75,7 +78,7 @@ class StoredSiteDetailsDialog(QDialog):
 
     def _setup_ui(self) -> None:
         """Create UI layout."""
-        layout = QVBoxLayout(self)
+        layout = add_dialog_body(self, read_only=True)
 
         # Site origin header
         origin = self._origin or "Unknown"
@@ -166,7 +169,7 @@ class StoredSiteDetailsDialog(QDialog):
         close_btn = QPushButton("Close")
         close_btn.clicked.connect(self.reject)
         button_layout.addWidget(close_btn)
-        layout.addLayout(button_layout)
+        self.layout().addLayout(button_layout)
 
     def _create_keys_table(self, name: str) -> QTableWidget:
         """Create a table widget for displaying keys."""

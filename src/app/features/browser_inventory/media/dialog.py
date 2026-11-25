@@ -11,8 +11,10 @@ from PySide6.QtWidgets import (
     QLabel,
     QPushButton,
     QTextEdit,
-    QVBoxLayout,
 )
+
+from app.common.screen_fit import limit_to_screen
+from app.common.widgets import add_dialog_body
 
 from .model import MediaHistoryTableModel
 
@@ -26,12 +28,12 @@ class MediaDetailsDialog(QDialog):
 
         self.setWindowTitle("Media Playback Details")
         self.setModal(True)
-        self.resize(550, 400)
 
         self._setup_ui()
+        limit_to_screen(self, 550, 400)
 
     def _setup_ui(self) -> None:
-        layout = QVBoxLayout(self)
+        layout = add_dialog_body(self, read_only=True)
 
         form = QFormLayout()
 
@@ -71,4 +73,4 @@ class MediaDetailsDialog(QDialog):
         close_btn = QPushButton("Close")
         close_btn.clicked.connect(self.reject)
         button_layout.addWidget(close_btn)
-        layout.addLayout(button_layout)
+        self.layout().addLayout(button_layout)

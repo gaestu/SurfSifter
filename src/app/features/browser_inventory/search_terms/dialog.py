@@ -11,8 +11,10 @@ from PySide6.QtWidgets import (
     QLabel,
     QPushButton,
     QTextEdit,
-    QVBoxLayout,
 )
+
+from app.common.screen_fit import limit_to_screen
+from app.common.widgets import add_dialog_body
 
 
 class SearchTermsDetailsDialog(QDialog):
@@ -31,13 +33,13 @@ class SearchTermsDetailsDialog(QDialog):
 
         self.setWindowTitle("Search Term Details")
         self.setModal(True)
-        self.resize(600, 500)
 
         self._setup_ui()
+        limit_to_screen(self, 600, 500)
 
     def _setup_ui(self) -> None:
         """Create UI layout."""
-        layout = QVBoxLayout(self)
+        layout = add_dialog_body(self, read_only=True)
 
         # Form layout for fields
         form = QFormLayout()
@@ -132,4 +134,4 @@ class SearchTermsDetailsDialog(QDialog):
         close_btn.clicked.connect(self.reject)
         button_layout.addWidget(close_btn)
 
-        layout.addLayout(button_layout)
+        self.layout().addLayout(button_layout)

@@ -24,6 +24,9 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from app.common.screen_fit import limit_to_screen
+from app.common.widgets import add_dialog_body
+
 
 class RemoveEvidenceDialog(QDialog):
     """
@@ -58,9 +61,11 @@ class RemoveEvidenceDialog(QDialog):
         self.setMinimumHeight(400)
 
         self._setup_ui()
+        # Wide enough for the source paths, high enough for the data summary.
+        limit_to_screen(self, max(500, self.sizeHint().width()), 680)
 
     def _setup_ui(self) -> None:
-        layout = QVBoxLayout()
+        layout = add_dialog_body(self)
 
         # Warning header
         warning_label = QLabel(
@@ -144,9 +149,7 @@ class RemoveEvidenceDialog(QDialog):
         self.button_box.accepted.connect(self._confirm_removal)
         self.button_box.rejected.connect(self.reject)
 
-        layout.addWidget(self.button_box)
-
-        self.setLayout(layout)
+        self.layout().addWidget(self.button_box)
 
     def _on_selection_changed(self, button: QRadioButton) -> None:
         """Handle evidence selection change."""

@@ -26,6 +26,9 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from app.common.screen_fit import limit_to_screen
+from app.common.widgets import wrap_in_scroll_area
+
 
 class BulkExtractorReuseDialog(QDialog):
     """
@@ -238,8 +241,9 @@ class CaseWideExtractIngestDialog(QDialog):
         self._extractor_by_name: Dict[str, Any] = {}
 
         self.setWindowTitle("Case-Wide Extract & Ingest")
-        self.setMinimumSize(700, 600)
+        self.setMinimumWidth(700)
         self._setup_ui()
+        limit_to_screen(self, 700, 600)
 
     def _setup_ui(self):
         layout = QVBoxLayout(self)
@@ -428,14 +432,14 @@ class CaseWideExtractIngestDialog(QDialog):
 
         dialog = QDialog(self)
         dialog.setWindowTitle(f"{extractor.metadata.display_name} - Configuration")
-        dialog.resize(600, 400)
         dlg_layout = QVBoxLayout()
-        dlg_layout.addWidget(config_widget)
+        dlg_layout.addWidget(wrap_in_scroll_area(config_widget), 1)
         buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
         buttons.accepted.connect(dialog.accept)
         buttons.rejected.connect(dialog.reject)
         dlg_layout.addWidget(buttons)
         dialog.setLayout(dlg_layout)
+        limit_to_screen(dialog, 600, 400)
 
         if dialog.exec() == QDialog.Accepted and hasattr(config_widget, 'get_config'):
             config = config_widget.get_config()
