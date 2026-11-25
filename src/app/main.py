@@ -1417,9 +1417,8 @@ class MainWindow(QMainWindow):
         for i in range(1, self.main_tabs.count()):  # Skip Case tab at index 0
             evidence_tab_widget = self.main_tabs.widget(i)
             if evidence_tab_widget and isinstance(evidence_tab_widget, QTabWidget):
-                # Find the Images tab (index 4 in the evidence sub-tabs after  File List addition)
-                images_tab = evidence_tab_widget.widget(4)  # Images is at index 4
-                if images_tab:
+                images_tab = evidence_tab_widget.property("images_tab")
+                if images_tab is not None:
                     images_tab.set_thumbnail_size(self.settings.general.thumbnail_size)
 
         self.logger.info("Preferences updated")

@@ -4,6 +4,7 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased
 
+- Fixed an error when saving **Preferences** while a case with evidence is open. The settings were saved, but a changed **Thumbnail size** did not reach the Grid of open Images tabs and the log line `Preferences updated` was not written. The new size now applies to the Images Grid of every open evidence. As before, thumbnails that are already cached are not regenerated at the new size (#75).
 - Fixed **Configure** (Extractors tab) and **Configure Selected…** (case-wide dialog) failing with an error for nine IE and Edge Legacy extractors: IE Classic History (History.IE5), IE/Edge DOM Storage, Legacy Edge Container, IE/Edge Favorites, IE/Edge File Cookies, Edge Legacy Reading List, IE/Edge Tab Recovery, IE Typed URLs and IE/Edge WebCache. **Scan all partitions** is checked by default. These extractors always search all partitions in the file list, as before; unchecking the option currently has no effect on them (#76).
 
 ## v0.4.0-beta - 2026-10-27
