@@ -109,7 +109,7 @@ class IEFavoritesExtractor(BaseExtractor):
 
     def get_config_widget(self, parent: QWidget) -> Optional[QWidget]:
         """Return configuration widget (multi-partition option)."""
-        return MultiPartitionWidget(parent, default_scan_all=True)
+        return MultiPartitionWidget(parent, default_enabled=True)
 
     def get_status_widget(
         self,

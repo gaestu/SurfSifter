@@ -106,7 +106,7 @@ class IEClassicHistoryExtractor(BaseExtractor):
         return (output_dir / "manifest.json").exists()
 
     def get_config_widget(self, parent: QWidget) -> Optional[QWidget]:
-        return MultiPartitionWidget(parent, default_scan_all=True)
+        return MultiPartitionWidget(parent, default_enabled=True)
 
     def get_status_widget(
         self,
