@@ -118,11 +118,10 @@ class FirefoxSyncDataExtractor(BaseExtractor):
         return (output_dir / "manifest.json").exists()
 
     def get_config_widget(self, parent: QWidget) -> Optional[QWidget]:
-        """Return configuration widget (browser selection + multi-partition)."""
+        """Return configuration widget (browser selection)."""
         return BrowserConfigWidget(
             parent,
             supported_browsers=self.SUPPORTED_BROWSERS,
-            default_scan_all_partitions=True,
         )
 
     def get_status_widget(

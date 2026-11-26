@@ -134,14 +134,13 @@ class FirefoxAutofillExtractor(BaseExtractor):
 
     def get_config_widget(self, parent: QWidget) -> Optional[QWidget]:
         """
-        Return configuration widget (browser selection + multi-partition).
+        Return configuration widget (browser selection).
 
-        Uses BrowserConfigWidget with Firefox browsers and multi-partition option.
+        Uses BrowserConfigWidget with Firefox browsers.
         """
         return BrowserConfigWidget(
             parent,
             supported_browsers=self.SUPPORTED_BROWSERS,
-            default_scan_all_partitions=True,
         )
 
     def get_status_widget(
@@ -184,13 +183,13 @@ class FirefoxAutofillExtractor(BaseExtractor):
 
         Workflow:
             1. Generate run_id
-            2. Scan evidence for Firefox autofill files (multi-partition if enabled)
+            2. Scan evidence for Firefox autofill files (all partitions via file_list)
             3. Copy matching files to output_dir/ with collision-safe naming
             4. Calculate hashes, copy companion files (-wal, -shm)
             5. Write manifest.json
 
         Multi-partition support:
-            When scan_all_partitions=True (default), uses file_list discovery to
+            Uses file_list discovery to
             find autofill files across ALL partitions, not just the main partition.
         """
         callbacks.on_step("Initializing Firefox autofill extraction")
@@ -199,7 +198,6 @@ class FirefoxAutofillExtractor(BaseExtractor):
         evidence_id = config.get("evidence_id", 1)
         evidence_label = config.get("evidence_label", "")
         evidence_conn = config.get("evidence_conn")
-        scan_all_partitions = config.get("scan_all_partitions", True)
 
         # Start statistics tracking
         stats = StatisticsCollector.instance()
@@ -219,7 +217,7 @@ class FirefoxAutofillExtractor(BaseExtractor):
             "extraction_timestamp_utc": datetime.now(timezone.utc).isoformat(),
             "extraction_tool": self._get_extraction_tool_version(),
             "e01_context": self._get_e01_context(evidence_fs),
-            "multi_partition_extraction": scan_all_partitions,
+            "multi_partition_extraction": True,
             "partitions_scanned": [],
             "partitions_with_artifacts": [],
             "files": [],
@@ -229,23 +227,22 @@ class FirefoxAutofillExtractor(BaseExtractor):
 
         browsers_to_search = config.get("browsers") or config.get("selected_browsers", self.SUPPORTED_BROWSERS)
 
-        # Scan for autofill files - use multi-partition if enabled and evidence_conn available
+        # Scan for autofill files - use file_list discovery when evidence_conn is available
         callbacks.on_step("Scanning for Firefox autofill databases")
 
         files_by_partition: Dict[int, List[Dict]] = {}
 
-        if scan_all_partitions and evidence_conn is not None:
+        if evidence_conn is not None:
             # Multi-partition discovery via file_list
             files_by_partition = self._discover_files_multi_partition(
                 evidence_fs, evidence_conn, evidence_id, browsers_to_search, callbacks
             )
         else:
             # Single partition fallback
-            if scan_all_partitions and evidence_conn is None:
-                callbacks.on_log(
-                    "Multi-partition requested but no evidence_conn - using single partition",
-                    "warning"
-                )
+            callbacks.on_log(
+                "No evidence_conn - using single partition",
+                "warning"
+            )
             partition_index = getattr(evidence_fs, 'partition_index', 0)
             files = self._discover_files(evidence_fs, browsers_to_search, callbacks)
             if files:

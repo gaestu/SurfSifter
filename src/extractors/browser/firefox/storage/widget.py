@@ -4,7 +4,7 @@ Firefox Browser Storage Widget.
 Configuration widget for Firefox storage extraction settings.
 
 Features:
-- Browser selection with multi-partition support
+- Browser selection
 - Storage type selection (Local Storage, IndexedDB)
 - Value analysis options (URLs, emails, tokens, identifiers)
 - Configurable excerpt size
@@ -38,7 +38,7 @@ class FirefoxStorageWidget(QWidget):
 
         layout = QVBoxLayout(self)
 
-        # Browser selection with multi-partition support
+        # Browser selection
         if supported_browsers is None:
             supported_browsers = list(FIREFOX_BROWSERS.keys())
         self._browser_widget = BrowserConfigWidget(self, supported_browsers=supported_browsers)

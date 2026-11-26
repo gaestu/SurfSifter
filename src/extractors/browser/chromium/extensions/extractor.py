@@ -134,11 +134,10 @@ class ChromiumExtensionsExtractor(BaseExtractor):
         return (output_dir / "manifest.json").exists()
 
     def get_config_widget(self, parent: QWidget) -> Optional[QWidget]:
-        """Return configuration widget (browser selection + multi-partition)."""
+        """Return configuration widget (browser selection)."""
         return BrowserConfigWidget(
             parent,
             supported_browsers=self.SUPPORTED_BROWSERS,
-            default_scan_all_partitions=True,
         )
 
     def get_status_widget(
@@ -219,13 +218,12 @@ class ChromiumExtensionsExtractor(BaseExtractor):
         }
 
         browsers_to_search = config.get("browsers") or config.get("selected_browsers", self.SUPPORTED_BROWSERS)
-        scan_all_partitions = config.get("scan_all_partitions", True)
         evidence_conn = config.get("evidence_conn")
-        ewf_paths = get_ewf_paths_from_evidence_fs(evidence_fs) if scan_all_partitions else None
+        ewf_paths = get_ewf_paths_from_evidence_fs(evidence_fs)
 
         partitions: List[Optional[int]] = [None]
         embedded_roots_all = []
-        if scan_all_partitions and evidence_conn is not None:
+        if evidence_conn is not None:
             partitions = self._discover_relevant_partitions(
                 evidence_conn, evidence_id, browsers_to_search
             )
@@ -319,7 +317,7 @@ class ChromiumExtensionsExtractor(BaseExtractor):
                     callbacks.on_progress(i + 1, len(extensions), f"Processing {ext_info['browser']} extension")
 
                     # Copy manifest and calculate hashes
-                    ext_partition_index = ext_info.get("partition_index") if scan_all_partitions else None
+                    ext_partition_index = ext_info.get("partition_index")
                     with open_partition_for_extraction(
                         ewf_paths if ewf_paths else evidence_fs, ext_partition_index
                     ) as ext_fs:

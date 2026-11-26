@@ -19,7 +19,6 @@ from extractors._shared.file_list_discovery import (
 )
 from ....base import BaseExtractor, ExtractorMetadata
 from ....callbacks import ExtractorCallbacks
-from ....widgets import MultiPartitionWidget
 from .._discovery import discover_safari_files, discover_safari_files_fallback
 from .._patterns import extract_user_from_path, get_patterns
 from .ingestion import CacheIngestionHandler
@@ -70,7 +69,8 @@ class SafariCacheExtractor(BaseExtractor):
         return self._find_latest_manifest(output_dir) is not None
 
     def get_config_widget(self, parent: QWidget) -> Optional[QWidget]:
-        return MultiPartitionWidget(parent)
+        """No configuration options."""
+        return None
 
     def get_status_widget(
         self,

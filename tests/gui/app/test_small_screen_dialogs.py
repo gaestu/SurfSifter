@@ -511,7 +511,7 @@ def test_configuration_dialogs_from_the_extractors_tab(qtbot, shown_dialogs):
     extractors = ExtractorRegistry().get_all()
     for extractor in extractors:
         tab._show_config_dialog(extractor)
-    assert len(shown_dialogs) >= 60
+    assert len(shown_dialogs) >= 40
     assert len(set(shown_dialogs)) == len(shown_dialogs)
 
 
@@ -521,7 +521,7 @@ def test_configuration_dialogs_from_the_case_wide_dialog(qtbot, shown_dialogs):
     for row in range(dialog.extractor_list.count()):
         dialog.extractor_list.setCurrentRow(row)
         dialog._configure_selected_extractor()
-    assert len(shown_dialogs) >= 55  # only extractors that can extract
+    assert len(shown_dialogs) >= 35  # only extractors that can extract
 
 
 def test_configuration_is_read_after_ok(qtbot, monkeypatch):

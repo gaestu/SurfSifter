@@ -129,7 +129,7 @@ class ChromiumCookiesExtractor(BaseExtractor):
 
     def get_config_widget(self, parent: QWidget) -> Optional[QWidget]:
         """
-        Return configuration widget (browser selection + partition config).
+        Return configuration widget (browser selection).
 
         Uses BrowserConfigWidget with Chromium browsers only.
         """
@@ -210,7 +210,7 @@ class ChromiumCookiesExtractor(BaseExtractor):
             "extraction_timestamp_utc": datetime.now(timezone.utc).isoformat(),
             "extraction_tool": self._get_tool_version(),
             "e01_context": self._get_e01_context(evidence_fs),
-            "multi_partition": config.get("scan_all_partitions", True),
+            "multi_partition": True,
             "files": [],
             "status": "ok",
             "notes": [],
@@ -219,14 +219,12 @@ class ChromiumCookiesExtractor(BaseExtractor):
         # Determine which browsers to search
         browsers = config.get("browsers") or config.get("selected_browsers") or get_all_browsers()
 
-        # Determine multi-partition mode
-        scan_all_partitions = config.get("scan_all_partitions", True)
         evidence_conn = config.get("evidence_conn")
 
         # Scan for cookie files (multi-partition aware)
         callbacks.on_step("Scanning for Chromium cookie databases")
 
-        if scan_all_partitions and evidence_conn is not None:
+        if evidence_conn is not None:
             # Use file_list discovery for multi-partition support
             files_by_partition = self._discover_files_multi_partition(
                 evidence_conn, evidence_id, browsers, callbacks

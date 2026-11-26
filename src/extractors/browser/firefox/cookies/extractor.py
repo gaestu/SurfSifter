@@ -212,7 +212,7 @@ class FirefoxCookiesExtractor(BaseExtractor):
             "extraction_timestamp_utc": datetime.now(timezone.utc).isoformat(),
             "extraction_tool": self._get_tool_version(),
             "e01_context": self._get_e01_context(evidence_fs),
-            "multi_partition": config.get("scan_all_partitions", True),
+            "multi_partition": True,
             "partitions_scanned": [],
             "partitions_with_artifacts": [],
             "files": [],
@@ -223,16 +223,13 @@ class FirefoxCookiesExtractor(BaseExtractor):
         # Determine which browsers to search
         browsers = config.get("browsers") or config.get("selected_browsers") or get_all_browsers()
 
-        # Determine multi-partition mode
-        scan_all_partitions = config.get("scan_all_partitions", True)
-
         # Scan for cookies files (multi-partition aware)
         callbacks.on_step("Scanning for Firefox cookies databases")
 
         files_by_partition: Dict[int, List[Dict]] = {}
         used_file_list = False
 
-        if scan_all_partitions and evidence_conn:
+        if evidence_conn:
             # Check if file_list is available for fast discovery
             available, count = check_file_list_available(evidence_conn, evidence_id)
 

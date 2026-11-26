@@ -248,7 +248,7 @@ class CacheSimpleExtractor(BaseExtractor):
         widget = QWidget(parent)
         layout = QVBoxLayout(widget)
 
-        # Browser selection with multi-partition support
+        # Browser selection
         browser_group = QGroupBox("Browser Selection")
         browser_layout = QVBoxLayout(browser_group)
         default_browsers = get_stable_browsers()
@@ -574,7 +574,6 @@ class CacheSimpleExtractor(BaseExtractor):
         # Scan for cache directories using partition-aware discovery.
         callbacks.on_step("Scanning for cache directories")
         evidence_conn = merged_config.get("evidence_conn")
-        scan_all_partitions = merged_config.get("scan_all_partitions", True)
 
         discovered_embedded_roots = []
         if evidence_conn is not None:
@@ -584,7 +583,7 @@ class CacheSimpleExtractor(BaseExtractor):
                 LOGGER.debug("Embedded root discovery failed for cache extractor: %s", e)
 
         partition_indices: List[Optional[int]] = [None]
-        if scan_all_partitions and evidence_conn is not None:
+        if evidence_conn is not None:
             try:
                 partition_indices = self._discover_cache_partitions(
                     evidence_conn=evidence_conn,

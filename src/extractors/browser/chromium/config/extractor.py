@@ -82,7 +82,6 @@ class ChromiumConfigExtractor(BaseExtractor):
         return BrowserConfigWidget(
             parent,
             supported_browsers=self.SUPPORTED_BROWSERS,
-            default_scan_all_partitions=True,
         )
 
     def get_status_widget(
@@ -129,7 +128,6 @@ class ChromiumConfigExtractor(BaseExtractor):
         evidence_id = config.get("evidence_id", 1)
         evidence_label = config.get("evidence_label", "")
         evidence_conn = config.get("evidence_conn")
-        scan_all_partitions = config.get("scan_all_partitions", True)
 
         stats = StatisticsCollector.instance()
         if stats:
@@ -146,7 +144,7 @@ class ChromiumConfigExtractor(BaseExtractor):
             "extraction_timestamp_utc": datetime.now(timezone.utc).isoformat(),
             "extraction_tool": self._get_extraction_tool_version(),
             "e01_context": self._get_e01_context(evidence_fs),
-            "multi_partition": scan_all_partitions,
+            "multi_partition": True,
             "files": [],
             "status": "ok",
             "notes": [],
@@ -156,7 +154,7 @@ class ChromiumConfigExtractor(BaseExtractor):
         browsers_to_search = [b for b in browsers_to_search if b in self.SUPPORTED_BROWSERS]
 
         callbacks.on_step("Scanning for Chromium config files")
-        if scan_all_partitions and evidence_conn is not None:
+        if evidence_conn is not None:
             files_by_partition = self._discover_files_multi_partition(
                 evidence_conn,
                 evidence_id,

@@ -46,7 +46,7 @@ Source: `src/extractors/browser/firefox/`
 - Ingestion (transform + store): CacheIngestionHandler parses cache2 entries (URL, headers, metadata), inserts urls via insert_urls, registers browser_inventory, and carves images from response bodies (gzip/brotli/zstd/deflate) via insert_image_with_discovery; can compute deferred hashes.
 - Outputs: Run-id subdirectory with extracted cache files, manifest.json (and part files), carved_images/ output, extracted_files audit records, urls/images/inventory entries.
 - Special behavior: Hash mode selectable (extraction/ingestion/disabled) and skips supporting files (index/doomed/trash) during ingestion.
-- Notes: Uses MultiPartitionWidget; optional brotli/zstandard dependencies; alias FirefoxCacheExtractor for backward compatibility.
+- Notes: Optional brotli/zstandard dependencies; alias FirefoxCacheExtractor for backward compatibility.
 
 ### FirefoxAutofillExtractor
 - Purpose: Extract form history and saved credentials from Firefox-based profiles.

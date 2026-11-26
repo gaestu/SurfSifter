@@ -26,7 +26,7 @@ class ChromiumStorageWidget(QWidget):
 
         layout = QVBoxLayout(self)
 
-        # Browser selection with multi-partition support
+        # Browser selection
         if supported_browsers is None:
             supported_browsers = list(CHROMIUM_BROWSERS.keys())
         self._browser_widget = BrowserConfigWidget(self, supported_browsers=supported_browsers)

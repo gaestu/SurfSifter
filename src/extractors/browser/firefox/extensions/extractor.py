@@ -139,11 +139,10 @@ class FirefoxExtensionsExtractor(BaseExtractor):
         return (output_dir / "manifest.json").exists()
 
     def get_config_widget(self, parent: QWidget) -> Optional[QWidget]:
-        """Return configuration widget with multi-partition support."""
+        """Return configuration widget (browser selection)."""
         return BrowserConfigWidget(
             parent,
             supported_browsers=self.SUPPORTED_BROWSERS,
-            default_scan_all_partitions=True,
         )
 
     def get_status_widget(
@@ -221,13 +220,12 @@ class FirefoxExtensionsExtractor(BaseExtractor):
         }
 
         browsers_to_search = config.get("browsers") or config.get("selected_browsers", self.SUPPORTED_BROWSERS)
-        scan_all_partitions = config.get("scan_all_partitions", True)
         evidence_conn = config.get("evidence_conn")
 
         callbacks.on_step("Scanning for Firefox extension files")
 
         # Discover files using multi-partition file_list or fallback to single partition
-        if scan_all_partitions and evidence_conn:
+        if evidence_conn:
             files_by_partition = self._discover_files_multi_partition(
                 evidence_fs, evidence_conn, evidence_id, browsers_to_search, callbacks
             )
@@ -235,10 +233,10 @@ class FirefoxExtensionsExtractor(BaseExtractor):
             # Single partition fallback
             partition_index = getattr(evidence_fs, 'partition_index', 0)
             discovered_files = self._discover_extension_files(
-                evidence_fs, browsers_to_search, callbacks, scan_all_partitions=False
+                evidence_fs, browsers_to_search, callbacks
             )
             discovered_xpis = self._discover_xpi_files(
-                evidence_fs, browsers_to_search, callbacks, scan_all_partitions=False
+                evidence_fs, browsers_to_search, callbacks
             )
             files_by_partition = {
                 partition_index: {
@@ -581,8 +579,8 @@ class FirefoxExtensionsExtractor(BaseExtractor):
                 "info"
             )
             partition_index = getattr(evidence_fs, 'partition_index', 0)
-            json_files = self._discover_extension_files(evidence_fs, browsers, callbacks, scan_all_partitions=False)
-            xpi_files = self._discover_xpi_files(evidence_fs, browsers, callbacks, scan_all_partitions=False)
+            json_files = self._discover_extension_files(evidence_fs, browsers, callbacks)
+            xpi_files = self._discover_xpi_files(evidence_fs, browsers, callbacks)
             if json_files or xpi_files:
                 return {partition_index: {"json_files": json_files, "xpi_files": xpi_files}}
             return {}
@@ -624,8 +622,8 @@ class FirefoxExtensionsExtractor(BaseExtractor):
                 "warning"
             )
             partition_index = getattr(evidence_fs, 'partition_index', 0)
-            json_files = self._discover_extension_files(evidence_fs, browsers, callbacks, scan_all_partitions=False)
-            xpi_files = self._discover_xpi_files(evidence_fs, browsers, callbacks, scan_all_partitions=False)
+            json_files = self._discover_extension_files(evidence_fs, browsers, callbacks)
+            xpi_files = self._discover_xpi_files(evidence_fs, browsers, callbacks)
             if json_files or xpi_files:
                 return {partition_index: {"json_files": json_files, "xpi_files": xpi_files}}
             return {}
@@ -791,7 +789,6 @@ class FirefoxExtensionsExtractor(BaseExtractor):
         evidence_fs,
         browsers: List[str],
         callbacks: ExtractorCallbacks,
-        scan_all_partitions: bool = True
     ) -> List[Dict]:
         """
         Discover extensions.json and addons.json files from evidence.
@@ -806,7 +803,7 @@ class FirefoxExtensionsExtractor(BaseExtractor):
                 continue
             discovered.extend(
                 self._discover_browser_extension_files(
-                    evidence_fs, browser_key, callbacks, seen_paths, scan_all_partitions
+                    evidence_fs, browser_key, callbacks, seen_paths
                 )
             )
 
@@ -818,7 +815,6 @@ class FirefoxExtensionsExtractor(BaseExtractor):
         browser: str,
         callbacks: ExtractorCallbacks,
         seen_paths: Set[str],
-        scan_all_partitions: bool
     ) -> List[Dict]:
         """Discover extension files for a specific Firefox browser."""
         files = []
@@ -868,7 +864,6 @@ class FirefoxExtensionsExtractor(BaseExtractor):
         evidence_fs,
         browsers: List[str],
         callbacks: ExtractorCallbacks,
-        scan_all_partitions: bool = True
     ) -> List[Dict]:
         """
         Discover XPI extension archive files from evidence.

@@ -35,7 +35,6 @@ from extractors._shared.known_extensions import load_known_extensions, match_kno
 from extractors._shared.risk_classifier import calculate_risk_level
 from ....base import BaseExtractor, ExtractorMetadata
 from ....callbacks import ExtractorCallbacks
-from ....widgets import MultiPartitionWidget
 from .._discovery import discover_safari_files, discover_safari_files_fallback
 from .._parsers import (
     SafariExtension,
@@ -88,7 +87,8 @@ class SafariExtensionsExtractor(BaseExtractor):
         return self._find_latest_manifest(output_dir) is not None
 
     def get_config_widget(self, parent: QWidget) -> Optional[QWidget]:
-        return MultiPartitionWidget(parent)
+        """No configuration options."""
+        return None
 
     def get_status_widget(
         self,

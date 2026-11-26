@@ -122,14 +122,13 @@ class FirefoxHistoryExtractor(BaseExtractor):
 
     def get_config_widget(self, parent: QWidget) -> Optional[QWidget]:
         """
-        Return configuration widget (browser selection + multi-partition).
+        Return configuration widget (browser selection).
 
-        Uses BrowserConfigWidget with Firefox browsers and multi-partition option.
+        Uses BrowserConfigWidget with Firefox browsers.
         """
         return BrowserConfigWidget(
             parent,
             supported_browsers=get_all_browsers(),
-            default_scan_all_partitions=True,
         )
 
     def get_status_widget(
@@ -171,13 +170,13 @@ class FirefoxHistoryExtractor(BaseExtractor):
 
         Workflow:
             1. Generate run_id
-            2. Scan evidence for Firefox places.sqlite files (multi-partition if enabled)
+            2. Scan evidence for Firefox places.sqlite files (all partitions via file_list)
             3. Copy matching files to output_dir/
             4. Calculate hashes, collect E01 context
             5. Write manifest.json
 
         Multi-partition support:
-            When scan_all_partitions=True (default), uses file_list discovery to
+            Uses file_list discovery to
             find places.sqlite files across ALL partitions, not just the main partition.
             This captures browser artifacts from dual-boot systems, portable apps,
             and old OS installations.
@@ -195,7 +194,6 @@ class FirefoxHistoryExtractor(BaseExtractor):
         evidence_id = config.get("evidence_id", 1)
         evidence_label = config.get("evidence_label", "")
         evidence_conn = config.get("evidence_conn")
-        scan_all_partitions = config.get("scan_all_partitions", True)
 
         # Start statistics tracking
         collector = self._get_statistics_collector()
@@ -212,7 +210,7 @@ class FirefoxHistoryExtractor(BaseExtractor):
             "extraction_timestamp_utc": datetime.now(timezone.utc).isoformat(),
             "extraction_tool": self._get_tool_version(),
             "e01_context": self._get_e01_context(evidence_fs),
-            "multi_partition_extraction": scan_all_partitions,
+            "multi_partition_extraction": True,
             "partitions_scanned": [],
             "partitions_with_artifacts": [],
             "files": [],
@@ -223,23 +221,22 @@ class FirefoxHistoryExtractor(BaseExtractor):
         # Determine which browsers to search
         browsers = config.get("browsers") or config.get("selected_browsers") or get_all_browsers()
 
-        # Scan for history files - use multi-partition if enabled and evidence_conn available
+        # Scan for history files - use file_list discovery when evidence_conn is available
         callbacks.on_step("Scanning for Firefox history databases")
 
         files_by_partition: Dict[int, List[Dict]] = {}
 
-        if scan_all_partitions and evidence_conn is not None:
+        if evidence_conn is not None:
             # Multi-partition discovery via file_list
             files_by_partition = self._discover_files_multi_partition(
                 evidence_fs, evidence_conn, evidence_id, browsers, callbacks
             )
         else:
             # Single partition fallback
-            if scan_all_partitions and evidence_conn is None:
-                callbacks.on_log(
-                    "Multi-partition scan requested but no evidence_conn provided, using single partition",
-                    "warning"
-                )
+            callbacks.on_log(
+                "No evidence_conn provided, using single partition",
+                "warning"
+            )
             history_files = self._discover_files(evidence_fs, browsers, callbacks)
             partition_index = getattr(evidence_fs, 'partition_index', 0)
             if history_files:

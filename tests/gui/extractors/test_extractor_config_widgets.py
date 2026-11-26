@@ -1,4 +1,4 @@
-"""Configure must open for every registered extractor (issue #76)."""
+"""Configure works for every registered extractor (issues #76, #78)."""
 
 from __future__ import annotations
 
@@ -13,7 +13,8 @@ from extractors import ExtractorRegistry
 pytestmark = pytest.mark.gui_offscreen
 
 # Extractors whose Configure dialog failed with a TypeError before issue #76.
-IE_LEGACY_PARTITION_EXTRACTORS = [
+# Their only option was "Scan all partitions", removed with issue #78.
+IE_LEGACY_NO_OPTION_EXTRACTORS = [
     "edge_legacy_container",
     "edge_reading_list",
     "ie_classic_history",
@@ -25,23 +26,38 @@ IE_LEGACY_PARTITION_EXTRACTORS = [
     "ie_webcache",
 ]
 
+# All extractors whose only option was "Scan all partitions".
+NO_OPTION_EXTRACTORS = IE_LEGACY_NO_OPTION_EXTRACTORS + [
+    "safari_bookmarks",
+    "safari_cache",
+    "safari_cookies",
+    "safari_downloads",
+    "safari_extensions",
+    "safari_favicons",
+    "safari_history",
+    "safari_reading_list",
+    "safari_sessions",
+    "safari_storage",
+    "safari_top_sites",
+]
+
 
 @pytest.fixture
-def opened_dialogs(monkeypatch):
-    """Replace modal dialogs; record title and partition checkbox state."""
-    opened = []
+def configure_outcomes(monkeypatch):
+    """Replace modal dialogs and message boxes; record what Configure shows."""
+    outcomes = []
 
     def fake_exec(dialog):
-        checkbox = dialog.findChild(QCheckBox, "scan_all_partitions")
-        opened.append((dialog.windowTitle(), checkbox.isChecked() if checkbox else None))
+        outcomes.append(("dialog", dialog.windowTitle()))
         return QDialog.Rejected
 
-    def fail_information(*args, **kwargs):
-        pytest.fail(f"Unexpected message box: {args[1:]}")
+    def fake_information(parent, title, text, *args, **kwargs):  # noqa: ARG001
+        outcomes.append(("information", text))
+        return QMessageBox.Ok
 
     monkeypatch.setattr(QDialog, "exec", fake_exec)
-    monkeypatch.setattr(QMessageBox, "information", fail_information)
-    return opened
+    monkeypatch.setattr(QMessageBox, "information", fake_information)
+    return outcomes
 
 
 def test_every_registered_extractor_builds_its_config_widget(qtbot):
@@ -50,7 +66,7 @@ def test_every_registered_extractor_builds_its_config_widget(qtbot):
     parent = QWidget()
     qtbot.addWidget(parent)
     names = extractor_registry.list_names()
-    assert set(IE_LEGACY_PARTITION_EXTRACTORS) <= set(names)
+    assert set(IE_LEGACY_NO_OPTION_EXTRACTORS) <= set(names)
 
     failures = []
     for name in names:
@@ -65,19 +81,55 @@ def test_every_registered_extractor_builds_its_config_widget(qtbot):
     assert not failures, "\n".join(failures)
 
 
-@pytest.mark.parametrize("name", IE_LEGACY_PARTITION_EXTRACTORS)
-def test_configure_opens_from_extractors_tab(qtbot, extractor_registry, opened_dialogs, name):
+def test_no_extractor_offers_a_partition_option(qtbot):
+    """No option limits extraction to one partition (issue #78)."""
+    extractor_registry = ExtractorRegistry()
+    parent = QWidget()
+    qtbot.addWidget(parent)
+
+    offenders = []
+    for name in extractor_registry.list_names():
+        extractor = extractor_registry.get(name)
+        widget = extractor.get_config_widget(parent)
+        if widget is None:
+            continue
+        if widget.findChild(QCheckBox, "scan_all_partitions") is not None:
+            offenders.append(f"{name}: shows the checkbox")
+        partition_options = [
+            box.text() for box in widget.findChildren(QCheckBox) if "partition" in box.text().lower()
+        ]
+        if partition_options:
+            offenders.append(f"{name}: {partition_options}")
+        # The key would be written to the evidence log with the run's config.
+        config = widget.get_config() if hasattr(widget, "get_config") else {}
+        if "scan_all_partitions" in config:
+            offenders.append(f"{name}: get_config() returns scan_all_partitions")
+        from_extractor = getattr(extractor, "_get_config_from_widget", None)
+        if from_extractor is not None and "scan_all_partitions" in from_extractor():
+            offenders.append(f"{name}: _get_config_from_widget() returns scan_all_partitions")
+
+    assert not offenders, "\n".join(offenders)
+
+
+@pytest.mark.parametrize("name", NO_OPTION_EXTRACTORS)
+def test_configure_from_extractors_tab_reports_no_options(
+    qtbot, extractor_registry, configure_outcomes, name
+):
     tab = ExtractionTab(1)
     qtbot.addWidget(tab)
     extractor = extractor_registry.get(name)
 
     tab._show_config_dialog(extractor)
 
-    assert opened_dialogs == [(f"{extractor.metadata.display_name} - Configuration", True)]
+    assert configure_outcomes == [
+        ("information", f"{extractor.metadata.display_name} has no configuration options.")
+    ]
 
 
-@pytest.mark.parametrize("name", IE_LEGACY_PARTITION_EXTRACTORS)
-def test_configure_opens_from_case_wide_dialog(qtbot, extractor_registry, opened_dialogs, name):
+@pytest.mark.parametrize("name", NO_OPTION_EXTRACTORS)
+def test_configure_from_case_wide_dialog_reports_no_options(
+    qtbot, extractor_registry, configure_outcomes, name
+):
     dialog = CaseWideExtractIngestDialog([{"id": 1, "label": "ev"}])
     qtbot.addWidget(dialog)
     items = [dialog.extractor_list.item(i) for i in range(dialog.extractor_list.count())]
@@ -87,4 +139,20 @@ def test_configure_opens_from_case_wide_dialog(qtbot, extractor_registry, opened
     dialog._configure_selected_extractor()
 
     display_name = extractor_registry.get(name).metadata.display_name
-    assert opened_dialogs == [(f"{display_name} - Configuration", True)]
+    assert configure_outcomes == [
+        ("information", f"{display_name} has no configuration options.")
+    ]
+
+
+def test_configure_still_opens_a_dialog_for_browser_selection(
+    qtbot, extractor_registry, configure_outcomes
+):
+    tab = ExtractionTab(1)
+    qtbot.addWidget(tab)
+    extractor = extractor_registry.get("chromium_history")
+
+    tab._show_config_dialog(extractor)
+
+    assert configure_outcomes == [
+        ("dialog", f"{extractor.metadata.display_name} - Configuration")
+    ]

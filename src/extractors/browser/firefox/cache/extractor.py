@@ -43,7 +43,6 @@ from PySide6.QtWidgets import (
 )
 
 from ....base import BaseExtractor, ExtractorMetadata
-from ....widgets import MultiPartitionWidget
 from ....callbacks import ExtractorCallbacks
 
 # New modular imports
@@ -130,13 +129,6 @@ class CacheFirefoxExtractor(BaseExtractor):
         widget = QWidget(parent)
         layout = QVBoxLayout(widget)
 
-        # Multi-partition discovery
-        self._partition_widget = MultiPartitionWidget(
-            parent=widget,
-            default_enabled=True,
-        )
-        layout.addWidget(self._partition_widget)
-
         # Performance options
         perf_group = QGroupBox("Performance Options")
         perf_layout = QVBoxLayout(perf_group)
@@ -188,11 +180,7 @@ class CacheFirefoxExtractor(BaseExtractor):
         config = {
             "worker_count": DEFAULT_WORKERS,
             "hash_mode": "extraction",
-            "scan_all_partitions": True,
         }
-
-        if hasattr(self, "_partition_widget"):
-            config.update(self._partition_widget.get_config())
 
         if hasattr(self, "_worker_spinbox"):
             config["worker_count"] = self._worker_spinbox.value()
@@ -255,7 +243,6 @@ class CacheFirefoxExtractor(BaseExtractor):
         evidence_id = merged_config.get("evidence_id", 0)
         evidence_label = merged_config.get("evidence_label", "")
         run_id = merged_config.get("run_id") or datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
-        scan_all_partitions = merged_config.get("scan_all_partitions", True)
 
         compute_hash = hash_mode == "extraction"
 

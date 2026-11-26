@@ -104,11 +104,10 @@ class ChromiumPermissionsExtractor(BaseExtractor):
         return (output_dir / "manifest.json").exists()
 
     def get_config_widget(self, parent: QWidget) -> Optional[QWidget]:
-        """Return configuration widget (browser selection + multi-partition)."""
+        """Return configuration widget (browser selection)."""
         return BrowserConfigWidget(
             parent,
             supported_browsers=self.SUPPORTED_BROWSERS,
-            default_scan_all_partitions=True,
         )
 
     def get_status_widget(
@@ -156,8 +155,6 @@ class ChromiumPermissionsExtractor(BaseExtractor):
 
         output_dir.mkdir(parents=True, exist_ok=True)
 
-        # Determine multi-partition mode
-        scan_all_partitions = config.get("scan_all_partitions", True)
         evidence_conn = config.get("evidence_conn")
 
         manifest_data = {
@@ -169,7 +166,7 @@ class ChromiumPermissionsExtractor(BaseExtractor):
             "extraction_timestamp_utc": datetime.now(timezone.utc).isoformat(),
             "extraction_tool": self._get_extraction_tool_version(),
             "e01_context": self._get_e01_context(evidence_fs),
-            "multi_partition": scan_all_partitions,
+            "multi_partition": True,
             "files": [],
             "status": "ok",
             "notes": [],
@@ -182,7 +179,7 @@ class ChromiumPermissionsExtractor(BaseExtractor):
         browsers_to_search = [b for b in browsers_to_search if b in self.SUPPORTED_BROWSERS]
 
         # Scan for Preferences files (multi-partition aware)
-        if scan_all_partitions and evidence_conn is not None:
+        if evidence_conn is not None:
             # Use file_list discovery for multi-partition support
             files_by_partition = self._discover_files_multi_partition(
                 evidence_conn, evidence_id, browsers_to_search, callbacks

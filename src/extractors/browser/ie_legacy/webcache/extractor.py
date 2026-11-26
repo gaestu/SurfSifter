@@ -32,7 +32,6 @@ from PySide6.QtWidgets import QWidget, QLabel
 
 from ....base import BaseExtractor, ExtractorMetadata
 from ....callbacks import ExtractorCallbacks
-from ....widgets import MultiPartitionWidget
 from ...._shared.file_list_discovery import (
     discover_from_file_list,
     check_file_list_available,
@@ -110,10 +109,8 @@ class IEWebCacheExtractor(BaseExtractor):
         return (output_dir / "manifest.json").exists()
 
     def get_config_widget(self, parent: QWidget) -> Optional[QWidget]:
-        """
-        Return configuration widget (multi-partition option).
-        """
-        return MultiPartitionWidget(parent, default_enabled=True)
+        """No configuration options."""
+        return None
 
     def get_status_widget(
         self,
@@ -159,7 +156,7 @@ class IEWebCacheExtractor(BaseExtractor):
 
         Workflow:
             1. Generate run_id
-            2. Scan evidence for WebCacheV01.dat files (multi-partition if enabled)
+            2. Scan evidence for WebCacheV01.dat files (all partitions via file_list)
             3. Copy WebCache files and associated logs to output_dir/
             4. Calculate hashes, collect E01 context
             5. Write manifest.json

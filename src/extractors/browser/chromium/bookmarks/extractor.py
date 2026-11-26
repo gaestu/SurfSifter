@@ -121,14 +121,13 @@ class ChromiumBookmarksExtractor(BaseExtractor):
 
     def get_config_widget(self, parent: QWidget) -> Optional[QWidget]:
         """
-        Return configuration widget (browser selection + multi-partition).
+        Return configuration widget (browser selection).
 
-        Uses BrowserConfigWidget with Chromium browsers and multi-partition option.
+        Uses BrowserConfigWidget with Chromium browsers.
         """
         return BrowserConfigWidget(
             parent,
             supported_browsers=get_all_browsers(),
-            default_scan_all_partitions=True,
         )
 
     def get_status_widget(
@@ -210,13 +209,12 @@ class ChromiumBookmarksExtractor(BaseExtractor):
 
         # Determine which browsers to search
         browsers = config.get("browsers") or config.get("selected_browsers") or get_all_browsers()
-        scan_all_partitions = config.get("scan_all_partitions", True)
         evidence_conn = config.get("evidence_conn")
         ewf_paths = None
 
         # Scan for bookmark files
         callbacks.on_step("Scanning for Chromium bookmark files")
-        if scan_all_partitions and evidence_conn is not None:
+        if evidence_conn is not None:
             files_by_partition = self._discover_files_multi_partition(
                 evidence_conn, evidence_id, browsers, callbacks
             )

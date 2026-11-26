@@ -156,7 +156,7 @@ class ChromiumAutofillExtractor(BaseExtractor):
         return (output_dir / "manifest.json").exists()
 
     def get_config_widget(self, parent: QWidget) -> Optional[QWidget]:
-        """Return configuration widget (browser selection + partition config)."""
+        """Return configuration widget (browser selection)."""
         return BrowserConfigWidget(parent, supported_browsers=self.SUPPORTED_BROWSERS)
 
     def get_status_widget(
@@ -223,11 +223,10 @@ class ChromiumAutofillExtractor(BaseExtractor):
         callbacks.on_step("Scanning for Chromium autofill databases")
 
         browsers_to_search = config.get("browsers") or config.get("selected_browsers", self.SUPPORTED_BROWSERS)
-        scan_all_partitions = config.get("scan_all_partitions", True)
         evidence_conn = config.get("evidence_conn")
         ewf_paths = None
 
-        if scan_all_partitions and evidence_conn is not None:
+        if evidence_conn is not None:
             files_by_partition = self._discover_files_multi_partition(
                 evidence_conn, evidence_id, browsers_to_search, callbacks
             )

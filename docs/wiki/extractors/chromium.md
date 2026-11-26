@@ -10,7 +10,7 @@ Source: `src/extractors/browser/chromium/`
 ## Extractors
 ### ChromiumHistoryExtractor
 - Purpose: Extract per-visit browsing history from Chromium History databases.
-- Extraction (source): History SQLite files matched via chromium/_patterns; copies WAL/journal/shm companions; supports multi-partition discovery via file_list when enabled.
+- Extraction (source): History SQLite files matched via chromium/_patterns; copies WAL/journal/shm companions; multi-partition discovery via file_list.
 - Ingestion (transform + store): Parses visits joined with urls via parse_history_visits, converts WebKit timestamps, inserts via insert_browser_history_rows and insert_browser_inventory, and cross-posts each visit to urls via insert_urls.
 - Outputs: Extracted History DB copies, manifest.json, and extracted_files audit records.
 - Special behavior: Stores transition/from_visit/visit_duration/hidden and Chromium visit/url IDs; per-visit URL events (no aggregation).
@@ -30,7 +30,7 @@ Source: `src/extractors/browser/chromium/`
 - Ingestion (transform + store): parse_bookmarks_json reconstructs folder paths and WebKit timestamps; inserts via insert_bookmark_row and cross-posts URL bookmarks to urls (skips javascript/data schemes).
 - Outputs: Copied Bookmarks JSON files, manifest.json, and extracted_files audit records.
 - Special behavior: Recursively parses folder hierarchy and records folder_path.
-- Notes: Uses run_id provenance; no multi-partition file_list in this extractor.
+- Notes: Uses run_id provenance; multi-partition discovery via file_list.
 
 ### ChromiumDownloadsExtractor
 - Purpose: Extract download history from Chromium History databases.

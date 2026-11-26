@@ -4,7 +4,7 @@ Browser Selection Widget
 Configuration widgets for browser artifact extractors.
 Provides checkboxes for selecting which browsers to extract from.
 
-Added MultiPartitionWidget for multi-partition discovery configuration.
+There is no option to limit extraction to one partition.
 """
 
 from __future__ import annotations
@@ -198,118 +198,14 @@ class BrowserSelectionWidget(QWidget):
         self.set_config({"browsers": browsers})
 
 
-class MultiPartitionWidget(QWidget):
-    """
-    Widget for configuring multi-partition discovery.
-
-    Provides a checkbox to enable/disable scanning all partitions
-    (vs. only the auto-selected main partition).
-
-    Usage:
-        widget = MultiPartitionWidget(parent)
-        config = widget.get_config()
-        # config = {"scan_all_partitions": True}
-
-    Combine with BrowserSelectionWidget:
-        browser_widget = BrowserSelectionWidget(parent)
-        partition_widget = MultiPartitionWidget(parent)
-        # ...
-        config = {**browser_widget.get_config(), **partition_widget.get_config()}
-    """
-
-    # Signal emitted when configuration changes
-    config_changed = Signal()
-
-    def __init__(
-        self,
-        parent: Optional[QWidget] = None,
-        default_enabled: bool = True,
-        show_info: bool = True,
-    ):
-        """
-        Initialize the multi-partition configuration widget.
-
-        Args:
-            parent: Parent widget
-            default_enabled: Whether multi-partition scanning is enabled by default
-            show_info: Whether to show explanatory text
-        """
-        super().__init__(parent)
-
-        self._default_enabled = default_enabled
-        self._setup_ui(show_info)
-
-    def _setup_ui(self, show_info: bool) -> None:
-        """Set up the widget UI."""
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(0, 0, 0, 0)
-
-        # Multi-partition checkbox
-        self._checkbox = QCheckBox("Scan all partitions (recommended)")
-        self._checkbox.setObjectName("scan_all_partitions")
-        self._checkbox.setChecked(self._default_enabled)
-        self._checkbox.setToolTip(
-            "When enabled, searches for browser artifacts across all partitions.\n"
-            "This finds artifacts in dual-boot systems, portable apps, and old OS installations.\n"
-            "Requires file_list to be generated first (via File List extractor)."
-        )
-        self._checkbox.stateChanged.connect(self._on_config_changed)
-        layout.addWidget(self._checkbox)
-
-        # Info label
-        if show_info:
-            info_label = QLabel(
-                "<small>💡 <b>Multi-partition discovery</b>: Scans all partitions for browser artifacts, "
-                "not just the main Windows partition. Useful for dual-boot systems, portable apps, "
-                "and forensic recovery of old installations.</small>"
-            )
-            info_label.setWordWrap(True)
-            info_label.setStyleSheet("color: #666; margin-top: 3px; margin-left: 20px;")
-            layout.addWidget(info_label)
-
-    def _on_config_changed(self) -> None:
-        """Handle configuration change."""
-        self.config_changed.emit()
-
-    def get_config(self) -> Dict[str, Any]:
-        """
-        Get current configuration.
-
-        Returns:
-            Dict with "scan_all_partitions" key
-        """
-        return {"scan_all_partitions": self._checkbox.isChecked()}
-
-    def set_config(self, config: Dict[str, Any]) -> None:
-        """
-        Set configuration from dict.
-
-        Args:
-            config: Dict with "scan_all_partitions" key
-        """
-        if "scan_all_partitions" in config:
-            self._checkbox.setChecked(bool(config["scan_all_partitions"]))
-
-    def is_enabled(self) -> bool:
-        """Return True if multi-partition scanning is enabled."""
-        return self._checkbox.isChecked()
-
-    def set_enabled(self, enabled: bool) -> None:
-        """Set whether multi-partition scanning is enabled."""
-        self._checkbox.setChecked(enabled)
-
-
 class BrowserConfigWidget(QWidget):
     """
-    Combined widget for browser extraction configuration.
-
-    Combines BrowserSelectionWidget and MultiPartitionWidget into
-    a single widget for browser artifact extractors.
+    Browser extraction configuration: which browsers to extract from.
 
     Usage:
         widget = BrowserConfigWidget(parent)
         config = widget.get_config()
-        # config = {"browsers": ["chrome", "firefox"], "scan_all_partitions": True}
+        # config = {"browsers": ["chrome", "firefox"]}
     """
 
     config_changed = Signal()
@@ -319,30 +215,23 @@ class BrowserConfigWidget(QWidget):
         parent: Optional[QWidget] = None,
         default_browsers: Optional[List[str]] = None,
         supported_browsers: Optional[List[str]] = None,
-        default_scan_all_partitions: bool = True,
     ):
         """
-        Initialize the combined browser config widget.
+        Initialize the browser config widget.
 
         Args:
             parent: Parent widget
             default_browsers: List of browser keys to select by default
             supported_browsers: List of browser keys to show
-            default_scan_all_partitions: Whether to scan all partitions by default
         """
         super().__init__(parent)
 
-        self._setup_ui(
-            default_browsers,
-            supported_browsers,
-            default_scan_all_partitions,
-        )
+        self._setup_ui(default_browsers, supported_browsers)
 
     def _setup_ui(
         self,
         default_browsers: Optional[List[str]],
         supported_browsers: Optional[List[str]],
-        default_scan_all_partitions: bool,
     ) -> None:
         """Set up the widget UI."""
         layout = QVBoxLayout(self)
@@ -357,46 +246,31 @@ class BrowserConfigWidget(QWidget):
         self._browser_widget.selection_changed.connect(self._on_config_changed)
         layout.addWidget(self._browser_widget)
 
-        # Multi-partition option
-        self._partition_widget = MultiPartitionWidget(
-            parent=self,
-            default_enabled=default_scan_all_partitions,
-        )
-        self._partition_widget.config_changed.connect(self._on_config_changed)
-        layout.addWidget(self._partition_widget)
-
     def _on_config_changed(self) -> None:
         """Handle configuration change."""
         self.config_changed.emit()
 
     def get_config(self) -> Dict[str, Any]:
         """
-        Get combined configuration.
+        Get configuration.
 
         Returns:
-            Dict with "browsers" and "scan_all_partitions" keys
+            Dict with "browsers" key
         """
-        config = self._browser_widget.get_config()
-        config.update(self._partition_widget.get_config())
-        return config
+        return self._browser_widget.get_config()
 
     def set_config(self, config: Dict[str, Any]) -> None:
         """
         Set configuration from dict.
 
         Args:
-            config: Dict with "browsers" and/or "scan_all_partitions" keys
+            config: Dict with "browsers" key
         """
         self._browser_widget.set_config(config)
-        self._partition_widget.set_config(config)
 
     def get_selected_browsers(self) -> List[str]:
         """Get list of selected browser keys."""
         return self._browser_widget.get_selected_browsers()
-
-    def is_multi_partition_enabled(self) -> bool:
-        """Return True if multi-partition scanning is enabled."""
-        return self._partition_widget.is_enabled()
 
 
 class ESEStatusWidget(QWidget):

@@ -104,11 +104,10 @@ class ChromiumFaviconsExtractor(BaseExtractor):
         return (output_dir / "manifest.json").exists()
 
     def get_config_widget(self, parent: QWidget) -> Optional[QWidget]:
-        """Return configuration widget (browser selection + multi-partition)."""
+        """Return configuration widget (browser selection)."""
         return BrowserConfigWidget(
             parent,
             supported_browsers=self.SUPPORTED_BROWSERS,
-            default_scan_all_partitions=True,
         )
 
     def get_status_widget(
@@ -181,9 +180,8 @@ class ChromiumFaviconsExtractor(BaseExtractor):
         }
 
         browsers_to_search = config.get("browsers") or config.get("selected_browsers", self.SUPPORTED_BROWSERS)
-        scan_all_partitions = config.get("scan_all_partitions", True)
         evidence_conn = config.get("evidence_conn")
-        ewf_paths = get_ewf_paths_from_evidence_fs(evidence_fs) if scan_all_partitions else None
+        ewf_paths = get_ewf_paths_from_evidence_fs(evidence_fs)
 
         favicon_db_count = 0
         top_sites_db_count = 0
@@ -197,8 +195,8 @@ class ChromiumFaviconsExtractor(BaseExtractor):
             browsers_to_search,
             "favicons",
             callbacks,
-            evidence_conn=evidence_conn if scan_all_partitions else None,
-            evidence_id=evidence_id if scan_all_partitions else None,
+            evidence_conn=evidence_conn,
+            evidence_id=evidence_id,
             ewf_paths=ewf_paths,
         )
         manifest_data["files"].extend(favicon_dbs)
@@ -213,8 +211,8 @@ class ChromiumFaviconsExtractor(BaseExtractor):
             browsers_to_search,
             "top_sites",
             callbacks,
-            evidence_conn=evidence_conn if scan_all_partitions else None,
-            evidence_id=evidence_id if scan_all_partitions else None,
+            evidence_conn=evidence_conn,
+            evidence_id=evidence_id,
             ewf_paths=ewf_paths,
         )
         manifest_data["files"].extend(top_sites_dbs)

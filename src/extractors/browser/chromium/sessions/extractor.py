@@ -140,11 +140,10 @@ class ChromiumSessionsExtractor(BaseExtractor):
         return (output_dir / "manifest.json").exists()
 
     def get_config_widget(self, parent: QWidget) -> Optional[QWidget]:
-        """Return configuration widget (browser selection + multi-partition)."""
+        """Return configuration widget (browser selection)."""
         return BrowserConfigWidget(
             parent,
             supported_browsers=self.SUPPORTED_BROWSERS,
-            default_scan_all_partitions=True,
         )
 
     def get_status_widget(
@@ -187,7 +186,6 @@ class ChromiumSessionsExtractor(BaseExtractor):
         evidence_id = config.get("evidence_id", 1)
         evidence_label = config.get("evidence_label", "")
         evidence_conn = config.get("evidence_conn")
-        scan_all_partitions = config.get("scan_all_partitions", True)
 
         # Start statistics tracking
         stats = StatisticsCollector.instance()
@@ -207,7 +205,7 @@ class ChromiumSessionsExtractor(BaseExtractor):
             "extraction_timestamp_utc": datetime.now(timezone.utc).isoformat(),
             "extraction_tool": self._get_extraction_tool_version(),
             "e01_context": self._get_e01_context(evidence_fs),
-            "multi_partition_extraction": scan_all_partitions,
+            "multi_partition_extraction": True,
             "partitions_scanned": [],
             "partitions_with_artifacts": [],
             "files": [],
@@ -220,21 +218,20 @@ class ChromiumSessionsExtractor(BaseExtractor):
         browsers_to_search = config.get("browsers") or config.get("selected_browsers", self.SUPPORTED_BROWSERS)
         browsers_to_search = [b for b in browsers_to_search if b in self.SUPPORTED_BROWSERS]
 
-        # Discover files - use multi-partition if enabled and evidence_conn available
+        # Discover files - use file_list discovery when evidence_conn is available
         files_by_partition: Dict[int, List[Dict]] = {}
 
-        if scan_all_partitions and evidence_conn is not None:
+        if evidence_conn is not None:
             # Multi-partition discovery via file_list
             files_by_partition = self._discover_files_multi_partition(
                 evidence_fs, evidence_conn, evidence_id, browsers_to_search, callbacks
             )
         else:
             # Single partition fallback
-            if scan_all_partitions and evidence_conn is None:
-                callbacks.on_log(
-                    "Multi-partition scan requested but no evidence_conn provided, using single partition",
-                    "warning"
-                )
+            callbacks.on_log(
+                "No evidence_conn provided, using single partition",
+                "warning"
+            )
             session_files = self._discover_session_files(evidence_fs, browsers_to_search, callbacks)
             partition_index = getattr(evidence_fs, 'partition_index', 0)
             if session_files:

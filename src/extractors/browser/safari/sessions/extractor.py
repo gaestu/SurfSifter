@@ -22,7 +22,6 @@ from PySide6.QtWidgets import QWidget, QLabel
 
 from ....base import BaseExtractor, ExtractorMetadata
 from ....callbacks import ExtractorCallbacks
-from ....widgets import MultiPartitionWidget
 from ...._shared.file_list_discovery import (
     open_partition_for_extraction,
     get_ewf_paths_from_evidence_fs,
@@ -84,8 +83,8 @@ class SafariSessionsExtractor(BaseExtractor):
         return (output_dir / "manifest.json").exists()
 
     def get_config_widget(self, parent: QWidget) -> Optional[QWidget]:
-        """Return configuration widget for multi-partition support."""
-        return MultiPartitionWidget(parent)
+        """No configuration options."""
+        return None
 
     def get_status_widget(
         self,
