@@ -842,18 +842,14 @@ class FirefoxTransportSecurityExtractor(BaseExtractor):
 
             callbacks.on_log(f"Copying {source_path} to {filename}", "info")
 
-            # The file list gives paths with or without a leading slash. A
-            # mounted directory accepts only the relative form.
-            read_path = source_path.lstrip("/")
-
-            declared_size = partition_fs.stat(read_path).size_bytes
+            declared_size = partition_fs.stat(source_path).size_bytes
             if declared_size > MAX_HSTS_FILE_BYTES:
                 raise ValueError(
                     f"file has {declared_size} bytes, above the {MAX_HSTS_FILE_BYTES} byte safety limit"
                 )
 
             # Bounded read, in case the size above was not the real one
-            with partition_fs.open_for_read(read_path) as source:
+            with partition_fs.open_for_read(source_path) as source:
                 file_content = source.read(MAX_HSTS_FILE_BYTES + 1)
             if len(file_content) > MAX_HSTS_FILE_BYTES:
                 raise ValueError(f"file is above the {MAX_HSTS_FILE_BYTES} byte safety limit")

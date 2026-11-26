@@ -70,6 +70,10 @@ class FileListExtractor:
                 - skipped_rows: Entries skipped due to errors
                 - duration_seconds: Import duration
                 - import_timestamp: UTC timestamp of import
+                - normalized_paths: Paths changed to file list form
+                - unconverted_collisions: Paths left as in the CSV because their
+                  converted form collided with another row's path
+                - collision_examples: Some of these paths, as in the CSV
         """
         start_time = datetime.now(timezone.utc)
         import_timestamp = start_time.strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -141,6 +145,11 @@ class FileListExtractor:
             "import_timestamp": import_timestamp,
             "import_source": self.import_source,
             "csv_path": str(self.csv_path),
+            # Paths changed to file list form (backslashes, drive letter, FTK prefix)
+            "normalized_paths": self.parser.normalized_path_count,
+            # Paths left as in the CSV because they collided after conversion
+            "unconverted_collisions": self.parser.collision_row_count,
+            "collision_examples": list(self.parser.collision_examples),
         }
 
         logger.info(

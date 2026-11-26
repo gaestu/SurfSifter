@@ -1298,11 +1298,16 @@ class MountedFS(EvidenceFS):
         """
         Resolve a user-provided path and enforce mount root confinement.
 
+        A leading slash means the root of the mounted evidence, as in
+        ``PyEwfTskFS``: ``/Users/x`` and ``Users/x`` are the same file. File
+        list paths written by ``fls`` have this form.
+
         This prevents path traversal such as '../..' from escaping the mounted
         evidence root.
         """
         base = self.mount_point.resolve()
-        resolved = (self.mount_point / path).resolve()
+        # Joining an absolute path would replace the mount point
+        resolved = (self.mount_point / path.lstrip("/")).resolve()
         try:
             resolved.relative_to(base)
         except ValueError as exc:

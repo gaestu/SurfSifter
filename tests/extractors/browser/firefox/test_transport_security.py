@@ -25,7 +25,7 @@ from extractors.browser.firefox.transport_security import extractor as extractor
 from extractors.browser.firefox.transport_security._parsers import parse_transport_security_file
 from tests.fixtures.file_list_discovery import (
     EWF_PATHS,
-    PartitionFS as SharedPartitionFS,
+    PartitionFS,
     add_to_file_list,
     make_partition_roots,
     mock_callbacks,
@@ -43,15 +43,6 @@ TOR_PATH = (
 
 CONTENT_P1 = b"partition-one.example:HSTS\t0\t19000\t1893456000000,1,0\n"
 CONTENT_P2 = b"partition-two.example:HSTS\t0\t19001\t1893456000000,1,1\n"
-
-
-class PartitionFS(SharedPartitionFS):
-    """Reads paths as a plain MountedFS does: a leading slash is not removed.
-
-    The extractor must strip it itself (#89), so the harness must not hide it.
-    """
-
-    strip_leading_slash = False
 
 
 @pytest.fixture
@@ -219,7 +210,7 @@ class TestExtractionPerPartition:
         assert entry["forensic_path"] == f"p2:/{HSTS_PATH}"
 
         assert list(opened_partitions) == [2]
-        assert opened_partitions[2].read_paths == [HSTS_PATH]
+        assert opened_partitions[2].read_paths == [f"/{HSTS_PATH}"]
         assert opened_partitions[2].closed is True
         assert fs.read_paths == [], "nothing may be read from the open partition"
 
@@ -485,7 +476,7 @@ class TestPartitionOpenFailure:
         assert manifest["status"] == "partial"
         # The open partition's file is still extracted; partition 2's path is not read.
         assert [e["logical_path"] for e in manifest["files"]] == [f"/{HSTS_PATH}"]
-        assert fs.read_paths == [HSTS_PATH]
+        assert fs.read_paths == [f"/{HSTS_PATH}"]
         assert len(manifest["notes"]) == 1
         assert "partition 2" in manifest["notes"][0]
         assert "partition is encrypted" in manifest["notes"][0]

@@ -91,7 +91,9 @@ def test_encase_parser_with_synthetic_data(tmp_path):
     # Check first entry
     entry1 = entries[0]
     assert entry1["file_name"] == "test.exe"
-    assert entry1["file_path"] == "C:\\Temp\\test.exe"
+    # Windows path converted to file list form (#99); the original is kept
+    assert entry1["file_path"] == "/Temp/test.exe"
+    assert json.loads(entry1["metadata"])["path_as_imported"] == "C:\\Temp\\test.exe"
     assert entry1["size_bytes"] == 1024
     assert entry1["deleted"] is False
     assert entry1["md5_hash"] == "d41d8cd98f00b204e9800998ecf8427e"
@@ -129,7 +131,7 @@ def test_generic_parser_with_custom_mapping(tmp_path):
 
     entry = entries[0]
     assert entry["file_name"] == "app.exe"
-    assert entry["file_path"] == "C:\\Apps\\app.exe"
+    assert entry["file_path"] == "/Apps/app.exe"
     assert entry["size_bytes"] == 2048
     assert entry["modified_ts"] == "2025-01-01T10:00:00Z"
     assert entry["extension"] == ".exe"

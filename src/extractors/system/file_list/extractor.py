@@ -17,6 +17,7 @@ from PySide6.QtWidgets import QWidget
 
 from ...base import BaseExtractor, ExtractorMetadata
 from ...callbacks import ExtractorCallbacks
+from .parser import PATH_AS_IMPORTED_KEY
 from .worker import FileListExtractor
 from .ui import FileListConfigWidget, FileListStatusWidget
 
@@ -513,6 +514,21 @@ class SystemFileListExtractor(BaseExtractor):
                 f"({stats['skipped_rows']} skipped)",
                 "info"
             )
+            if stats.get("normalized_paths"):
+                callbacks.on_log(
+                    f"Converted {stats['normalized_paths']:,} paths to file list form "
+                    "(backslashes, drive letter or FTK partition prefix); the path as it was "
+                    f"in the CSV is kept in each row's metadata ({PATH_AS_IMPORTED_KEY})",
+                    "info"
+                )
+            if stats.get("unconverted_collisions"):
+                examples = ", ".join(stats.get("collision_examples", []))
+                callbacks.on_log(
+                    f"{stats['unconverted_collisions']:,} paths were stored as they are in the CSV, "
+                    "not converted: another partition or drive in the CSV has the same path. "
+                    f"Extractors cannot read these files. Examples: {examples}",
+                    "warning"
+                )
 
             # Report completion
             if collector:

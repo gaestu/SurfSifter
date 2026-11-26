@@ -13,10 +13,11 @@ from __future__ import annotations
 import csv
 import json
 import logging
+import re
 from abc import ABC, abstractmethod
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, NamedTuple, Optional
 
 import chardet
 
@@ -24,16 +25,204 @@ __all__ = [
     "BaseFileListParser",
     "FTKParser",
     "EnCaseParser",
+    "FTK_PARTITION_KEY",
     "GenericParser",
+    "NormalizedPath",
+    "PATH_AS_IMPORTED_KEY",
     "detect_parser",
+    "normalize_import_path",
     "_auto_detect_column_mapping",
 ]
 
 logger = logging.getLogger(__name__)
 
+# FTK Imager directory listing: "Partition 1\NONAME [NTFS]\[root]\boot.ini",
+# optionally after one segment with the name of the evidence item. Matched
+# after "\" -> "/". The volume label ends with the file system type in
+# brackets. Only the start of the path is matched: folders with these names
+# further down (which anyone can create on the evidence) must not rewrite the
+# path. The label part cannot contain brackets before the type, so matching
+# does not backtrack.
+_FTK_ROOT_RE = re.compile(
+    r"^(?:(?![A-Za-z]:(?:/|$))[^/]+/)?"
+    r"Partition (?P<partition>\d+)/[^/\[\]]*\[[^/\]]+\]/\[root\](?:/(?P<rest>.*))?$",
+    re.DOTALL,
+)
+
+# Drive letter at the start: "C:/Users/..." or "C:"
+_DRIVE_LETTER_RE = re.compile(r"^[A-Za-z]:(?=/|$)")
+
+# Metadata keys written by the import (next to the CSV's extra columns)
+PATH_AS_IMPORTED_KEY = "path_as_imported"
+FTK_PARTITION_KEY = "ftk_partition"
+
+
+class NormalizedPath(NamedTuple):
+    """Result of normalize_import_path()."""
+
+    path: str
+    # "Partition N" of an FTK Imager path, None for other paths
+    ftk_partition: Optional[int] = None
+
+
+def normalize_import_path(path: str) -> NormalizedPath:
+    """
+    Convert a path from an imported CSV to the form of the file list.
+
+    Extractors look paths up relative to the root of the file system, with
+    "/" as separator (``fls`` writes "/Users/..."). Exports of Windows tools
+    use other forms:
+
+    - A path with "\\" and no "/" is a Windows path: "\\" becomes "/". A path
+      that already contains "/" keeps its backslashes, which may be part of a
+      file name on Linux or macOS evidence.
+    - FTK Imager: "Partition N\\<label> [FS]\\[root]\\rest" becomes "/rest"
+      (also after an evidence item name). N is returned separately; it is not
+      used as the partition index, because FTK may number partitions
+      differently and directory evidence has no partitions to open.
+    - A drive letter at the start ("C:\\rest") becomes "/rest".
+
+    Any other path is returned unchanged.
+
+    Args:
+        path: Path as it is in the CSV
+
+    Returns:
+        NormalizedPath with the path to store and the FTK partition number
+    """
+    if not path:
+        return NormalizedPath(path)
+
+    normalized = path
+    if "\\" in normalized and "/" not in normalized:
+        normalized = normalized.replace("\\", "/")
+
+    ftk_match = _FTK_ROOT_RE.match(normalized)
+    if ftk_match:
+        rest = ftk_match.group("rest") or ""
+        return NormalizedPath("/" + rest, int(ftk_match.group("partition")))
+
+    if _DRIVE_LETTER_RE.match(normalized):
+        normalized = normalized[2:] or "/"
+
+    return NormalizedPath(normalized)
+
 
 class BaseFileListParser(ABC):
     """Base class for file list parsers."""
+
+    # Number of colliding original paths named in the log
+    COLLISION_EXAMPLES = 5
+
+    def __init__(self) -> None:
+        # Paths changed by normalize_import_path() during the last parse()
+        self.normalized_path_count = 0
+        # Rows left unconverted because their converted path collided with
+        # another row's path (see _keep_colliding_paths_unconverted)
+        self.collision_row_count = 0
+        self.collision_examples: List[str] = []
+
+    def _normalize_entry_path(self, full_path: str, metadata: Dict[str, Any]) -> str:
+        """
+        Normalise a CSV path for the file list and record what was changed.
+
+        The path as it is in the CSV and the FTK partition number are added
+        to ``metadata`` (the row's metadata JSON) when the path is changed.
+        A CSV column with one of these names is kept as ``csv:<name>``, so
+        that it cannot pass for a value written by the import.
+        """
+        for key in (PATH_AS_IMPORTED_KEY, FTK_PARTITION_KEY):
+            if key in metadata:
+                metadata[f"csv:{key}"] = metadata.pop(key)
+
+        result = normalize_import_path(full_path)
+        if result.path != full_path:
+            self.normalized_path_count += 1
+            metadata[PATH_AS_IMPORTED_KEY] = full_path
+            if result.ftk_partition is not None:
+                metadata[FTK_PARTITION_KEY] = result.ftk_partition
+        return result.path
+
+    def _keep_colliding_paths_unconverted(self, entries: List[Dict[str, Any]]) -> None:
+        """
+        Undo the conversion of paths that would collide with another row.
+
+        Different CSV paths can give the same converted path, for example
+        ``$MFT`` on two FTK partitions or ``C:\\x`` and ``D:\\x``. The file
+        list keeps one row per partition and path, and imported rows have no
+        partition, so all but one would be dropped. Every converted row in
+        such a group keeps its path as it is in the CSV instead: the rows are
+        all stored, but extractors cannot read them, because it is not known
+        which volume the open filesystem is. Rows with the same CSV path are
+        not a collision (they were one row before, too).
+        """
+        originals_by_key: Dict[tuple, set] = {}
+        for entry in entries:
+            original = self._original_path(entry)
+            key = self._unique_key(entry)
+            originals_by_key.setdefault(key, set()).add(original)
+
+        self.collision_row_count = 0
+        self.collision_examples = []
+        for entry in entries:
+            original = self._original_path(entry)
+            if original == entry["file_path"]:
+                continue
+            key = self._unique_key(entry)
+            if len(originals_by_key[key]) < 2:
+                continue
+
+            metadata = json.loads(entry["metadata"])
+            metadata.pop(PATH_AS_IMPORTED_KEY, None)
+            metadata.pop(FTK_PARTITION_KEY, None)
+            entry["metadata"] = json.dumps(metadata) if metadata else None
+            entry["file_path"] = original
+            self.normalized_path_count -= 1
+            self.collision_row_count += 1
+            if len(self.collision_examples) < self.COLLISION_EXAMPLES:
+                self.collision_examples.append(original)
+
+        if self.collision_row_count:
+            logger.warning(
+                "%d paths were not converted to file list form because another "
+                "row has the same converted path (another partition or drive); "
+                "they are stored as in the CSV and cannot be read by extractors. "
+                "Examples: %s",
+                self.collision_row_count,
+                self.collision_examples,
+            )
+
+    @staticmethod
+    def _unique_key(entry: Dict[str, Any]) -> tuple:
+        """Key of the file list's unique index (an empty partition counts as -1)."""
+        partition_index = entry.get("partition_index")
+        return (-1 if partition_index is None else partition_index, entry["file_path"])
+
+    @staticmethod
+    def _original_path(entry: Dict[str, Any]) -> str:
+        """The path of a parsed row as it is in the CSV."""
+        if entry.get("metadata"):
+            original = json.loads(entry["metadata"]).get(PATH_AS_IMPORTED_KEY)
+            if original is not None:
+                return original
+        return entry["file_path"]
+
+    def _finish_parse(self, entries: List[Dict[str, Any]]) -> None:
+        """Resolve path collisions and log the conversions of the last parse()."""
+        self._keep_colliding_paths_unconverted(entries)
+        self._log_normalized_paths(len(entries))
+
+    def _log_normalized_paths(self, total: int) -> None:
+        """Log how many paths of the last parse() were changed."""
+        if self.normalized_path_count:
+            logger.info(
+                "Normalised %d of %d paths to file list form "
+                "(backslashes, drive letter or FTK partition prefix); "
+                "the original path is kept in the row metadata (%s)",
+                self.normalized_path_count,
+                total,
+                PATH_AS_IMPORTED_KEY,
+            )
 
     def detect_encoding(self, file_path: Path) -> str:
         """
@@ -175,6 +364,7 @@ class FTKParser(BaseFileListParser):
         encoding = self.detect_encoding(csv_path)
         entries = []
         skipped_rows = 0
+        self.normalized_path_count = 0
 
         try:
             with open(csv_path, "r", encoding=encoding, newline="") as f:
@@ -202,6 +392,7 @@ class FTKParser(BaseFileListParser):
             logger.info(
                 f"Parsed {len(entries)} entries from FTK CSV (skipped {skipped_rows} rows)"
             )
+            self._finish_parse(entries)
             return entries
 
         except Exception as e:
@@ -254,6 +445,8 @@ class FTKParser(BaseFileListParser):
             if key not in standard_fields and value:
                 metadata[key] = value
 
+        full_path = self._normalize_entry_path(full_path, metadata)
+
         return {
             "file_path": full_path,
             "file_name": filename,
@@ -290,6 +483,7 @@ class EnCaseParser(BaseFileListParser):
         encoding = self.detect_encoding(csv_path)
         entries = []
         skipped_rows = 0
+        self.normalized_path_count = 0
 
         try:
             with open(csv_path, "r", encoding=encoding, newline="") as f:
@@ -316,6 +510,7 @@ class EnCaseParser(BaseFileListParser):
             logger.info(
                 f"Parsed {len(entries)} entries from EnCase CSV (skipped {skipped_rows} rows)"
             )
+            self._finish_parse(entries)
             return entries
 
         except Exception as e:
@@ -374,6 +569,8 @@ class EnCaseParser(BaseFileListParser):
             if key not in standard_fields and value:
                 metadata[key] = value
 
+        full_path = self._normalize_entry_path(full_path, metadata)
+
         return {
             "file_path": full_path,
             "file_name": filename,
@@ -407,6 +604,7 @@ class GenericParser(BaseFileListParser):
                     'modified_ts': 'Date Modified',
                 }
         """
+        super().__init__()
         self.column_mapping = column_mapping
 
     def parse(self, csv_path: Path) -> List[Dict[str, Any]]:
@@ -414,6 +612,7 @@ class GenericParser(BaseFileListParser):
         encoding = self.detect_encoding(csv_path)
         entries = []
         skipped_rows = 0
+        self.normalized_path_count = 0
 
         try:
             with open(csv_path, "r", encoding=encoding, newline="") as f:
@@ -439,6 +638,7 @@ class GenericParser(BaseFileListParser):
             logger.info(
                 f"Parsed {len(entries)} entries from generic CSV (skipped {skipped_rows} rows)"
             )
+            self._finish_parse(entries)
             return entries
 
         except Exception as e:
@@ -523,6 +723,8 @@ class GenericParser(BaseFileListParser):
         for key, value in row.items():
             if key not in mapped_columns and value:
                 metadata[key] = value
+
+        full_path = self._normalize_entry_path(full_path, metadata)
 
         return {
             "file_path": full_path,

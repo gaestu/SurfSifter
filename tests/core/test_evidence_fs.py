@@ -45,6 +45,72 @@ def test_mounted_fs_stat_rejects_path_traversal(tmp_path: Path) -> None:
         fs.stat("../secret.txt")
 
 
+class TestMountedFSLeadingSlash:
+    """A leading slash means the root of the mounted directory, as in PyEwfTskFS (#99).
+
+    File list paths written by fls have this form.
+    """
+
+    REL = "Users/alice/AppData/Roaming/Mozilla/Firefox/Profiles/abc.default/cookies.sqlite"
+
+    @pytest.fixture
+    def fs(self, tmp_path: Path) -> MountedFS:
+        mount = tmp_path / "mount"
+        target = mount / self.REL
+        target.parent.mkdir(parents=True)
+        target.write_bytes(b"cookie-db")
+        (tmp_path / "secret.txt").write_text("secret", encoding="utf-8")
+        return MountedFS(mount)
+
+    @pytest.mark.parametrize("prefix", ["/", "//"], ids=["slash", "double-slash"])
+    def test_read_file(self, fs: MountedFS, prefix: str) -> None:
+        assert fs.read_file(prefix + self.REL) == b"cookie-db"
+        assert fs.read_file(self.REL) == b"cookie-db"
+
+    def test_open_for_read_and_stream(self, fs: MountedFS) -> None:
+        with fs.open_for_read("/" + self.REL) as handle:
+            assert handle.read() == b"cookie-db"
+        assert b"".join(fs.open_for_stream("/" + self.REL)) == b"cookie-db"
+
+    def test_stat(self, fs: MountedFS) -> None:
+        assert fs.stat("/" + self.REL).size_bytes == len(b"cookie-db")
+        assert fs.stat("/" + self.REL) == fs.stat(self.REL)
+
+    def test_walk_directory(self, fs: MountedFS) -> None:
+        assert list(fs.walk_directory("/Users/alice")) == [self.REL]
+        assert list(fs.walk_directory("/")) == [self.REL]
+
+    @pytest.mark.parametrize(
+        "path",
+        ["/../secret.txt", "/Users/../../secret.txt", "../secret.txt"],
+    )
+    def test_traversal_is_still_rejected(self, fs: MountedFS, path: str) -> None:
+        with pytest.raises(ValueError, match="Path traversal attempt"):
+            fs.read_file(path)
+        with pytest.raises(ValueError, match="Path traversal attempt"):
+            fs.stat(path)
+        with pytest.raises(ValueError, match="Path traversal attempt"):
+            list(fs.open_for_stream(path))
+
+    def test_absolute_host_path_stays_inside_the_mount(self, fs: MountedFS, tmp_path: Path) -> None:
+        """An absolute path is looked up below the mount, never on the host."""
+        host_file = tmp_path / "secret.txt"
+        with pytest.raises(FileNotFoundError):
+            fs.read_file(str(host_file))
+        with pytest.raises(FileNotFoundError):
+            fs.stat(str(host_file))
+
+    def test_symlink_leaving_the_mount_is_rejected(self, fs: MountedFS, tmp_path: Path) -> None:
+        link = fs.mount_point / "Users" / "escape"
+        try:
+            link.symlink_to(tmp_path)
+        except (OSError, NotImplementedError):
+            pytest.skip("symlinks not supported here")
+        for path in ("Users/escape/secret.txt", "/Users/escape/secret.txt"):
+            with pytest.raises(ValueError, match="Path traversal attempt"):
+                fs.read_file(path)
+
+
 def test_find_ewf_segments_single(tmp_path: Path) -> None:
     """Test discovery of single-segment E01 file."""
     e01 = tmp_path / "evidence.E01"

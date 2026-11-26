@@ -32,6 +32,15 @@ Source: `src/extractors/system/`
 - Outputs: Bodyfile output and/or CSV imports; `file_list` table entries used by many downstream extractors for multi-partition file discovery.
 - Dependencies: SleuthKit binaries (`fls`, `mmls`, `icat`) resolved via bundled binaries or system PATH.
 - Notes: The file_list table is a prerequisite for multi-partition discovery in many browser extractors; supports both E01 images and mounted filesystems.
+- CSV import, path forms: extractors look a path up relative to the root of the file system (directory evidence: the evidence folder). Use one of these forms in the path column:
+  - `/Users/alice/...` or `Users/alice/...` (both are the same file, also on directory evidence).
+  - Windows paths with backslashes, such as `C:\Users\alice\...` or `Users\alice\...`. The import turns `\` into `/` and drops the drive letter, so `C:\Users\alice\x` is stored as `/Users/alice/x`.
+  - FTK Imager directory listings: `Partition 1\NONAME [NTFS]\[root]\Users\...` is stored as `/Users/...`. The prefix is recognised only at the start of the path, or after one evidence item name (`image.E01\Partition 1\...`); folders with such names further down a path are kept as they are. The FTK partition number is kept in the row's metadata (`ftk_partition`) and is not used as the partition: an imported file is looked up on the open partition (on directory evidence, the evidence folder). FTK entries outside `[root]` (`[orphan]`, `[unallocated space]`) keep their prefix and cannot be read by extractors.
+  - Paths that would be the same after this conversion are not converted: for example `$MFT` on two FTK partitions, or `C:\Tools\x.exe` and `D:\Tools\x.exe`. Imported rows have no partition, so only one of them could be stored. Instead, all rows of such a group are stored with the path as it is in the CSV, and extractors cannot read them. The import log names how many and gives examples (warning).
+  - A path that contains a `/` keeps its backslashes, because on Linux or macOS evidence `\` can be part of a file name.
+  - When the import changes a path, the path as it was in the CSV is kept in the row's metadata (`path_as_imported`), and the import log says how many paths were changed. A CSV column named `path_as_imported` or `ftk_partition` is stored as `csv:path_as_imported` or `csv:ftk_partition`.
+  - Not supported: paths that start with another tool's case or evidence name, such as some EnCase exports (`Case\Evidence\C\Users\...`). Such paths can match an extractor's search but cannot be read. Remove the prefix before importing. Only FTK Imager listings were checked against a real export; EnCase exports were not.
+  - Paths imported before this change are not converted. The import does not run again while the evidence already has a file list.
 
 ### SystemDpapiDecryptExtractor
 - Purpose: Decrypt Windows DPAPI-protected browser secrets (passwords, cookies, credit cards) offline.

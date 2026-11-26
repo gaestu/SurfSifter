@@ -20,12 +20,9 @@ EWF_PATHS = [Path("/evidence/image.E01")]
 class PartitionFS(MountedFS):
     """A directory that stands for one partition of an EWF image.
 
-    Like ``PyEwfTskFS`` it accepts the absolute paths that ``fls`` writes to
-    the file list. A subclass with ``strip_leading_slash = False`` behaves like
-    a plain ``MountedFS``, which rejects them.
+    Paths are read as a plain ``MountedFS`` reads them: like ``PyEwfTskFS``,
+    it accepts the absolute paths that ``fls`` writes to the file list (#99).
     """
-
-    strip_leading_slash = True
 
     def __init__(self, root: Path, partition_index: int, ewf_paths=None) -> None:
         super().__init__(root)
@@ -49,7 +46,7 @@ class PartitionFS(MountedFS):
 
     def open_for_read(self, path: str):
         self.read_paths.append(path)
-        return super().open_for_read(path.lstrip("/") if self.strip_leading_slash else path)
+        return super().open_for_read(path)
 
     def close(self) -> None:
         self.closed = True
