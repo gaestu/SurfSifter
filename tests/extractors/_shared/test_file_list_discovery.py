@@ -396,6 +396,19 @@ class TestDiscoverFromFileList:
         )
 
         assert result.is_empty
+        assert result.error is None
+
+    def test_failed_query_sets_error(self):
+        """A failed query is empty but can be told apart from "no match"."""
+        conn = sqlite3.connect(":memory:")  # no file_list table
+        try:
+            result = discover_from_file_list(conn, 1, filename_patterns=["History"])
+        finally:
+            conn.close()
+
+        assert result.is_empty
+        assert result.error is not None
+        assert "file_list" in result.error
 
     def test_ntfs_mft_inode_format(self, ntfs_inode_db):
         """

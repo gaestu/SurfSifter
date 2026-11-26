@@ -17,11 +17,10 @@ This page describes the app's general behavior and forensic workflow assumptions
 ## Partitions
 - When SurfSifter opens an image, it selects one partition automatically (normally the largest one with a Windows folder).
 - The browser extractors that use the file list also look for files on the other partitions of the image. There is no option to limit a run to one partition.
-- They find files on other partitions through the file list, so run the **File List** extractor first. Without a file list, many of them find nothing (for example Chromium Cookies and Chromium Bookmarks) and the rest search only the automatically selected partition.
+- They find files on other partitions through the file list, so run the **File List** extractor first. Without a file list, many of them find nothing (for example Chromium Cookies and Chromium Bookmarks), some stop with an error that asks for the file list (for example Firefox HSTS and the IE / Edge Legacy extractors) and the rest search only the automatically selected partition.
 - Other extractors, such as Registry Reader, DPAPI Decrypt and macOS Plist Reader, search only the automatically selected partition.
 - Known problems with other partitions:
   - Chromium Session Restore and Chromium Cache search only the automatically selected partition when many browsers are selected (about seven or more). For Chromium Session Restore this includes the default selection of all browsers; the default selection of Chromium Cache is not affected. Chromium Cache also searches only the automatically selected partition when **Disk Cache (Cache_Data)** is unchecked, that is when only **Service Worker CacheStorage** is selected.
-  - Firefox HSTS finds no files.
   - Tor State and Firefox Browser Storage read files found on another partition from the automatically selected partition. Firefox Session Restore and Chromium Browser Storage do the same when the files are on only one other partition. Such a file fails to copy, or the file with the same path on the automatically selected partition is copied and recorded as coming from the other partition.
   - Firefox Site Permissions fails to copy files from other partitions.
   - Firefox Cache copies files from other partitions only when it can use SleuthKit `icat`. Otherwise it logs how many files it skipped.

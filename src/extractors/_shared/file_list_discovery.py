@@ -109,11 +109,14 @@ class FileListDiscoveryResult:
         total_matches: Total number of matches across all partitions
         partitions_with_matches: List of partition indices that have matches
         query_info: Optional info about the query performed (for logging)
+        error: Set when the file_list query failed. The result is then empty,
+            but "no matches" must not be concluded from it.
     """
     matches_by_partition: Dict[int, List[FileListMatch]] = field(default_factory=dict)
     total_matches: int = 0
     partitions_with_matches: List[int] = field(default_factory=list)
     query_info: Optional[str] = None
+    error: Optional[str] = None
 
     @property
     def is_multi_partition(self) -> bool:
@@ -424,6 +427,7 @@ def discover_from_file_list(
         LOGGER.error("file_list query failed: %s", e)
         return FileListDiscoveryResult(
             query_info=f"Query failed: {e}",
+            error=str(e),
         )
 
     # Build result

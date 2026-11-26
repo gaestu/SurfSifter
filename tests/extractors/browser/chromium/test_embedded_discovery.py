@@ -4,9 +4,11 @@ import sqlite3
 
 import pytest
 
+from extractors._shared.file_list_discovery import FileListDiscoveryResult, FileListMatch
 from extractors.browser.chromium._embedded_discovery import (
     _detect_signal,
     _extract_profile_root,
+    _merge_discovery_results,
     discover_artifacts_with_embedded_roots,
     discover_embedded_roots,
     get_embedded_root_paths,
@@ -262,3 +264,17 @@ def test_standard_embedded_unchanged_after_cache_fix(evidence_db):
     assert ebwebview_roots[0].root_path == "/AppData/Local/SomeApp/EBWebView"
     assert "cookies" in ebwebview_roots[0].signals
     assert "history" in ebwebview_roots[0].signals
+
+
+def test_merged_discovery_keeps_a_query_error():
+    """A failed base or embedded query stays visible after the merge."""
+    match = FileListMatch(file_path="/a/History", file_name="History", partition_index=1)
+    found = FileListDiscoveryResult(
+        matches_by_partition={1: [match]}, total_matches=1, partitions_with_matches=[1]
+    )
+    failed = FileListDiscoveryResult(error="database is locked")
+
+    assert _merge_discovery_results(found, failed).error == "database is locked"
+    assert _merge_discovery_results(failed, found).error == "database is locked"
+    assert _merge_discovery_results(found, found).error is None
+    assert _merge_discovery_results(found, failed).total_matches == 1

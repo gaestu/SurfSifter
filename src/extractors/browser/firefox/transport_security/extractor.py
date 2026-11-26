@@ -9,7 +9,7 @@ Features:
 - Cleartext domain extraction (unlike Chromium)
 - URL table integration
 - HSTS entries table with full metadata
-- Multi-partition support via file_list
+- Discovery through the file list only, on all partitions (no filesystem scan)
 - Schema warning support for unknown entry types/state values
 - File collision prevention with unique naming
 
@@ -37,6 +37,7 @@ from __future__ import annotations
 import hashlib
 import json
 import uuid
+from contextlib import ExitStack
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, Any, Optional, List, TYPE_CHECKING
@@ -53,7 +54,12 @@ from ...._shared.file_list_discovery import (
     get_ewf_paths_from_evidence_fs,
 )
 from ...._shared.extraction_warnings import ExtractionWarningCollector
-from .._patterns import FIREFOX_BROWSERS, get_artifact_patterns
+from .._patterns import (
+    FIREFOX_BROWSERS,
+    detect_browser_from_path,
+    get_all_patterns,
+    get_browser_display_name,
+)
 from ._schemas import (
     KNOWN_ENTRY_TYPES,
     KNOWN_STATE_VALUES,
@@ -71,6 +77,7 @@ from core.logging import get_logger
 from core.statistics_collector import StatisticsCollector
 from core.database import (
     insert_urls,
+    delete_urls_by_run,
     insert_hsts_entries,
     delete_hsts_by_run,
     insert_browser_inventory,
@@ -81,6 +88,15 @@ if TYPE_CHECKING:
     from core.evidence_fs import EvidenceFS
 
 LOGGER = get_logger("extractors.browser.firefox.transport_security")
+
+HSTS_FILENAME = "SiteSecurityServiceState.txt"
+
+# Real files hold a few thousand short lines. The limit only keeps a planted or
+# corrupt file of that name from being read into memory and copied.
+MAX_HSTS_FILE_BYTES = 16 * 1024 * 1024
+
+# Longest user or profile name used in the name of a copied file
+MAX_NAME_COMPONENT_CHARS = 50
 
 
 class FirefoxTransportSecurityExtractor(BaseExtractor):
@@ -125,8 +141,19 @@ class FirefoxTransportSecurityExtractor(BaseExtractor):
         return True, ""
 
     def has_existing_output(self, output_dir: Path) -> bool:
-        """Check if output directory has existing extraction output."""
-        return (output_dir / "manifest.json").exists()
+        """Check if output directory has existing extraction output.
+
+        The manifest of a run that ended with an error (for example: no file
+        list) or was cancelled is not output, so that the next run extracts
+        again instead of reusing an empty or incomplete result.
+        """
+        manifest = output_dir / "manifest.json"
+        if not manifest.exists():
+            return False
+        try:
+            return json.loads(manifest.read_text()).get("status") not in ("error", "cancelled")
+        except (OSError, ValueError, AttributeError):
+            return True
 
     def get_config_widget(self, parent: QWidget) -> Optional[QWidget]:
         """Return configuration widget (browser selection)."""
@@ -167,8 +194,9 @@ class FirefoxTransportSecurityExtractor(BaseExtractor):
     ) -> bool:
         """Extract Firefox SiteSecurityServiceState.txt files from evidence.
 
-        Uses file_list for multi-partition discovery when available.
-        Falls back to single-partition scan for mounted filesystems.
+        Files are found through the file list only, on all partitions. The
+        filesystem is never scanned: a scan would cover the open partition
+        alone. Without a file list the run ends with an error.
         """
         callbacks.on_step("Initializing Firefox transport security extraction")
 
@@ -189,105 +217,104 @@ class FirefoxTransportSecurityExtractor(BaseExtractor):
         manifest_data = {
             "extractor": self.metadata.name,
             "version": self.metadata.version,
-            "schema_version": "1.1.0",  # Updated for multi-partition
+            "schema_version": "1.2.0",  # skipped_files; per file: listed_partition_index, local_filename, inode
             "run_id": run_id,
             "evidence_id": evidence_id,
             "extraction_timestamp_utc": datetime.now(timezone.utc).isoformat(),
             "extraction_tool": self._get_extraction_tool_version(),
             "e01_context": self._get_e01_context(evidence_fs),
             "files": [],
+            "skipped_files": [],
             "status": "ok",
             "notes": [],
-            "multi_partition": False,
+            "multi_partition": True,
         }
 
-        callbacks.on_step("Scanning for Firefox SiteSecurityServiceState.txt files")
+        callbacks.on_step("Looking up SiteSecurityServiceState.txt in the file list")
 
         browsers_to_search = config.get("browsers") or config.get("selected_browsers", self.SUPPORTED_BROWSERS)
         browsers_to_search = [b for b in browsers_to_search if b in self.SUPPORTED_BROWSERS]
 
-        # Check if file_list is available for multi-partition discovery
-        file_list_available = check_file_list_available(evidence_conn, evidence_id) if evidence_conn else False
+        # The file list is the only source for discovery.
+        file_list_available, file_count = (
+            check_file_list_available(evidence_conn, evidence_id)
+            if evidence_conn is not None
+            else (False, 0)
+        )
 
-        if file_list_available:
-            # Multi-partition discovery via file_list
-            callbacks.on_step("Discovering files via file_list (multi-partition)")
-            manifest_data["multi_partition"] = True
-            ts_files = self._discover_files_multi_partition(
-                evidence_fs,
+        if not file_list_available:
+            return self._abort_extraction(
+                "File list required",
+                "No file list for this evidence. Firefox HSTS finds files through the "
+                "file list and does not scan the filesystem. Run the File List extractor first.",
+                manifest_data,
+                output_dir,
+                callbacks,
+            )
+
+        callbacks.on_log(f"Using file list for discovery ({file_count:,} files indexed)", "info")
+
+        open_partition = getattr(evidence_fs, "partition_index", 0)
+        if not isinstance(open_partition, int):
+            open_partition = 0
+
+        try:
+            files_by_partition, rows_without_partition = self._discover_files(
                 evidence_conn,
                 evidence_id,
                 browsers_to_search,
+                open_partition,
                 callbacks,
             )
-        else:
-            # Check if this is an E01 image - require file_list for E01
-            is_e01 = self._is_e01_image(evidence_fs)
-            if is_e01:
-                error_msg = (
-                    "E01 image detected but file_list not available. "
-                    "Please run File List extractor first to enable multi-partition discovery."
-                )
-                callbacks.on_error("file_list required", error_msg)
-                manifest_data["status"] = "error"
-                manifest_data["notes"].append(error_msg)
-                LOGGER.error(error_msg)
-
-                # Write manifest with error
-                manifest_path = output_dir / "manifest.json"
-                manifest_path.write_text(json.dumps(manifest_data, indent=2))
-
-                if stats:
-                    stats.finish_run(evidence_id, self.metadata.name, status="error")
-
-                return False
-
-            # Single-partition fallback for mounted filesystems
-            callbacks.on_step("Discovering files (single partition)")
-            ts_files = self._discover_files_single_partition(
-                evidence_fs,
-                browsers_to_search,
+        except Exception as e:
+            LOGGER.error("File list discovery failed: %s", e, exc_info=True)
+            return self._abort_extraction(
+                "File list discovery failed",
+                f"File list discovery for {HSTS_FILENAME} failed: {e}",
+                manifest_data,
+                output_dir,
                 callbacks,
             )
+
+        total_files = sum(len(files) for files in files_by_partition.values())
+
+        if rows_without_partition:
+            note = (
+                f"{rows_without_partition} file list row(s) for {HSTS_FILENAME} have no partition "
+                f"number. Their paths were looked up on the open filesystem only "
+                f"(partition {open_partition})."
+            )
+            callbacks.on_log(note, "warning")
+            manifest_data["notes"].append(note)
 
         # Report discovered files (even if 0)
         if stats:
-            stats.report_discovered(evidence_id, self.metadata.name, files=len(ts_files))
+            stats.report_discovered(evidence_id, self.metadata.name, files=total_files)
 
-        if not ts_files:
+        if total_files == 0:
+            note = f"No {HSTS_FILENAME} files found in the file list"
             manifest_data["status"] = "skipped"
-            manifest_data["notes"].append("No SiteSecurityServiceState.txt files found")
+            manifest_data["notes"].append(note)
+            callbacks.on_log(note, "info")
             LOGGER.info("No Firefox SiteSecurityServiceState.txt files found")
         else:
-            callbacks.on_progress(0, len(ts_files), "Copying SiteSecurityServiceState files")
+            self._extract_partitions(
+                evidence_fs,
+                open_partition,
+                files_by_partition,
+                total_files,
+                output_dir,
+                manifest_data,
+                callbacks,
+            )
 
-            for i, file_info in enumerate(ts_files):
-                if callbacks.is_cancelled():
-                    manifest_data["status"] = "cancelled"
-                    break
-
-                try:
-                    callbacks.on_progress(
-                        i + 1,
-                        len(ts_files),
-                        f"Copying {file_info['browser']} HSTS data (partition {file_info.get('partition_index', 0)})"
-                    )
-
-                    extracted_file = self._extract_file(
-                        evidence_fs,
-                        evidence_conn,
-                        evidence_id,
-                        file_info,
-                        output_dir,
-                        callbacks,
-                    )
-                    manifest_data["files"].append(extracted_file)
-
-                except Exception as e:
-                    error_msg = f"Failed to extract {file_info['logical_path']}: {e}"
-                    LOGGER.error(error_msg, exc_info=True)
-                    manifest_data["notes"].append(error_msg)
-                    manifest_data["status"] = "partial"
+            if manifest_data["status"] == "cancelled":
+                note = (
+                    f"Extraction cancelled after {len(manifest_data['files'])} of "
+                    f"{total_files} file(s)"
+                )
+                callbacks.on_log(note, "warning")
+                manifest_data["notes"].append(note)
 
         callbacks.on_step("Writing manifest")
         manifest_path = output_dir / "manifest.json"
@@ -307,7 +334,9 @@ class FirefoxTransportSecurityExtractor(BaseExtractor):
 
         # Finish stats tracking
         if stats:
-            status = "cancelled" if manifest_data["status"] == "cancelled" else "success" if manifest_data["status"] == "ok" else "partial"
+            status = {"cancelled": "cancelled", "ok": "success", "skipped": "success"}.get(
+                manifest_data["status"], "partial"
+            )
             stats.finish_run(evidence_id, self.metadata.name, status=status)
 
         LOGGER.info(
@@ -362,17 +391,16 @@ class FirefoxTransportSecurityExtractor(BaseExtractor):
 
         # Initialize warning collector for schema warnings
         warning_collector = ExtractionWarningCollector(
-            evidence_conn=evidence_conn,
-            evidence_id=evidence_id,
             extractor_name=self.metadata.name,
             run_id=run_id,
+            evidence_id=evidence_id,
         )
 
         total_urls = 0
         total_hsts = 0
 
         # Clear previous data for this run (exact run_id match)
-        self._clear_previous_run(evidence_conn, run_id)
+        self._clear_previous_run(evidence_conn, evidence_id, run_id)
 
         callbacks.on_progress(0, len(files), "Parsing SiteSecurityServiceState files")
 
@@ -476,8 +504,14 @@ class FirefoxTransportSecurityExtractor(BaseExtractor):
                         notes=str(e),
                     )
 
-        # Flush any remaining warnings
-        warning_collector.flush()
+        # Flush collected warnings to database
+        try:
+            warning_count = warning_collector.flush_to_database(evidence_conn)
+            if warning_count > 0:
+                LOGGER.info("Recorded %d extraction warnings for schema discovery", warning_count)
+                callbacks.on_log(f"Schema warnings: {warning_count} items detected")
+        except Exception as e:
+            LOGGER.warning("Failed to flush extraction warnings: %s", e)
 
         evidence_conn.commit()
 
@@ -502,111 +536,104 @@ class FirefoxTransportSecurityExtractor(BaseExtractor):
     # Discovery Methods
     # ─────────────────────────────────────────────────────────────────
 
-    def _discover_files_multi_partition(
+    def _discover_files(
         self,
-        evidence_fs: "EvidenceFS",
         evidence_conn,
         evidence_id: int,
         browsers: List[str],
+        open_partition: int,
         callbacks: ExtractorCallbacks,
-    ) -> List[Dict]:
-        """Discover transport security files across all partitions via file_list.
+    ) -> tuple[Dict[int, List[Dict]], int]:
+        """Find SiteSecurityServiceState.txt on all partitions through the file list.
 
-        Uses discover_from_file_list to find SiteSecurityServiceState.txt
-        across all partitions in the evidence.
+        The partition of a file info dict is the partition the file is read
+        from. A file list row without a partition number (-1, or 0 for a row
+        without a value) cannot name a partition to open: its path is looked
+        up on the open filesystem and gets that filesystem's partition index.
+        ``listed_partition_index`` keeps the value from the file list.
+
+        Returns:
+            Tuple of (dict mapping partition_index -> list of file info dicts,
+            both in ascending order; number of files from rows without a
+            partition number).
+
+        Raises:
+            RuntimeError: If the file list query failed. An empty dict means
+                the query ran and matched nothing.
         """
-        ts_files = []
+        result = discover_from_file_list(
+            evidence_conn,
+            evidence_id,
+            filename_patterns=[HSTS_FILENAME],
+            path_patterns=get_all_patterns("transport_security"),
+        )
 
-        for browser_key in browsers:
-            if browser_key not in FIREFOX_BROWSERS:
-                continue
+        if result.error:
+            raise RuntimeError(f"file list query failed: {result.error}")
 
-            patterns = get_artifact_patterns(browser_key, "transport_security")
-            display_name = FIREFOX_BROWSERS[browser_key]["display_name"]
+        files_by_partition: Dict[int, List[Dict]] = {}
+        seen: set[tuple[int, str]] = set()
+        rows_without_partition = 0
 
-            for pattern in patterns:
-                try:
-                    # Use file_list discovery for multi-partition support
-                    discovered = discover_from_file_list(
-                        evidence_conn=evidence_conn,
-                        evidence_id=evidence_id,
-                        pattern=pattern,
-                    )
+        def has_partition_number(listed_partition: int) -> bool:
+            return listed_partition > 0 or listed_partition == open_partition
 
-                    for item in discovered:
-                        # Extract user and profile from path
-                        user, profile = self._extract_user_profile_from_path(item["path"])
+        # Numbered rows first: if a file is also listed without a number, the
+        # numbered row is the one that is kept.
+        listed_partitions = sorted(
+            result.matches_by_partition,
+            key=lambda listed: (not has_partition_number(listed), listed),
+        )
 
-                        ts_files.append({
-                            "logical_path": item["path"],
-                            "browser": browser_key,
-                            "user": user,
-                            "profile": profile,
-                            "file_type": "firefox",
-                            "artifact_type": "transport_security",
-                            "display_name": display_name,
-                            "partition_index": item.get("partition_index", 0),
-                            "fs_type": item.get("fs_type"),
-                            "forensic_path": item.get("forensic_path"),
-                            "file_list_id": item.get("id"),
-                        })
+        for listed_partition in listed_partitions:
+            has_number = has_partition_number(listed_partition)
+            partition_index = listed_partition if has_number else open_partition
+            matches = sorted(result.matches_by_partition[listed_partition], key=lambda m: m.file_path)
 
-                        callbacks.on_log(
-                            f"Found {browser_key} SiteSecurityServiceState.txt: "
-                            f"partition {item.get('partition_index', 0)}, {item['path']}",
-                            "info"
-                        )
+            for match in matches:
+                # ESR and regular Firefox share their profile roots, so the
+                # browser comes from the path, not from the pattern.
+                browser = detect_browser_from_path(match.file_path)
+                if browser not in browsers:
+                    continue
 
-                except Exception as e:
-                    LOGGER.debug("Pattern %s failed: %s", pattern, e)
+                # The same file can be listed with and without a partition number
+                key = (partition_index, match.file_path.lstrip("/"))
+                if key in seen:
+                    continue
+                seen.add(key)
 
-        return ts_files
+                if not has_number:
+                    rows_without_partition += 1
 
-    def _discover_files_single_partition(
-        self,
-        evidence_fs: "EvidenceFS",
-        browsers: List[str],
-        callbacks: ExtractorCallbacks,
-    ) -> List[Dict]:
-        """Discover transport security files in single partition (mounted FS fallback).
+                user, profile = self._extract_user_profile_from_path(match.file_path)
 
-        Used when file_list is not available (mounted filesystem).
-        """
-        ts_files = []
+                files_by_partition.setdefault(partition_index, []).append({
+                    "logical_path": match.file_path,
+                    "browser": browser,
+                    "user": user,
+                    "profile": profile,
+                    "file_type": "firefox",
+                    "artifact_type": "transport_security",
+                    "display_name": get_browser_display_name(browser),
+                    "partition_index": partition_index,
+                    # Differs from partition_index for a row without a number
+                    "listed_partition_index": listed_partition,
+                    # The inode of a row without a number may belong to a
+                    # file on another partition
+                    "inode": match.inode if has_number else None,
+                })
 
-        for browser_key in browsers:
-            if browser_key not in FIREFOX_BROWSERS:
-                continue
+                callbacks.on_log(
+                    f"Found {browser} {HSTS_FILENAME}: "
+                    f"partition {partition_index}, {match.file_path}",
+                    "info"
+                )
 
-            patterns = get_artifact_patterns(browser_key, "transport_security")
-            display_name = FIREFOX_BROWSERS[browser_key]["display_name"]
+        for partition_files in files_by_partition.values():
+            partition_files.sort(key=lambda f: f["logical_path"])
 
-            for pattern in patterns:
-                try:
-                    for path_str in evidence_fs.iter_paths(pattern):
-                        user, profile = self._extract_user_profile_from_path(path_str)
-
-                        ts_files.append({
-                            "logical_path": path_str,
-                            "browser": browser_key,
-                            "user": user,
-                            "profile": profile,
-                            "file_type": "firefox",
-                            "artifact_type": "transport_security",
-                            "display_name": display_name,
-                            "partition_index": 0,
-                            "fs_type": getattr(evidence_fs, 'fs_type', 'unknown'),
-                        })
-
-                        callbacks.on_log(
-                            f"Found {browser_key} SiteSecurityServiceState.txt: {path_str}",
-                            "info"
-                        )
-
-                except Exception as e:
-                    LOGGER.debug("Pattern %s failed: %s", pattern, e)
-
-        return ts_files
+        return files_by_partition, rows_without_partition
 
     def _extract_user_profile_from_path(self, path: str) -> tuple[str, str]:
         """Extract user and profile from Firefox path.
@@ -619,26 +646,17 @@ class FirefoxTransportSecurityExtractor(BaseExtractor):
         user = "unknown"
         profile = "Default"
 
-        # Windows: C:/Users/<user>/AppData/Roaming/Mozilla/Firefox/Profiles/<profile>/
-        win_match = re.search(r'/Users/([^/]+)/AppData/', path, re.IGNORECASE)
-        if win_match:
-            user = win_match.group(1)
-
-        # Linux: /home/<user>/.mozilla/firefox/<profile>/
-        linux_match = re.search(r'/home/([^/]+)/\.mozilla/', path, re.IGNORECASE)
-        if linux_match:
-            user = linux_match.group(1)
-
-        # macOS: /Users/<user>/Library/Application Support/Firefox/Profiles/<profile>/
-        mac_match = re.search(r'/Users/([^/]+)/Library/', path, re.IGNORECASE)
-        if mac_match:
-            user = mac_match.group(1)
+        # Windows and macOS: Users/<user>/..., Linux: home/<user>/...
+        # File list paths come with or without a leading slash.
+        user_match = re.search(r'(?:^|/)(?:Users|home)/([^/]+)/', path, re.IGNORECASE)
+        if user_match:
+            user = user_match.group(1)
 
         # Profile extraction - Firefox uses random prefix like "abc123.default"
         profile_patterns = [
             r'Profiles/([^/]+)/',
             r'\.mozilla/firefox/([^/]+)/',
-            r'Firefox/Profiles/([^/]+)/',
+            r'TorBrowser/Data/Browser/([^/]+)/',
         ]
 
         for pattern in profile_patterns:
@@ -653,52 +671,203 @@ class FirefoxTransportSecurityExtractor(BaseExtractor):
     # File Extraction
     # ─────────────────────────────────────────────────────────────────
 
-    def _extract_file(
+    def _extract_partitions(
         self,
         evidence_fs: "EvidenceFS",
-        evidence_conn,
-        evidence_id: int,
+        open_partition: int,
+        files_by_partition: Dict[int, List[Dict]],
+        total_files: int,
+        output_dir: Path,
+        manifest_data: Dict[str, Any],
+        callbacks: ExtractorCallbacks,
+    ) -> None:
+        """Copy the discovered files, each from the partition given for it.
+
+        A partition that cannot be opened is skipped with a note. Its paths are
+        never read from the open filesystem: the copy would be recorded for a
+        partition it was not read from.
+        """
+        ewf_paths = get_ewf_paths_from_evidence_fs(evidence_fs)
+        used_names: set[str] = set()
+
+        callbacks.on_progress(0, total_files, "Copying SiteSecurityServiceState files")
+        file_index = 0
+
+        for partition_index in sorted(files_by_partition):
+            if callbacks.is_cancelled():
+                manifest_data["status"] = "cancelled"
+                break
+
+            partition_files = files_by_partition[partition_index]
+
+            if partition_index == open_partition:
+                fs_ctx = open_partition_for_extraction(evidence_fs, None)
+            elif ewf_paths is None:
+                self._skip_partition(
+                    partition_index,
+                    partition_files,
+                    "the evidence has no EWF paths, so the partition cannot be opened",
+                    manifest_data,
+                    callbacks,
+                )
+                file_index += len(partition_files)
+                continue
+            else:
+                fs_ctx = open_partition_for_extraction(ewf_paths, partition_index)
+
+            with ExitStack() as stack:
+                try:
+                    partition_fs = stack.enter_context(fs_ctx)
+                except Exception as e:
+                    LOGGER.error("Failed to open partition %d: %s", partition_index, e, exc_info=True)
+                    self._skip_partition(
+                        partition_index,
+                        partition_files,
+                        f"the partition could not be opened: {e}",
+                        manifest_data,
+                        callbacks,
+                    )
+                    file_index += len(partition_files)
+                    continue
+
+                # The filesystem that was opened must be the partition that was asked for
+                opened_index = getattr(partition_fs, "partition_index", partition_index)
+                if (
+                    partition_index != open_partition
+                    and isinstance(opened_index, int)
+                    and opened_index != partition_index
+                ):
+                    self._skip_partition(
+                        partition_index,
+                        partition_files,
+                        f"the filesystem that was opened reports partition {opened_index}",
+                        manifest_data,
+                        callbacks,
+                    )
+                    file_index += len(partition_files)
+                    continue
+
+                for file_info in partition_files:
+                    if callbacks.is_cancelled():
+                        manifest_data["status"] = "cancelled"
+                        break
+
+                    file_index += 1
+                    callbacks.on_progress(
+                        file_index,
+                        total_files,
+                        f"Copying {file_info['browser']} HSTS data (partition {partition_index})"
+                    )
+
+                    extracted_file = self._extract_file(
+                        partition_fs,
+                        file_info,
+                        output_dir,
+                        used_names,
+                        callbacks,
+                    )
+                    manifest_data["files"].append(extracted_file)
+
+                    if extracted_file["copy_status"] == "error":
+                        manifest_data["notes"].append(
+                            f"Failed to extract {file_info['logical_path']} "
+                            f"(partition {partition_index}): {extracted_file['error_message']}"
+                        )
+                        manifest_data["status"] = "partial"
+
+    def _skip_partition(
+        self,
+        partition_index: int,
+        partition_files: List[Dict],
+        reason: str,
+        manifest_data: Dict[str, Any],
+        callbacks: ExtractorCallbacks,
+    ) -> None:
+        """Record in the evidence log and the manifest that a partition's files were not copied."""
+        note = (
+            f"Skipped {len(partition_files)} {HSTS_FILENAME} file(s) on partition "
+            f"{partition_index}: {reason}"
+        )
+        callbacks.on_log(note, "warning")
+        LOGGER.warning(note)
+        manifest_data["notes"].append(note)
+        manifest_data["status"] = "partial"
+
+        for file_info in partition_files:
+            manifest_data["skipped_files"].append({
+                "logical_path": file_info["logical_path"],
+                "partition_index": partition_index,
+                "listed_partition_index": file_info.get("listed_partition_index", partition_index),
+                "inode": file_info.get("inode"),
+                "browser": file_info["browser"],
+                "reason": reason,
+            })
+
+    def _extract_file(
+        self,
+        partition_fs: "EvidenceFS",
         file_info: Dict,
         output_dir: Path,
+        used_names: set[str],
         callbacks: ExtractorCallbacks,
     ) -> Dict:
-        """Copy file from evidence to workspace with collision-safe naming.
+        """Copy one file from the given partition's filesystem to the workspace.
 
-        Filename format: p{partition}_{browser}_{user}_{profile}_SiteSecurityServiceState.txt
-        If collision detected, appends counter: _2, _3, etc.
+        Filename format:
+        p{partition}_{browser}_{user}_{profile}_{path hash}_SiteSecurityServiceState.txt
+        A name that was already used in this run gets a counter before the
+        file name part (_2, _3, ...), so that no copy overwrites another.
         """
+        source_path = file_info["logical_path"]
+        partition_idx = file_info.get("partition_index", 0)
+        forensic_path = f"p{partition_idx}:{source_path}"
+        filename = None
+
         try:
-            source_path = file_info["logical_path"]
             browser = file_info["browser"]
             user = file_info.get("user", "unknown")
             profile = file_info.get("profile", "Default")
-            partition_idx = file_info.get("partition_index", 0)
 
             # Sanitize components for filename
             safe_user = self._sanitize_filename_component(user)
             safe_profile = self._sanitize_filename_component(profile)
 
-            # Build base filename with partition prefix and path hash for uniqueness
-            # Path hash prevents collisions when same user+profile exists in different locations
+            # Partition prefix and path hash keep files with the same user and profile apart
             path_hash = hashlib.sha256(source_path.encode()).hexdigest()[:8]
-            filename = f"p{partition_idx}_{browser}_{safe_user}_{safe_profile}_{path_hash}_SiteSecurityServiceState.txt"
+            filename = self._unique_filename(
+                f"p{partition_idx}_{browser}_{safe_user}_{safe_profile}_{path_hash}",
+                used_names,
+            )
             dest_path = output_dir / filename
 
             callbacks.on_log(f"Copying {source_path} to {filename}", "info")
 
-            # Read file content - use partition-aware reading if available
-            file_content = self._read_file_from_partition(
-                evidence_fs,
-                evidence_conn,
-                evidence_id,
-                file_info,
-            )
+            # The file list gives paths with or without a leading slash. A
+            # mounted directory accepts only the relative form.
+            read_path = source_path.lstrip("/")
+
+            declared_size = partition_fs.stat(read_path).size_bytes
+            if declared_size > MAX_HSTS_FILE_BYTES:
+                raise ValueError(
+                    f"file has {declared_size} bytes, above the {MAX_HSTS_FILE_BYTES} byte safety limit"
+                )
+
+            # Bounded read, in case the size above was not the real one
+            with partition_fs.open_for_read(read_path) as source:
+                file_content = source.read(MAX_HSTS_FILE_BYTES + 1)
+            if len(file_content) > MAX_HSTS_FILE_BYTES:
+                raise ValueError(f"file is above the {MAX_HSTS_FILE_BYTES} byte safety limit")
 
             dest_path.write_bytes(file_content)
 
             md5 = hashlib.md5(file_content).hexdigest()
             sha256 = hashlib.sha256(file_content).hexdigest()
             size = len(file_content)
+
+            # Provenance of the filesystem the file was read from
+            fs_type = getattr(partition_fs, "fs_type", None)
+            if not isinstance(fs_type, str):
+                fs_type = None
 
             return {
                 "copy_status": "ok",
@@ -707,6 +876,7 @@ class FirefoxTransportSecurityExtractor(BaseExtractor):
                 "md5": md5,
                 "sha256": sha256,
                 "extracted_path": str(dest_path),
+                "local_filename": filename,
                 "browser": browser,
                 "user": user,
                 "profile": profile,
@@ -714,12 +884,14 @@ class FirefoxTransportSecurityExtractor(BaseExtractor):
                 "logical_path": source_path,
                 "artifact_type": "transport_security",
                 "partition_index": partition_idx,
-                "fs_type": file_info.get("fs_type"),
-                "forensic_path": file_info.get("forensic_path"),
+                "listed_partition_index": file_info.get("listed_partition_index", partition_idx),
+                "inode": file_info.get("inode"),
+                "fs_type": fs_type,
+                "forensic_path": forensic_path,
             }
 
         except Exception as e:
-            callbacks.on_log(f"Failed to extract {file_info['logical_path']}: {e}", "error")
+            callbacks.on_log(f"Failed to extract {source_path}: {e}", "error")
             return {
                 "copy_status": "error",
                 "size_bytes": 0,
@@ -727,62 +899,49 @@ class FirefoxTransportSecurityExtractor(BaseExtractor):
                 "md5": None,
                 "sha256": None,
                 "extracted_path": None,
+                "local_filename": filename,
                 "browser": file_info.get("browser"),
                 "user": file_info.get("user"),
                 "profile": file_info.get("profile"),
                 "file_type": file_info.get("file_type"),
-                "logical_path": file_info.get("logical_path"),
-                "partition_index": file_info.get("partition_index"),
+                "logical_path": source_path,
+                "artifact_type": "transport_security",
+                "partition_index": partition_idx,
+                "listed_partition_index": file_info.get("listed_partition_index", partition_idx),
+                "inode": file_info.get("inode"),
+                "forensic_path": forensic_path,
                 "error_message": str(e),
+                "error": str(e),
             }
 
-    def _read_file_from_partition(
-        self,
-        evidence_fs: "EvidenceFS",
-        evidence_conn,
-        evidence_id: int,
-        file_info: Dict,
-    ) -> bytes:
-        """Read file content, handling multi-partition access.
+    @staticmethod
+    def _unique_filename(prefix: str, used_names: set[str]) -> str:
+        """Return a file name for the prefix that was not used in this run.
 
-        For multi-partition images, opens the specific partition.
-        For single partition, reads directly from evidence_fs.
+        Names are compared without letter case, because the case workspace can
+        be on a case-insensitive filesystem.
         """
-        partition_idx = file_info.get("partition_index", 0)
-        source_path = file_info["logical_path"]
-
-        # If partition index > 0, need to open that specific partition
-        if partition_idx > 0 and evidence_conn:
-            try:
-                ewf_paths = get_ewf_paths_from_evidence_fs(evidence_fs)
-                if ewf_paths:
-                    partition_fs = open_partition_for_extraction(
-                        ewf_paths=ewf_paths,
-                        partition_index=partition_idx,
-                    )
-                    if partition_fs:
-                        try:
-                            return partition_fs.read_file(source_path)
-                        finally:
-                            partition_fs.close()
-            except Exception as e:
-                LOGGER.warning(
-                    "Failed to open partition %d, falling back to default: %s",
-                    partition_idx, e
-                )
-
-        # Default: read from primary evidence_fs
-        return evidence_fs.read_file(source_path)
+        candidate = f"{prefix}_{HSTS_FILENAME}"
+        counter = 1
+        while candidate.lower() in used_names:
+            counter += 1
+            candidate = f"{prefix}_{counter}_{HSTS_FILENAME}"
+        used_names.add(candidate.lower())
+        return candidate
 
     def _sanitize_filename_component(self, component: str) -> str:
         """Sanitize a string for use in filename."""
         import re
-        # Replace unsafe characters with underscore
-        safe = re.sub(r'[^\w\-.]', '_', component)
+        # Replace unsafe characters with underscore. ASCII only: a character is
+        # then one byte for the file name limit, and names that differ only in
+        # Unicode form or case cannot be the same file in the workspace.
+        safe = re.sub(r'[^\w\-.]', '_', component, flags=re.ASCII)
         # Collapse multiple underscores
         safe = re.sub(r'_+', '_', safe)
         # Remove leading/trailing underscores
         safe = safe.strip('_')
+        # A very long name would exceed the file name limit of the workspace
+        safe = safe[:MAX_NAME_COMPONENT_CHARS]
         return safe or "unknown"
 
     # ─────────────────────────────────────────────────────────────────
@@ -802,6 +961,9 @@ class FirefoxTransportSecurityExtractor(BaseExtractor):
         if not file_path.exists():
             LOGGER.warning("SiteSecurityServiceState.txt not found: %s", file_path)
             return []
+
+        if file_path.stat().st_size > MAX_HSTS_FILE_BYTES:
+            raise ValueError(f"Copied file exceeds the {MAX_HSTS_FILE_BYTES} byte safety limit")
 
         try:
             content = file_path.read_text(encoding='utf-8', errors='replace')
@@ -858,6 +1020,9 @@ class FirefoxTransportSecurityExtractor(BaseExtractor):
                 notes_parts.append("includeSubdomains: true")
             if expiry_iso:
                 notes_parts.append(f"expiry: {expiry_iso}")
+            # The urls table has no partition column
+            if file_entry.get("partition_index") is not None:
+                notes_parts.append(f"partition: {file_entry['partition_index']}")
 
             record = {
                 "url": url,
@@ -928,21 +1093,17 @@ class FirefoxTransportSecurityExtractor(BaseExtractor):
 
         return len(records)
 
-    def _clear_previous_run(self, evidence_conn, run_id: str) -> None:
+    def _clear_previous_run(self, evidence_conn, evidence_id: int, run_id: str) -> None:
         """Clear URL and HSTS data from a previous run.
 
         Uses exact run_id match to avoid clearing data from other runs.
         """
         try:
             # Delete URLs with exact run_id match
-            cursor = evidence_conn.execute(
-                "DELETE FROM urls WHERE run_id = ?",
-                (run_id,)
-            )
-            url_deleted = cursor.rowcount
+            url_deleted = delete_urls_by_run(evidence_conn, evidence_id, run_id)
 
             # Delete from hsts_entries table with exact run_id
-            hsts_deleted = delete_hsts_by_run(evidence_conn, None, run_id)
+            hsts_deleted = delete_hsts_by_run(evidence_conn, evidence_id, run_id)
 
             if url_deleted > 0 or hsts_deleted > 0:
                 LOGGER.info(
@@ -955,6 +1116,32 @@ class FirefoxTransportSecurityExtractor(BaseExtractor):
     # ─────────────────────────────────────────────────────────────────
     # Helper Methods
     # ─────────────────────────────────────────────────────────────────
+
+    def _abort_extraction(
+        self,
+        error: str,
+        error_msg: str,
+        manifest_data: Dict[str, Any],
+        output_dir: Path,
+        callbacks: ExtractorCallbacks,
+    ) -> bool:
+        """End the run with status ``error``: evidence log, manifest note, statistics.
+
+        Returns False, the result of a failed ``run_extraction``.
+        """
+        callbacks.on_error(error, error_msg)
+        LOGGER.error(error_msg)
+        manifest_data["status"] = "error"
+        manifest_data["notes"].append(error_msg)
+
+        manifest_path = output_dir / "manifest.json"
+        manifest_path.write_text(json.dumps(manifest_data, indent=2))
+
+        stats = StatisticsCollector.instance()
+        if stats:
+            stats.finish_run(manifest_data["evidence_id"], self.metadata.name, status="error")
+
+        return False
 
     def _generate_run_id(self) -> str:
         """Generate run ID: ts_firefox_{timestamp}_{uuid4}."""
@@ -989,22 +1176,3 @@ class FirefoxTransportSecurityExtractor(BaseExtractor):
             pytsk_version = "unknown"
 
         return f"pytsk3:{pytsk_version}"
-
-    def _is_e01_image(self, evidence_fs: "EvidenceFS") -> bool:
-        """Check if evidence_fs is backed by an E01 image."""
-        try:
-            # Check class name for PyEwfTskFS
-            class_name = type(evidence_fs).__name__
-            if "Ewf" in class_name or "E01" in class_name:
-                return True
-
-            # Check source path extension
-            source_path = getattr(evidence_fs, 'source_path', None)
-            if source_path:
-                path_str = str(source_path).lower()
-                if path_str.endswith('.e01') or '.e0' in path_str:
-                    return True
-
-            return False
-        except Exception:
-            return False

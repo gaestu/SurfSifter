@@ -12,7 +12,8 @@ Firefox Format:
 - score: internal scoring value (not forensically significant)
 - last_access: days since Unix epoch (PRTime / 86400000000)
 - expiry_ms: milliseconds since Unix epoch
-- state: 0=SecurityPropertySet (active), 1=SecurityPropertyKnockout (expired/removed)
+- state: 0=SecurityPropertyUnset, 1=SecurityPropertySet (active),
+  2=SecurityPropertyKnockout (removed), 3=SecurityPropertyNegative (older Firefox versions)
 - include_subdomains: 0 or 1
 
 Initial schema file extraction from extractor.py
@@ -46,16 +47,21 @@ ENTRY_TYPE_NAMES: Dict[str, str] = {
 # =============================================================================
 
 # Known state values in the data field
-# Source: https://searchfox.org/mozilla-central/source/security/manager/ssl/nsISiteSecurityService.idl
+# Source: enum SecurityPropertyState in
+# https://searchfox.org/mozilla-central/source/security/manager/ssl/nsSiteSecurityService.h
 KNOWN_STATE_VALUES: Dict[int, str] = {
-    0: "SecurityPropertySet",      # HSTS is active for this domain
-    1: "SecurityPropertyKnockout",  # HSTS was explicitly removed/expired
+    0: "SecurityPropertyUnset",     # No HSTS state for this domain
+    1: "SecurityPropertySet",       # HSTS is active for this domain
+    2: "SecurityPropertyKnockout",  # HSTS was explicitly removed
+    3: "SecurityPropertyNegative",  # Site sent no HSTS header (older Firefox versions)
 }
 
 # Map state to mode string for hsts_entries table
 STATE_TO_MODE: Dict[int, str] = {
-    0: "force-https",  # Active HSTS
-    1: "knockout",     # Removed/expired
+    0: "unset",
+    1: "force-https",  # Active HSTS
+    2: "knockout",     # Removed
+    3: "negative",
 }
 
 

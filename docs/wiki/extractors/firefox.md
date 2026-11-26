@@ -98,10 +98,10 @@ Source: `src/extractors/browser/firefox/`
 
 ### FirefoxTransportSecurityExtractor
 - Purpose: Extract HSTS entries with cleartext domains.
-- Extraction (source): SiteSecurityServiceState.txt via firefox/_patterns ("transport_security"); copied to output_dir.
+- Extraction (source): SiteSecurityServiceState.txt, found through the file list on all partitions with the path patterns of firefox/_patterns ("transport_security"); each file is read from its own partition and copied to output_dir with hashes. The filesystem is not scanned.
 - Ingestion (transform + store): Parses tab-separated entries, converts last_access (days since epoch) and expiry_ms, inserts URLs via insert_urls and HSTS entries via insert_hsts_entries (cleartext decoded_host), and registers browser_inventory (clears prior run data).
 - Outputs: Copied text files + manifest.json + extracted_files audit records; urls and hsts_entries rows; browser_inventory entries.
-- Special behavior: Uses last_access as last_seen for URL records and stores cleartext domains (hashed_host placeholder).
+- Special behavior: Uses last_access as last_seen for URL records and stores cleartext domains (hashed_host placeholder). Requires a file list: without one the run stops with an error that asks for the File List extractor; such a run, like a cancelled one, is not reused, so the next run extracts again. Files on a partition that cannot be opened are skipped with a note in the manifest and the evidence log (status `partial`, listed under `skipped_files`); they are never read from another partition. File list rows without a partition number are looked up on the open partition only and recorded with that partition (`listed_partition_index` in the manifest keeps the file list's value). Files larger than 16 MiB are not copied (status `partial` with a note). State values follow Firefox's `SecurityPropertyState` (0 unset, 1 force-https, 2 knockout, 3 negative).
 - Notes: Supports Firefox/ESR/Tor; high forensic value due to cleartext hosts.
 
 ### FirefoxSessionsExtractor

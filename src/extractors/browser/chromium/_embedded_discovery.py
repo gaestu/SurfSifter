@@ -283,6 +283,7 @@ def _merge_discovery_results(
         total_matches=total_matches,
         partitions_with_matches=sorted(merged.keys()),
         query_info="merged_embedded_discovery",
+        error=base.error or extra.error,
     )
 
 
