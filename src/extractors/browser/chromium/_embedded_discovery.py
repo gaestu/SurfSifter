@@ -8,8 +8,10 @@ helpers to run artifact discovery with embedded-root scoped patterns.
 from __future__ import annotations
 
 import fnmatch
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Dict, Iterable, List, Optional, Set, Tuple
+
+from core.logging import get_logger
 
 from ..._shared.file_list_discovery import (
     FileListDiscoveryResult,
@@ -18,6 +20,14 @@ from ..._shared.file_list_discovery import (
     glob_to_sql_like,
 )
 from ._patterns import CHROMIUM_BROWSERS, get_patterns_for_root
+
+LOGGER = get_logger("extractors.browser.chromium.embedded_discovery")
+
+# SQLite rejects a LIKE pattern longer than 50,000 bytes (its default
+# SQLITE_MAX_LIKE_PATTERN_LENGTH). The root path comes from the evidence,
+# for example from an imported file list, so a root whose pattern would be
+# longer is left out instead of failing the whole discovery.
+MAX_EMBEDDED_PATTERN_BYTES = 40_000
 
 
 _SIGNAL_PATH_PATTERNS = [
@@ -201,6 +211,24 @@ def discover_embedded_roots(evidence_conn, evidence_id: int) -> List[EmbeddedRoo
     - Group candidates by (partition_index, derived root path)
     - Require at least two distinct signal types for acceptance
     - Exclude candidates that already match known Chromium browser roots
+
+    A failed file_list query gives no roots here. Use
+    discover_embedded_roots_with_error() to learn about the failure.
+    """
+    embedded_roots, _ = discover_embedded_roots_with_error(evidence_conn, evidence_id)
+    return embedded_roots
+
+
+def discover_embedded_roots_with_error(
+    evidence_conn,
+    evidence_id: int,
+) -> Tuple[List[EmbeddedRoot], Optional[str]]:
+    """
+    Discover embedded roots like discover_embedded_roots().
+
+    Returns:
+        Tuple of (embedded roots, error of the file_list query or None).
+        With an error the list is empty, but that does not mean "no roots".
     """
     result = discover_from_file_list(
         evidence_conn,
@@ -242,7 +270,7 @@ def discover_embedded_roots(evidence_conn, evidence_id: int) -> List[EmbeddedRoo
         )
 
     embedded_roots.sort(key=lambda item: (item.partition_index is None, item.partition_index, item.root_path))
-    return embedded_roots
+    return embedded_roots, result.error
 
 
 def get_embedded_root_paths(
@@ -284,6 +312,7 @@ def _merge_discovery_results(
         partitions_with_matches=sorted(merged.keys()),
         query_info="merged_embedded_discovery",
         error=base.error or extra.error,
+        notes=base.notes + extra.notes,
     )
 
 
@@ -299,7 +328,10 @@ def discover_artifacts_with_embedded_roots(
     Discover artifact files via file_list, including embedded Chromium roots.
 
     Returns:
-        Tuple of (merged FileListDiscoveryResult, discovered embedded roots)
+        Tuple of (merged FileListDiscoveryResult, discovered embedded roots).
+        If one of the file_list queries failed, the result's ``error`` is set
+        and its matches are incomplete: check ``error`` before using them.
+        A root that could not be searched is named in the result's ``notes``.
     """
     # For directory-based artifacts, ensure path patterns end with wildcard
     # so they match files inside the directory
@@ -319,8 +351,10 @@ def discover_artifacts_with_embedded_roots(
         exclude_deleted=True,
     )
 
-    embedded_roots = discover_embedded_roots(evidence_conn, evidence_id)
+    embedded_roots, roots_error = discover_embedded_roots_with_error(evidence_conn, evidence_id)
     merged_result = base_result
+    if roots_error and not merged_result.error:
+        merged_result = replace(merged_result, error=roots_error)
 
     for root in embedded_roots:
         partition_filter = {root.partition_index} if root.partition_index is not None else None
@@ -337,6 +371,16 @@ def discover_artifacts_with_embedded_roots(
 
         embedded_patterns = _dedupe_patterns(embedded_patterns)
         if not embedded_patterns:
+            continue
+
+        if any(len(p.encode("utf-8")) > MAX_EMBEDDED_PATTERN_BYTES for p in embedded_patterns):
+            note = (
+                f"Embedded Chromium root on partition {root.partition_index} not searched "
+                f"through the file list: its path is too long for a query "
+                f"({len(root.root_path)} characters, starts with {root.root_path[:80]!r})"
+            )
+            LOGGER.warning(note)
+            merged_result = replace(merged_result, notes=merged_result.notes + [note])
             continue
 
         embedded_result = discover_from_file_list(

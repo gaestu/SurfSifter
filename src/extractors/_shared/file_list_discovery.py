@@ -37,13 +37,14 @@ See Also:
 from __future__ import annotations
 
 import fnmatch
-import logging
 import re
 import sqlite3
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Dict, Iterator, List, Optional, Set, TYPE_CHECKING
+from typing import Dict, Iterator, List, Optional, Set, Tuple, TYPE_CHECKING
+
+from core.logging import get_logger
 
 if TYPE_CHECKING:
     from core.evidence_fs import PyEwfTskFS
@@ -51,13 +52,32 @@ if TYPE_CHECKING:
 __all__ = [
     "FileListMatch",
     "FileListDiscoveryResult",
+    "FileListQueryError",
     "discover_from_file_list",
     "open_partition_for_extraction",
     "glob_to_sql_like",
     "get_ewf_paths_from_evidence_fs",
 ]
 
-LOGGER = logging.getLogger(__name__)
+# Under the application logger, so that a failed query reaches processing.log
+LOGGER = get_logger("extractors._shared.file_list_discovery")
+
+# Largest number of patterns (file name and path patterns together) in one
+# query. SQLite fails with "Expression tree is too large" at a depth of 1000,
+# which a list of about 990 OR-ed patterns reaches, and builds before 3.32
+# accept at most 999 bound values per query. 850 stays below both and leaves
+# room for the extension and partition filters. Selections of up to 850
+# patterns stay one query.
+MAX_PATTERNS_PER_QUERY = 850
+
+
+class FileListQueryError(RuntimeError):
+    """
+    A file_list query failed, so it is not known which files exist.
+
+    Raised by extractors for a discovery result whose ``error`` is set. It must
+    end the run with an error; it must not be handled like "no match".
+    """
 
 
 @dataclass
@@ -111,12 +131,15 @@ class FileListDiscoveryResult:
         query_info: Optional info about the query performed (for logging)
         error: Set when the file_list query failed. The result is then empty,
             but "no matches" must not be concluded from it.
+        notes: Parts of the search that were left out, for the caller to put
+            into its run log and manifest. The matches are still valid.
     """
     matches_by_partition: Dict[int, List[FileListMatch]] = field(default_factory=dict)
     total_matches: int = 0
     partitions_with_matches: List[int] = field(default_factory=list)
     query_info: Optional[str] = None
     error: Optional[str] = None
+    notes: List[str] = field(default_factory=list)
 
     @property
     def is_multi_partition(self) -> bool:
@@ -306,7 +329,13 @@ def discover_from_file_list(
         partition_filter: If provided, only return matches from these partitions
 
     Returns:
-        FileListDiscoveryResult with matches grouped by partition_index
+        FileListDiscoveryResult with matches grouped by partition_index.
+        If a query fails, the result is empty and its ``error`` is set: an
+        empty result alone does not mean "no match".
+
+    Any number of patterns is accepted. More than MAX_PATTERNS_PER_QUERY file
+    name and path patterns together are spread over several queries; a row is
+    returned once, and the result is then ordered by rowid.
 
     Examples:
         # Find all Chrome History files
@@ -327,11 +356,119 @@ def discover_from_file_list(
         LOGGER.warning("discover_from_file_list called with no patterns - returning empty result")
         return FileListDiscoveryResult(query_info="No patterns specified")
 
-    # Build query
+    # SQLite limits the depth of an expression (1000 by default), and a list
+    # of OR-ed patterns is one level per pattern. Many patterns are therefore
+    # spread over several queries. With one chunk each, this is one query.
+    filename_chunks, path_chunks = _chunk_pattern_lists(filename_patterns, path_patterns)
+    query_count = len(filename_chunks) * len(path_chunks)
+
+    query_info = f"filename={filename_patterns}, path={path_patterns}, ext={extension_filter}"
+
+    # A row matches when it matches a file name pattern AND a path pattern, so
+    # the union over all pairs of chunks is the result of the single query.
+    rows_by_rowid: Dict[int, FileListMatch] = {}
+
+    try:
+        for filename_chunk in filename_chunks:
+            for path_chunk in path_chunks:
+                query, params = _build_discovery_query(
+                    evidence_id,
+                    filename_chunk,
+                    path_chunk,
+                    extension_filter,
+                    exclude_deleted,
+                    partition_filter,
+                )
+
+                LOGGER.debug("file_list discovery query: %s", query)
+                LOGGER.debug("file_list discovery params: %s", params)
+
+                for row in evidence_conn.execute(query, params):
+                    rowid = row[0]
+                    # A row can match patterns of more than one chunk
+                    if rowid not in rows_by_rowid:
+                        rows_by_rowid[rowid] = _row_to_match(row)
+
+    except sqlite3.Error as e:
+        LOGGER.error("file_list query failed: %s", e)
+        return FileListDiscoveryResult(
+            query_info=f"Query failed: {e}",
+            error=str(e),
+        )
+
+    if query_count > 1:
+        # Several queries: order by rowid, so that the result does not depend
+        # on how the patterns were spread over the queries.
+        ordered = [rows_by_rowid[rowid] for rowid in sorted(rows_by_rowid)]
+    else:
+        # One query: keep the order SQLite returned
+        ordered = list(rows_by_rowid.values())
+
+    matches_by_partition: Dict[int, List[FileListMatch]] = {}
+    for match in ordered:
+        matches_by_partition.setdefault(match.partition_index, []).append(match)
+
+    # Build result
+    partitions_with_matches = sorted(matches_by_partition.keys())
+
+    result = FileListDiscoveryResult(
+        matches_by_partition=matches_by_partition,
+        total_matches=len(ordered),
+        partitions_with_matches=partitions_with_matches,
+        query_info=query_info,
+    )
+
+    LOGGER.info(
+        "file_list discovery: %d matches across %d partition(s) (%d quer%s)",
+        len(ordered),
+        len(partitions_with_matches),
+        query_count,
+        "y" if query_count == 1 else "ies",
+    )
+
+    return result
+
+
+def _chunk_pattern_lists(
+    filename_patterns: Optional[List[str]],
+    path_patterns: Optional[List[str]],
+) -> Tuple[List[Optional[List[str]]], List[Optional[List[str]]]]:
+    """
+    Split the patterns so that no query has more than MAX_PATTERNS_PER_QUERY.
+
+    Every file name chunk is combined with every path chunk, so a file name
+    chunk and a path chunk together stay within the limit. With both kinds,
+    file name patterns get at most half of it. No patterns of a kind give one
+    part without a clause (``None``).
+    """
+    if filename_patterns and path_patterns:
+        filename_size = min(len(filename_patterns), max(1, MAX_PATTERNS_PER_QUERY // 2))
+    else:
+        filename_size = max(1, MAX_PATTERNS_PER_QUERY)
+    path_size = max(1, MAX_PATTERNS_PER_QUERY - (filename_size if filename_patterns else 0))
+    return _chunk_patterns(filename_patterns, filename_size), _chunk_patterns(path_patterns, path_size)
+
+
+def _chunk_patterns(patterns: Optional[List[str]], size: int) -> List[Optional[List[str]]]:
+    """Split a pattern list into parts of at most ``size``; no patterns give ``[None]``."""
+    if not patterns:
+        return [None]
+    return [patterns[start:start + size] for start in range(0, len(patterns), size)]
+
+
+def _build_discovery_query(
+    evidence_id: int,
+    filename_patterns: Optional[List[str]],
+    path_patterns: Optional[List[str]],
+    extension_filter: Optional[List[str]],
+    exclude_deleted: bool,
+    partition_filter: Optional[Set[int]],
+) -> Tuple[str, List]:
+    """Build one file_list query and its parameters."""
     params: List = [evidence_id]
 
     query_parts = [
-        "SELECT file_path, file_name, partition_index, inode, size_bytes, extension, deleted",
+        "SELECT rowid, file_path, file_name, partition_index, inode, size_bytes, extension, deleted",
         "FROM file_list",
         "WHERE evidence_id = ?",
     ]
@@ -358,97 +495,59 @@ def discover_from_file_list(
         query_parts.append(f"AND partition_index IN ({placeholders})")
         params.extend(sorted(partition_filter))
 
-    query = '\n'.join(query_parts)
+    return '\n'.join(query_parts), params
 
-    LOGGER.debug("file_list discovery query: %s", query)
-    LOGGER.debug("file_list discovery params: %s", params)
 
-    # Execute query
-    matches_by_partition: Dict[int, List[FileListMatch]] = {}
-    total_matches = 0
+def _row_to_match(row) -> FileListMatch:
+    """Convert a row of the discovery query (after its rowid) to a FileListMatch."""
+    file_path = row[1] or ""
+    file_name = row[2] or ""
+    partition_index = row[3]
+    inode = row[4]
+    size_bytes = row[5]
+    extension = row[6]
+    deleted_flag = bool(row[7]) if row[7] else False
 
-    try:
-        cursor = evidence_conn.execute(query, params)
+    # Handle None partition_index (legacy data)
+    if partition_index is None:
+        partition_index = 0
+    else:
+        try:
+            partition_index = int(partition_index)
+        except (TypeError, ValueError):
+            partition_index = 0
 
-        for row in cursor:
-            file_path = row[0] or ""
-            file_name = row[1] or ""
-            partition_index = row[2]
-            inode = row[3]
-            size_bytes = row[4]
-            extension = row[5]
-            deleted_flag = bool(row[6]) if row[6] else False
-
-            # Handle None partition_index (legacy data)
-            if partition_index is None:
-                partition_index = 0
-            else:
+    # Parse inode - may be integer or NTFS MFT format like "3869-128-4"
+    parsed_inode = None
+    if inode is not None:
+        try:
+            parsed_inode = int(inode)
+        except (TypeError, ValueError):
+            # NTFS MFT format: "MFT_RECORD-ATTRIBUTE_TYPE-ATTRIBUTE_ID"
+            # Extract MFT record number (first component)
+            if isinstance(inode, str) and '-' in inode:
                 try:
-                    partition_index = int(partition_index)
-                except (TypeError, ValueError):
-                    partition_index = 0
+                    parsed_inode = int(inode.split('-')[0])
+                except (ValueError, IndexError):
+                    parsed_inode = None
 
-            # Parse inode - may be integer or NTFS MFT format like "3869-128-4"
-            parsed_inode = None
-            if inode is not None:
-                try:
-                    parsed_inode = int(inode)
-                except (TypeError, ValueError):
-                    # NTFS MFT format: "MFT_RECORD-ATTRIBUTE_TYPE-ATTRIBUTE_ID"
-                    # Extract MFT record number (first component)
-                    if isinstance(inode, str) and '-' in inode:
-                        try:
-                            parsed_inode = int(inode.split('-')[0])
-                        except (ValueError, IndexError):
-                            parsed_inode = None
+    # Parse size_bytes
+    parsed_size = None
+    if size_bytes is not None:
+        try:
+            parsed_size = int(size_bytes)
+        except (TypeError, ValueError):
+            pass
 
-            # Parse size_bytes
-            parsed_size = None
-            if size_bytes is not None:
-                try:
-                    parsed_size = int(size_bytes)
-                except (TypeError, ValueError):
-                    pass
-
-            match = FileListMatch(
-                file_path=file_path,
-                file_name=file_name,
-                partition_index=partition_index,
-                inode=parsed_inode,
-                size_bytes=parsed_size,
-                extension=extension,
-                deleted=deleted_flag,
-            )
-
-            matches_by_partition.setdefault(partition_index, []).append(match)
-            total_matches += 1
-
-    except sqlite3.Error as e:
-        LOGGER.error("file_list query failed: %s", e)
-        return FileListDiscoveryResult(
-            query_info=f"Query failed: {e}",
-            error=str(e),
-        )
-
-    # Build result
-    partitions_with_matches = sorted(matches_by_partition.keys())
-
-    query_info = f"filename={filename_patterns}, path={path_patterns}, ext={extension_filter}"
-
-    result = FileListDiscoveryResult(
-        matches_by_partition=matches_by_partition,
-        total_matches=total_matches,
-        partitions_with_matches=partitions_with_matches,
-        query_info=query_info,
+    return FileListMatch(
+        file_path=file_path,
+        file_name=file_name,
+        partition_index=partition_index,
+        inode=parsed_inode,
+        size_bytes=parsed_size,
+        extension=extension,
+        deleted=deleted_flag,
     )
-
-    LOGGER.info(
-        "file_list discovery: %d matches across %d partition(s)",
-        total_matches,
-        len(partitions_with_matches),
-    )
-
-    return result
 
 
 def get_ewf_paths_from_evidence_fs(evidence_fs) -> Optional[List[Path]]:

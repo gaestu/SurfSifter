@@ -23,6 +23,15 @@ from extractors._shared.file_list_discovery import FileListDiscoveryResult
 from extractors.browser.firefox.transport_security import FirefoxTransportSecurityExtractor
 from extractors.browser.firefox.transport_security import extractor as extractor_module
 from extractors.browser.firefox.transport_security._parsers import parse_transport_security_file
+from tests.fixtures.file_list_discovery import (
+    EWF_PATHS,
+    PartitionFS as SharedPartitionFS,
+    add_to_file_list,
+    make_partition_roots,
+    mock_callbacks,
+    patch_open_ewf_partition,
+    write_file,
+)
 
 PROFILES = "Users/alice/AppData/Roaming/Mozilla/Firefox/Profiles"
 HSTS_PATH = f"{PROFILES}/abc123.default-release/SiteSecurityServiceState.txt"
@@ -35,38 +44,14 @@ TOR_PATH = (
 CONTENT_P1 = b"partition-one.example:HSTS\t0\t19000\t1893456000000,1,0\n"
 CONTENT_P2 = b"partition-two.example:HSTS\t0\t19001\t1893456000000,1,1\n"
 
-EWF_PATHS = [Path("/evidence/image.E01")]
 
+class PartitionFS(SharedPartitionFS):
+    """Reads paths as a plain MountedFS does: a leading slash is not removed.
 
-class PartitionFS(MountedFS):
-    """A directory that stands for one partition of an EWF image."""
+    The extractor must strip it itself (#89), so the harness must not hide it.
+    """
 
-    def __init__(self, root: Path, partition_index: int, ewf_paths=None) -> None:
-        super().__init__(root)
-        self._partition_index = partition_index
-        self.ewf_paths = ewf_paths
-        self.scanned_patterns: list[str] = []
-        self.read_paths: list[str] = []
-        self.closed = False
-
-    @property
-    def partition_index(self) -> int:
-        return self._partition_index
-
-    @property
-    def fs_type(self) -> str:
-        return f"fs-of-partition-{self._partition_index}"
-
-    def iter_paths(self, glob_pattern: str):
-        self.scanned_patterns.append(glob_pattern)
-        return super().iter_paths(glob_pattern)
-
-    def open_for_read(self, path: str):
-        self.read_paths.append(path)
-        return super().open_for_read(path)
-
-    def close(self) -> None:
-        self.closed = True
+    strip_leading_slash = False
 
 
 @pytest.fixture
@@ -76,20 +61,13 @@ def extractor():
 
 @pytest.fixture
 def callbacks():
-    cb = Mock()
-    cb.is_cancelled = Mock(return_value=False)
-    return cb
+    return mock_callbacks()
 
 
 @pytest.fixture
 def roots(tmp_path):
     """Directories of partitions 1 and 2."""
-    result = {}
-    for index in (1, 2):
-        root = tmp_path / f"partition{index}"
-        root.mkdir()
-        result[index] = root
-    return result
+    return make_partition_roots(tmp_path)
 
 
 @pytest.fixture
@@ -100,36 +78,7 @@ def output_dir(tmp_path):
 @pytest.fixture
 def opened_partitions(monkeypatch, roots):
     """Replace open_ewf_partition; the dict maps partition index -> opened filesystem."""
-    opened: dict[int, PartitionFS] = {}
-
-    def fake_open_ewf_partition(ewf_paths, partition_index=-1):
-        fs = PartitionFS(roots[partition_index], partition_index, ewf_paths)
-        opened[partition_index] = fs
-        return fs
-
-    monkeypatch.setattr("core.evidence_fs.open_ewf_partition", fake_open_ewf_partition)
-    return opened
-
-
-def write_file(root: Path, rel_path: str, content: bytes) -> None:
-    target = root / rel_path
-    target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_bytes(content)
-
-
-def add_to_file_list(conn, evidence_id: int, path: str, partition_index: int, inode: str | None = None) -> None:
-    conn.execute(
-        """
-        INSERT INTO file_list
-        (evidence_id, file_path, file_name, extension, import_timestamp, partition_index, inode)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
-        """,
-        (
-            evidence_id, path, path.rsplit("/", 1)[-1], ".txt", "2026-01-01T00:00:00+00:00",
-            partition_index, inode,
-        ),
-    )
-    conn.commit()
+    return patch_open_ewf_partition(monkeypatch, roots, fs_class=PartitionFS)
 
 
 def run_extraction(extractor, evidence_fs, output_dir, callbacks, evidence_conn, evidence_id, **config):

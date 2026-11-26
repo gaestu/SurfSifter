@@ -64,8 +64,13 @@ Run if applicable:
 - [`review_documentation.md`](review_documentation.md) — when docs / user-facing behavior changed
 - [`review_issue_completeness.md`](review_issue_completeness.md) — always for issue work
 
+Launching reviewers:
+
+- **Models:** correctness, forensic safety, security, architecture → Opus. Documentation, issue completeness → Sonnet. This sets the model per reviewer subagent; implementation stays on the session model. Tools without per-subagent model selection ignore it.
+- **Input:** the task description, the list of changed/created file paths, and the specialist prompt. Do **not** paste file contents or the diff — each reviewer runs `git diff` on those paths and reads the files itself (new untracked files don't appear in `git diff`; they are read by path).
+
 Each reviewer returns **PASS** or **ISSUES: [numbered list]**.
-If any reviewer flags real issues → fix them and re-run **only the failed reviewers**. Max 3 iterations before escalating.
+If any reviewer flags real issues → fix them and re-run **only the failed reviewers**. Continue the same reviewer subagent (it keeps its context) and give it only what changed since its last pass — the paths and a one-line note per fix. Launch a fresh reviewer only when the earlier one can no longer be continued. Max 3 iterations before escalating.
 
 ### 7. Finalize
 ```bash

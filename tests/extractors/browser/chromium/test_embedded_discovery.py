@@ -5,6 +5,7 @@ import sqlite3
 import pytest
 
 from extractors._shared.file_list_discovery import FileListDiscoveryResult, FileListMatch
+from tests.fixtures.file_list_discovery import QueryRecorder
 from extractors.browser.chromium._embedded_discovery import (
     _detect_signal,
     _extract_profile_root,
@@ -278,3 +279,53 @@ def test_merged_discovery_keeps_a_query_error():
     assert _merge_discovery_results(failed, found).error == "database is locked"
     assert _merge_discovery_results(found, found).error is None
     assert _merge_discovery_results(found, failed).total_matches == 1
+
+
+def test_failed_embedded_root_query_is_reported(evidence_db):
+    """The artifact query works, the query for embedded roots fails."""
+    _insert_rows(evidence_db, [
+        (1, "/Users/a/AppData/Local/Google/Chrome/User Data/Default/History", "History", None, 1, 1, 0, 1),
+    ])
+    conn = QueryRecorder(evidence_db, fail_on_query=2)
+
+    result, embedded_roots = discover_artifacts_with_embedded_roots(
+        conn,
+        1,
+        artifact="history",
+        filename_patterns=["History"],
+        path_patterns=["%Chrome%User Data%"],
+    )
+
+    assert len(conn.queries) == 2
+    assert result.error == "database is locked"
+    assert embedded_roots == []
+
+
+def test_discover_embedded_roots_returns_no_roots_when_the_query_fails(evidence_db):
+    assert discover_embedded_roots(QueryRecorder(evidence_db, fail_on_query=1), 1) == []
+
+
+def test_root_with_a_path_too_long_for_a_query_is_skipped(evidence_db):
+    """An evidence path SQLite cannot use in a LIKE pattern drops that root, not the discovery."""
+    long_root = "ProgramData/" + "_" * 25_000 + "/User Data"
+    _insert_rows(evidence_db, [
+        (1, f"{long_root}/Default/History", "History", "", 1, 701, 0, 2),
+        (1, f"{long_root}/Default/Cookies", "Cookies", "", 1, 702, 0, 2),
+        (1, "Users/a/AppData/Local/Google/Chrome/User Data/Default/Cookies", "Cookies", "", 1, 703, 0, 2),
+    ])
+
+    result, roots = discover_artifacts_with_embedded_roots(
+        evidence_db,
+        1,
+        artifact="cookies",
+        filename_patterns=["Cookies"],
+        path_patterns=["%Google%Chrome%"],
+    )
+
+    assert [root.root_path for root in roots] == [long_root], "the root itself is still discovered"
+    assert result.error is None
+    assert len(result.notes) == 1
+    assert "too long" in result.notes[0]
+    assert [m.file_path for m in result.get_all_matches()] == [
+        "Users/a/AppData/Local/Google/Chrome/User Data/Default/Cookies"
+    ]

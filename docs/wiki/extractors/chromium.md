@@ -45,7 +45,7 @@ Source: `src/extractors/browser/chromium/`
 - Extraction (source): Cache/Cache_Data and Cache directories via chromium/_patterns; optional Service Worker CacheStorage via extractors.browser_patterns.get_browser_paths('cache_storage'); concurrent extraction with resume and hash mode options.
 - Ingestion (transform + store): Parses simple cache headers/HTTP headers and blockfile entries, decompresses bodies (gzip/br/zstd/deflate), inserts URLs via insert_urls, images via insert_image_with_discovery, and registers inventory via insert_browser_inventory/update_inventory_ingestion_status.
 - Outputs: Run-id subdirectory with manifest.json (and manifest.partial.json during resume), extracted cache files, carved_images output, and extracted_files audit records.
-- Special behavior: Auto-detects cache format; uses index files to populate last_used_time for timeline correlation.
+- Special behavior: Auto-detects cache format; uses index files to populate last_used_time for timeline correlation. The partitions to search come from the file list; if a file list query fails, the run stops with status `error` and a note in the manifest, and the open partition is not searched in its place. A resumed run that fails this way keeps its manifest.partial.json, so the reason is only in the evidence log. Ingest Results refuses a run that ended with an error.
 - Notes: Optional brotli/zstandard dependencies; hash mode can be deferred to ingestion.
 
 ### ChromiumMediaHistoryExtractor (MediaHistoryExtractor alias)
@@ -117,7 +117,7 @@ Source: `src/extractors/browser/chromium/`
 - Extraction (source): Session files via get_artifact_patterns("sessions") including legacy Current/Last files and Sessions/Session_* and Tabs_*; copied with hashes and timestamp suffixes preserved.
 - Ingestion (transform + store): parse_snss_data builds windows/tabs/history, maps transition types, inserts via insert_session_windows/insert_session_tabs/insert_session_tab_histories, and cross-posts URL events to urls.
 - Outputs: Copied SNSS files, manifest.json, and extracted_files audit records.
-- Special behavior: Creates synthetic window if none parsed; preserves referrer, original_request_url, post data, and HTTP status in history records.
+- Special behavior: Creates synthetic window if none parsed; preserves referrer, original_request_url, post data, and HTTP status in history records. A failed file list query stops the run with status `error` (reason in the manifest and the evidence log); such a run is not reused by Run All, so the next run extracts again, and Ingest Results refuses it. A partition that cannot be opened, a session file that cannot be copied, or an embedded Chromium root whose path is too long for a file list query gives status `partial` with a note.
 - Notes: Cross-posting skips about:/chrome:/chrome-extension:/javascript:/data schemes.
 
 ### ChromiumBrowserStorageExtractor

@@ -60,6 +60,7 @@ from PySide6.QtWidgets import (
 from ....base import BaseExtractor, ExtractorMetadata
 from ....callbacks import ExtractorCallbacks
 from ...._shared.file_list_discovery import (
+    FileListQueryError,
     check_file_list_available,
     glob_to_sql_like,
     open_partition_for_extraction,
@@ -74,7 +75,7 @@ from .._patterns import (
 )
 from .._embedded_discovery import (
     discover_artifacts_with_embedded_roots,
-    discover_embedded_roots,
+    discover_embedded_roots_with_error,
     get_embedded_root_paths,
 )
 from ....widgets import BrowserConfigWidget
@@ -237,10 +238,17 @@ class CacheSimpleExtractor(BaseExtractor):
         return any(output_dir.glob("*/manifest.json"))
 
     def can_run_ingestion(self, output_dir: Path) -> tuple[bool, str]:
-        """Check if ingestion can run (manifest exists)."""
-        manifests = list(output_dir.glob("*/manifest.json"))
+        """Check if ingestion can run (latest manifest, from a run without an error)."""
+        manifests = sorted(output_dir.glob("*/manifest.json"))
         if not manifests:
             return False, "No manifest.json found - run extraction first"
+        try:
+            manifest_data = json.loads(manifests[-1].read_text())
+        except (OSError, ValueError):
+            return True, ""
+        if isinstance(manifest_data, dict) and manifest_data.get("status") == "error":
+            reason = "; ".join(manifest_data.get("notes", [])) or "extraction ended with an error"
+            return False, f"The last extraction ended with an error, nothing to ingest: {reason}"
         return True, ""
 
     def get_config_widget(self, parent: QWidget) -> Optional[QWidget]:
@@ -576,15 +584,12 @@ class CacheSimpleExtractor(BaseExtractor):
         evidence_conn = merged_config.get("evidence_conn")
 
         discovered_embedded_roots = []
-        if evidence_conn is not None:
-            try:
-                discovered_embedded_roots = discover_embedded_roots(evidence_conn, evidence_id)
-            except Exception as e:
-                LOGGER.debug("Embedded root discovery failed for cache extractor: %s", e)
-
         partition_indices: List[Optional[int]] = [None]
         if evidence_conn is not None:
             try:
+                discovered_embedded_roots, roots_error = discover_embedded_roots_with_error(evidence_conn, evidence_id)
+                if roots_error:
+                    raise FileListQueryError(roots_error)
                 partition_indices = self._discover_cache_partitions(
                     evidence_conn=evidence_conn,
                     evidence_id=evidence_id,
@@ -592,8 +597,24 @@ class CacheSimpleExtractor(BaseExtractor):
                     include_disk_cache=include_disk_cache,
                 )
             except Exception as e:
-                LOGGER.debug("Cache partition discovery failed, falling back to active partition: %s", e)
-                partition_indices = [None]
+                # Not "no match": which partitions hold cache data is unknown,
+                # so the open partition is not searched in their place.
+                error_msg = f"File list discovery for cache directories failed: {e}"
+                LOGGER.error(error_msg, exc_info=not isinstance(e, FileListQueryError))
+                callbacks.on_error("File list discovery failed", error_msg)
+                if collector:
+                    collector.finish_run(evidence_id, self.metadata.name, status="error")
+                # A resumed run keeps its partial manifest, so that it can
+                # still be continued; a final manifest would end it.
+                if not incomplete:
+                    self._write_final_manifest(
+                        run_output, run_id, evidence_id, manifest_files, extraction_stats, hash_mode,
+                        status="error", notes=[error_msg],
+                        extraction_tool=self._get_extraction_tool_version(),
+                        e01_context=self._get_e01_context(evidence_fs),
+                        config={"browsers": browsers},
+                    )
+                return False
 
         if any(idx is not None for idx in partition_indices) and not (hasattr(evidence_fs, "ewf_paths") and evidence_fs.ewf_paths):
             partition_indices = [None]
@@ -800,7 +821,14 @@ class CacheSimpleExtractor(BaseExtractor):
         browsers: List[str],
         include_disk_cache: bool,
     ) -> List[Optional[int]]:
-        """Discover partitions that likely contain Chromium cache artifacts."""
+        """Discover partitions that likely contain Chromium cache artifacts.
+
+        Returns ``[None]`` (the open partition) when there is no file list or
+        it has no match.
+
+        Raises:
+            FileListQueryError: If the file_list query failed
+        """
         available, _ = check_file_list_available(evidence_conn, evidence_id)
         if not available:
             return [None]
@@ -823,6 +851,9 @@ class CacheSimpleExtractor(BaseExtractor):
             filename_patterns=["index", "the-real-index", "f_*", "data_*"],
             path_patterns=sorted(path_patterns) if path_patterns else None,
         )
+
+        if result.error:
+            raise FileListQueryError(result.error)
 
         partitions = set(result.matches_by_partition.keys())
         partitions.update(root.partition_index for root in embedded_roots if root.partition_index is not None)
@@ -1186,6 +1217,12 @@ class CacheSimpleExtractor(BaseExtractor):
         manifest_path = manifests[-1]
         manifest_data = json.loads(manifest_path.read_text())
         run_id = manifest_data["run_id"]
+
+        if manifest_data.get("status") == "error":
+            # Nothing was extracted; keep the run's error status and reason
+            reason = "; ".join(manifest_data.get("notes", [])) or "extraction ended with an error"
+            callbacks.on_error("Extraction ended with an error, nothing to ingest", reason)
+            return {"urls": 0, "images": 0, "records": 0}
 
         warning_collector = ExtractionWarningCollector(
             extractor_name=self.metadata.name,

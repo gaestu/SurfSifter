@@ -48,8 +48,13 @@ Always run:
 Run if docs/user-facing behavior changed:
 - [`review_documentation.md`](review_documentation.md)
 
+Launching reviewers:
+
+- **Models:** correctness, forensic safety, security, architecture → Opus. Documentation → Sonnet. This sets the model per reviewer subagent; implementation stays on the session model. Tools without per-subagent model selection ignore it.
+- **Input:** the task description, the list of changed/created file paths, and the specialist prompt. Do **not** paste file contents or the diff — each reviewer runs `git diff` on those paths and reads the files itself (new untracked files don't appear in `git diff`; they are read by path).
+
 Each reviewer returns **PASS** or **ISSUES: [numbered list]**.
-If a reviewer flags issues → fix and re-run only the failed reviewer. Max 3 iterations before escalating.
+If a reviewer flags issues → fix and re-run only the failed reviewer. Continue the same reviewer subagent (it keeps its context) and give it only what changed since its last pass — the paths and a one-line note per fix. Launch a fresh reviewer only when the earlier one can no longer be continued. Max 3 iterations before escalating.
 
 For trivial single-file changes (typo fix, log message tweak), reviewers may be skipped — use judgment.
 

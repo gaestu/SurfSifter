@@ -8,7 +8,9 @@ import pytest
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
+from tests.fixtures.file_list_discovery import QueryRecorder
 from extractors._shared.file_list_discovery import (
+    MAX_PATTERNS_PER_QUERY,
     FileListMatch,
     FileListDiscoveryResult,
     discover_from_file_list,
@@ -440,6 +442,104 @@ class TestDiscoverFromFileList:
         assert "/Users/Acer/AppData/Local/Microsoft/Windows/WebCache/WebCacheV01.dat" in paths
         assert "/Windows/System32/config/systemprofile/AppData/Local/Microsoft/Windows/WebCache/WebCacheV01.dat" in paths
         assert "/Windows.old/Users/LIDIA-1/AppData/Local/Microsoft/Windows/WebCache/WebCacheV01.dat" in paths
+
+
+# ============================================================================
+# Tests: many patterns (several queries)
+# ============================================================================
+
+def _add_files(conn, rows):
+    """rows: (file_path, partition_index); row ids follow the order given."""
+    conn.executemany(
+        "INSERT INTO file_list (evidence_id, file_path, file_name, deleted, partition_index) "
+        "VALUES (1, ?, ?, 0, ?)",
+        [(path, path.rsplit("/", 1)[-1], partition) for path, partition in rows],
+    )
+    conn.commit()
+
+
+def _filler_patterns(count):
+    return [f"%/no-such-folder-{i:04d}/%" for i in range(count)]
+
+
+class TestManyPatterns:
+    """SQLite rejects a query with 1000 OR-ed patterns; the helper splits the list."""
+
+    def test_match_for_a_pattern_in_a_later_query(self, evidence_db):
+        _add_files(evidence_db, [("/Users/a/Chrome/Default/History", 2)])
+        patterns = _filler_patterns(1200) + ["%/Chrome/Default/%"]
+
+        result = discover_from_file_list(evidence_db, 1, filename_patterns=["History"], path_patterns=patterns)
+
+        assert result.error is None
+        assert result.total_matches == 1
+        assert result.matches_by_partition[2][0].file_path == "/Users/a/Chrome/Default/History"
+
+    def test_number_of_queries(self, evidence_db):
+        one = QueryRecorder(evidence_db)
+        discover_from_file_list(one, 1, path_patterns=_filler_patterns(MAX_PATTERNS_PER_QUERY))
+        assert len(one.queries) == 1
+
+        two = QueryRecorder(evidence_db)
+        discover_from_file_list(two, 1, path_patterns=_filler_patterns(MAX_PATTERNS_PER_QUERY + 1))
+        assert len(two.queries) == 2
+
+    def test_row_matching_patterns_of_two_queries_is_returned_once(self, evidence_db):
+        _add_files(evidence_db, [("/Users/a/Chrome/User Data/Default/History", 1)])
+        patterns = ["%/Chrome/%"] + _filler_patterns(MAX_PATTERNS_PER_QUERY) + ["%/User Data/%"]
+
+        result = discover_from_file_list(evidence_db, 1, path_patterns=patterns)
+
+        assert result.total_matches == 1
+        assert len(result.matches_by_partition[1]) == 1
+
+    def test_result_of_several_queries_is_ordered_by_rowid(self, evidence_db):
+        # The first row matches a pattern of the second query, and the other way round.
+        _add_files(evidence_db, [
+            ("/b/late-pattern/one", 1),
+            ("/a/early-pattern/two", 1),
+            ("/c/late-pattern/three", 1),
+        ])
+        patterns = ["%/early-pattern/%"] + _filler_patterns(MAX_PATTERNS_PER_QUERY) + ["%/late-pattern/%"]
+
+        result = discover_from_file_list(evidence_db, 1, path_patterns=patterns)
+
+        assert [m.file_name for m in result.matches_by_partition[1]] == ["one", "two", "three"]
+        # Independent of how the patterns are spread over the queries
+        reversed_result = discover_from_file_list(evidence_db, 1, path_patterns=list(reversed(patterns)))
+        assert [m.file_name for m in reversed_result.matches_by_partition[1]] == ["one", "two", "three"]
+
+    def test_many_filename_patterns(self, evidence_db):
+        _add_files(evidence_db, [("/Users/a/Chrome/Default/History", 1), ("/Users/a/Chrome/Default/Cookies", 1)])
+        names = [f"no-such-file-{i:04d}" for i in range(900)] + ["History"]
+
+        result = discover_from_file_list(
+            evidence_db, 1, filename_patterns=names, path_patterns=["%/Chrome/%"]
+        )
+
+        assert result.error is None
+        assert [m.file_name for m in result.get_all_matches()] == ["History"]
+
+    def test_failed_query_gives_no_partial_result(self, evidence_db):
+        _add_files(evidence_db, [("/a/early-pattern/two", 1)])
+        patterns = ["%/early-pattern/%"] + _filler_patterns(MAX_PATTERNS_PER_QUERY)
+        conn = QueryRecorder(evidence_db, fail_on_query=2)
+
+        result = discover_from_file_list(conn, 1, path_patterns=patterns)
+
+        assert len(conn.queries) == 2
+        assert result.error == "database is locked"
+        assert result.is_empty
+        assert result.matches_by_partition == {}
+
+    def test_partition_filter_applies_to_every_query(self, evidence_db):
+        _add_files(evidence_db, [("/x/late-pattern/one", 1), ("/x/late-pattern/two", 2)])
+        patterns = _filler_patterns(MAX_PATTERNS_PER_QUERY) + ["%/late-pattern/%"]
+
+        result = discover_from_file_list(evidence_db, 1, path_patterns=patterns, partition_filter={2})
+
+        assert result.partitions_with_matches == [2]
+        assert [m.file_name for m in result.get_all_matches()] == ["two"]
 
 
 # ============================================================================

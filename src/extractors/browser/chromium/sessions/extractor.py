@@ -50,7 +50,7 @@ import json
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Dict, Any, Optional, List
+from typing import Dict, Any, Optional, List, Tuple
 
 from PySide6.QtWidgets import QWidget, QLabel
 
@@ -59,6 +59,7 @@ from .snss_parser import parse_snss_data, SNSSParseResult
 from ....callbacks import ExtractorCallbacks
 from ....widgets import BrowserConfigWidget
 from ...._shared.file_list_discovery import (
+    FileListQueryError,
     discover_from_file_list,
     open_partition_for_extraction,
     get_ewf_paths_from_evidence_fs,
@@ -129,15 +130,33 @@ class ChromiumSessionsExtractor(BaseExtractor):
         return True, ""
 
     def can_run_ingestion(self, output_dir: Path) -> tuple[bool, str]:
-        """Check if ingestion can run (manifest exists)."""
+        """Check if ingestion can run (manifest of a run that did not end with an error)."""
         manifest = output_dir / "manifest.json"
         if not manifest.exists():
             return False, "No manifest.json found - run extraction first"
+        try:
+            manifest_data = json.loads(manifest.read_text())
+        except (OSError, ValueError):
+            return True, ""
+        if isinstance(manifest_data, dict) and manifest_data.get("status") == "error":
+            reason = "; ".join(manifest_data.get("notes", [])) or "extraction ended with an error"
+            return False, f"The last extraction ended with an error, nothing to ingest: {reason}"
         return True, ""
 
     def has_existing_output(self, output_dir: Path) -> bool:
-        """Check if output directory has existing extraction output."""
-        return (output_dir / "manifest.json").exists()
+        """Check if output directory has existing extraction output.
+
+        The manifest of a run that ended with an error (for example: a failed
+        file list query) is not output, so that the next run extracts again
+        instead of reusing an empty result.
+        """
+        manifest = output_dir / "manifest.json"
+        if not manifest.exists():
+            return False
+        try:
+            return json.loads(manifest.read_text()).get("status") != "error"
+        except (OSError, ValueError, AttributeError):
+            return True
 
     def get_config_widget(self, parent: QWidget) -> Optional[QWidget]:
         """Return configuration widget (browser selection)."""
@@ -223,9 +242,27 @@ class ChromiumSessionsExtractor(BaseExtractor):
 
         if evidence_conn is not None:
             # Multi-partition discovery via file_list
-            files_by_partition = self._discover_files_multi_partition(
-                evidence_fs, evidence_conn, evidence_id, browsers_to_search, callbacks
-            )
+            try:
+                files_by_partition, discovery_notes = self._discover_files_multi_partition(
+                    evidence_fs, evidence_conn, evidence_id, browsers_to_search, callbacks
+                )
+            except FileListQueryError as e:
+                # Not "no match": which session files exist is unknown, so
+                # the open partition is not searched in their place.
+                error_msg = f"File list discovery for session files failed: {e}"
+                LOGGER.error(error_msg)
+                callbacks.on_error("File list discovery failed", error_msg)
+                manifest_data["status"] = "error"
+                manifest_data["notes"].append(error_msg)
+                (output_dir / "manifest.json").write_text(json.dumps(manifest_data, indent=2))
+                if stats:
+                    stats.finish_run(evidence_id, self.metadata.name, status="error")
+                return False
+            for note in discovery_notes:
+                # Session files there may be missing
+                callbacks.on_log(note, "warning")
+                manifest_data["notes"].append(note)
+                manifest_data["status"] = "partial"
         else:
             # Single partition fallback
             callbacks.on_log(
@@ -284,11 +321,17 @@ class ChromiumSessionsExtractor(BaseExtractor):
                         need_close = True
                         callbacks.on_log(f"Opened partition {partition_index} for extraction", "info")
                     except Exception as e:
-                        callbacks.on_log(
-                            f"Failed to open partition {partition_index}: {e}",
-                            "error"
+                        error_msg = (
+                            f"Failed to open partition {partition_index}; "
+                            f"{len(partition_files)} session file(s) not extracted: {e}"
                         )
-                        manifest_data["notes"].append(f"Failed to open partition {partition_index}: {e}")
+                        callbacks.on_log(error_msg, "error")
+                        manifest_data["notes"].append(error_msg)
+                        if manifest_data["status"] == "ok":
+                            manifest_data["status"] = "partial"
+                        if stats:
+                            stats.report_failed(evidence_id, self.metadata.name, files=len(partition_files))
+                        file_index += len(partition_files)
                         continue
 
                 try:
@@ -314,15 +357,31 @@ class ChromiumSessionsExtractor(BaseExtractor):
                             manifest_data["files"].append(extracted_file)
                             file_index += 1
 
+                            if extracted_file.get("copy_status") == "error":
+                                manifest_data["notes"].append(
+                                    f"Failed to extract {file_info['logical_path']} "
+                                    f"(partition {partition_index}): {extracted_file.get('error_message')}"
+                                )
+                                if manifest_data["status"] == "ok":
+                                    manifest_data["status"] = "partial"
+                                if stats:
+                                    stats.report_failed(evidence_id, self.metadata.name, files=1)
+
                         except Exception as e:
                             error_msg = f"Failed to extract {file_info['logical_path']}: {e}"
                             LOGGER.error(error_msg, exc_info=True)
+                            callbacks.on_log(error_msg, "error")
                             manifest_data["notes"].append(error_msg)
+                            if manifest_data["status"] == "ok":
+                                manifest_data["status"] = "partial"
                             if stats:
                                 stats.report_failed(evidence_id, self.metadata.name, files=1)
                             file_index += 1
 
                     if callbacks.is_cancelled():
+                        if manifest_data["status"] != "cancelled":
+                            manifest_data["status"] = "cancelled"
+                            manifest_data["notes"].append("Extraction cancelled by user")
                         break
 
                 finally:
@@ -406,6 +465,12 @@ class ChromiumSessionsExtractor(BaseExtractor):
         manifest_data = json.loads(manifest_path.read_text())
         run_id = manifest_data["run_id"]
         files = manifest_data.get("files", [])
+
+        if manifest_data.get("status") == "error":
+            # Nothing was extracted; keep the run's error status and reason
+            reason = "; ".join(manifest_data.get("notes", [])) or "extraction ended with an error"
+            callbacks.on_error("Extraction ended with an error, nothing to ingest", reason)
+            return {"windows": 0, "tabs": 0}
 
         # Continue statistics tracking (same run_id from manifest)
         evidence_label = config.get("evidence_label", "")
@@ -630,8 +695,8 @@ class ChromiumSessionsExtractor(BaseExtractor):
         evidence_conn,
         evidence_id: int,
         browsers: List[str],
-        callbacks: ExtractorCallbacks
-    ) -> Dict[int, List[Dict]]:
+        callbacks: ExtractorCallbacks,
+    ) -> Tuple[Dict[int, List[Dict]], List[str]]:
         """
         Discover session files across ALL partitions using file_list.
 
@@ -648,8 +713,15 @@ class ChromiumSessionsExtractor(BaseExtractor):
             callbacks: Progress/log callbacks
 
         Returns:
-            Dict mapping partition_index -> list of file info dicts
+            Tuple of (dict mapping partition_index -> list of file info dicts,
+            notes on parts of the search that were left out, see
+            FileListDiscoveryResult.notes)
+
+        Raises:
+            FileListQueryError: If the file_list query failed
         """
+        result_notes: List[str] = []
+
         # Check if file_list is available
         available, count = check_file_list_available(evidence_conn, evidence_id)
 
@@ -661,7 +733,7 @@ class ChromiumSessionsExtractor(BaseExtractor):
             # Fallback: use traditional iter_paths on main partition
             partition_index = getattr(evidence_fs, 'partition_index', 0)
             files = self._discover_session_files(evidence_fs, browsers, callbacks)
-            return {partition_index: files} if files else {}
+            return ({partition_index: files} if files else {}), result_notes
 
         callbacks.on_log(f"Using file_list discovery ({count:,} files indexed)", "info")
 
@@ -687,6 +759,12 @@ class ChromiumSessionsExtractor(BaseExtractor):
             path_patterns=sorted(path_patterns) if path_patterns else None,
         )
 
+        if result.error:
+            raise FileListQueryError(result.error)
+
+        result_notes = list(result.notes)
+
+
         if result.is_empty:
             callbacks.on_log(
                 "No session files found in file_list, falling back to filesystem scan",
@@ -694,7 +772,7 @@ class ChromiumSessionsExtractor(BaseExtractor):
             )
             partition_index = getattr(evidence_fs, 'partition_index', 0)
             files = self._discover_session_files(evidence_fs, browsers, callbacks)
-            return {partition_index: files} if files else {}
+            return ({partition_index: files} if files else {}), result_notes
 
         if result.is_multi_partition:
             callbacks.on_log(
@@ -743,7 +821,7 @@ class ChromiumSessionsExtractor(BaseExtractor):
             if files_list:
                 files_by_partition[partition_index] = files_list
 
-        return files_by_partition
+        return files_by_partition, result_notes
 
     def _classify_session_file(self, path: str) -> str:
         """Classify session file type based on filename.

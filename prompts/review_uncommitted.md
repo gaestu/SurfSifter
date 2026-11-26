@@ -9,18 +9,24 @@ Read [`AGENTS.md`](../AGENTS.md) first.
 2. For each changed file, read enough surrounding context (≥20 lines around each hunk) to understand the change.
 3. **Launch all 5 specialist reviewers in parallel as subagents.** Each receives:
    - The task description (what the change is meant to do)
-   - The full content of every changed/created file
+   - The list of changed/created file paths — **not** the file contents or the diff. Each reviewer runs `git diff` / `git diff --cached` on those paths and reads the files itself (new untracked files don't appear in `git diff`; they are read by path).
    - Pointer to its specialist prompt (below)
 
-| Reviewer | Specialist prompt |
-|----------|-------------------|
-| Correctness | [`review_correctness.md`](review_correctness.md) |
-| Forensic Safety | [`review_forensic_safety.md`](review_forensic_safety.md) |
-| Security | [`review_security.md`](review_security.md) |
-| Architecture | [`review_architecture.md`](review_architecture.md) |
-| Documentation | [`review_documentation.md`](review_documentation.md) |
+| Reviewer | Specialist prompt | Model |
+|----------|-------------------|-------|
+| Correctness | [`review_correctness.md`](review_correctness.md) | Opus |
+| Forensic Safety | [`review_forensic_safety.md`](review_forensic_safety.md) | Opus |
+| Security | [`review_security.md`](review_security.md) | Opus |
+| Architecture | [`review_architecture.md`](review_architecture.md) | Opus |
+| Documentation | [`review_documentation.md`](review_documentation.md) | Sonnet |
 
-For issue-driven work, additionally run [`review_issue_completeness.md`](review_issue_completeness.md) with the issue body and implementation plan.
+For issue-driven work, additionally run [`review_issue_completeness.md`](review_issue_completeness.md) (Sonnet) with the issue body and implementation plan.
+
+The Model column sets the model per reviewer subagent, regardless of the model the orchestrating session runs on. Tools without per-subagent model selection ignore it.
+
+## Re-review after fixes
+
+Re-run only the reviewers that reported issues. Continue the same reviewer subagent (it keeps its context) and give it only what changed since its last pass — the paths and a one-line note per fix. Launch a fresh reviewer only when the earlier one can no longer be continued.
 
 ## Aggregation
 
