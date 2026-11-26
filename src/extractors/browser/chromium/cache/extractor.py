@@ -62,9 +62,11 @@ from ....callbacks import ExtractorCallbacks
 from ...._shared.file_list_discovery import (
     FileListQueryError,
     check_file_list_available,
+    discover_from_file_list,
     glob_to_sql_like,
     open_partition_for_extraction,
 )
+from ....browser_patterns import get_browser_paths
 from .._patterns import (
     CHROMIUM_BROWSERS,
     get_patterns,
@@ -126,6 +128,7 @@ from ._workers import (
     CHUNK_SIZE,
 )
 from ._discovery import (
+    CACHE_STORAGE_FILE_LIST_NAMES,
     discover_cache_directories,
     scan_cache_pattern,
     discover_cache_storage_directories,
@@ -595,6 +598,7 @@ class CacheSimpleExtractor(BaseExtractor):
                     evidence_id=evidence_id,
                     browsers=browsers,
                     include_disk_cache=include_disk_cache,
+                    include_cache_storage=include_cache_storage,
                 )
             except Exception as e:
                 # Not "no match": which partitions hold cache data is unknown,
@@ -820,8 +824,13 @@ class CacheSimpleExtractor(BaseExtractor):
         evidence_id: int,
         browsers: List[str],
         include_disk_cache: bool,
+        include_cache_storage: bool = False,
     ) -> List[Optional[int]]:
         """Discover partitions that likely contain Chromium cache artifacts.
+
+        Searches the file list for the disk cache (with embedded Chromium
+        roots) if ``include_disk_cache`` and for Service Worker CacheStorage
+        if ``include_cache_storage``, and returns the partitions of both.
 
         Returns ``[None]`` (the open partition) when there is no file list or
         it has no match.
@@ -833,30 +842,53 @@ class CacheSimpleExtractor(BaseExtractor):
         if not available:
             return [None]
 
-        path_patterns = set()
+        chromium_browsers = [b for b in browsers if b in CHROMIUM_BROWSERS]
+        partitions: set = set()
+
         if include_disk_cache:
-            for browser in browsers:
-                if browser not in CHROMIUM_BROWSERS:
-                    continue
+            path_patterns = set()
+            for browser in chromium_browsers:
                 for pattern in get_artifact_patterns(browser, "cache"):
                     path_patterns.add(glob_to_sql_like(pattern))
 
-        if not path_patterns:
-            return [None]
+            if path_patterns:
+                result, embedded_roots = discover_artifacts_with_embedded_roots(
+                    evidence_conn,
+                    evidence_id,
+                    artifact="cache",
+                    filename_patterns=["index", "the-real-index", "f_*", "data_*"],
+                    path_patterns=sorted(path_patterns),
+                )
 
-        result, embedded_roots = discover_artifacts_with_embedded_roots(
-            evidence_conn,
-            evidence_id,
-            artifact="cache",
-            filename_patterns=["index", "the-real-index", "f_*", "data_*"],
-            path_patterns=sorted(path_patterns) if path_patterns else None,
-        )
+                if result.error:
+                    raise FileListQueryError(result.error)
 
-        if result.error:
-            raise FileListQueryError(result.error)
+                partitions.update(result.matches_by_partition.keys())
+                partitions.update(
+                    root.partition_index for root in embedded_roots if root.partition_index is not None
+                )
 
-        partitions = set(result.matches_by_partition.keys())
-        partitions.update(root.partition_index for root in embedded_roots if root.partition_index is not None)
+        if include_cache_storage:
+            # Same paths and files as the CacheStorage scan in discover_cache_directories()
+            storage_patterns = set()
+            for browser in chromium_browsers:
+                for pattern in get_browser_paths(browser, "cache_storage"):
+                    storage_patterns.add(glob_to_sql_like(pattern))
+
+            if storage_patterns:
+                result = discover_from_file_list(
+                    evidence_conn,
+                    evidence_id,
+                    filename_patterns=CACHE_STORAGE_FILE_LIST_NAMES,
+                    path_patterns=sorted(storage_patterns),
+                    exclude_deleted=True,
+                )
+
+                if result.error:
+                    raise FileListQueryError(result.error)
+
+                partitions.update(result.matches_by_partition.keys())
+
         if not partitions:
             return [None]
         return sorted(partitions)

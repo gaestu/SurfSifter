@@ -24,6 +24,23 @@ if TYPE_CHECKING:
 
 LOGGER = get_logger("extractors.cache_simple.discovery")
 
+# Files collected from each CacheStorage cache directory (glob patterns).
+# Includes both simple cache format and legacy blockfile format.
+CACHE_STORAGE_FILE_PATTERNS = [
+    "[0-9a-f]*_0",  # Simple cache entry files (metadata)
+    "[0-9a-f]*_1",  # Simple cache entry files (data)
+    "[0-9a-f]*_s",  # Sparse entry files
+    "f_*",           # External data files (both formats)
+    "index",         # Index file (both formats)
+    "data_*",        # Legacy blockfile data files
+]
+
+# The same files as file name patterns for a file list query, which does not
+# support character classes: "[0-9a-f]*_0" becomes "*_0" (matches more, never less).
+CACHE_STORAGE_FILE_LIST_NAMES = [
+    pattern.replace("[0-9a-f]", "") for pattern in CACHE_STORAGE_FILE_PATTERNS
+]
+
 
 def discover_cache_directories(
     evidence_fs,
@@ -249,15 +266,7 @@ def discover_cache_storage_directories(
     cache_directories = []
 
     # Cache file patterns to look for inside each origin/cache directory
-    # Includes both simple cache format and legacy blockfile format
-    cache_file_patterns = [
-        "[0-9a-f]*_0",  # Simple cache entry files (metadata)
-        "[0-9a-f]*_1",  # Simple cache entry files (data)
-        "[0-9a-f]*_s",  # Sparse entry files
-        "f_*",           # External data files (both formats)
-        "index",         # Index file (both formats)
-        "data_*",        # Legacy blockfile data files
-    ]
+    cache_file_patterns = CACHE_STORAGE_FILE_PATTERNS
 
     for pattern in patterns:
         try:
